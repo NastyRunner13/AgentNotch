@@ -1,0 +1,769 @@
+/* ═══════════════════════════════════════════════════════
+   AgentNotch — Design System
+   Quiet near-black status strip: agent icons, autohide,
+   unified session feed. Calm · Precise · Unobtrusive.
+   ═══════════════════════════════════════════════════════ */
+
+/* ── CSS Custom Properties ────────────────────────────── */
+:root {
+  /* Surfaces — tonal near-black stack */
+  --bg-notch: #0a0a0a;
+  --bg-panel: #0d0d0d;
+  --bg-card: #151515;
+  --bg-card-hover: #1c1c1c;
+  --bg-input: #1a1a1a;
+  --bg-feed: #0b0b0b;
+
+  /* Borders */
+  --border-subtle: #1e1e1e;
+  --border-light: #2a2a2a;
+  --border-accent: #333333;
+
+  /* Text — tertiary bumped for WCAG on void (~4.5:1 at #666) */
+  --text-primary: #f0f0f0;
+  --text-secondary: #8a8a8a;
+  --text-tertiary: #666666;
+  --text-inverse: #000000;
+
+  /* Semantic status (earned color only) */
+  --color-idle: #4ADE80;
+  --color-idle-bright: #86EFAC;
+  --color-working: #60A5FA;
+  --color-working-bright: #93C5FD;
+  --color-attention: #F59E0B;
+  --color-attention-bright: #FCD34D;
+  --color-error: #EF4444;
+  --color-question: #06B6D4;
+  --color-question-bright: #22D3EE;
+
+  /* Agent identity (tags/dots only) */
+  --color-claude: #D97757;
+  --color-codex: #10B981;
+  --color-cursor: #06B6D4;
+  --color-antigravity: #4285F4;
+  --color-grok: #EF4444;
+
+  /* Status-tinted surfaces (buttons, approval, diffs) */
+  --surface-allow: #0a1a0a;
+  --surface-allow-border: #102a10;
+  --surface-deny: #1a0a0a;
+  --surface-deny-border: #2a1010;
+  --surface-attention: #2e2200;
+  --surface-question: #0a1e28;
+  --surface-question-border: #0a3648;
+  --surface-tool: #0d1a2a;
+  --surface-toggle-on: #0a2a0a;
+  --surface-toggle-on-border: #1a3a1a;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+
+  /* Typography */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --text-2xs: 9px;
+  --text-xs: 10px;
+  --text-sm: 11px;
+  --text-base: 13px;
+  --text-lg: 15px;
+
+  /* Radius */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-notch: 0 0 20px 20px;
+  --radius-full: 9999px;
+
+  /* Focus ring */
+  --focus-ring: 0 0 0 2px var(--bg-notch), 0 0 0 4px rgba(96, 165, 250, 0.55);
+
+  /* Transitions — ease-out only; window owns geometry animation */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration-fast: 0.12s;
+  --duration-base: 0.2s;
+  --duration-slow: 0.35s;
+  --duration-expand: 0.42s;
+  --duration-collapse: 0.3s;
+  --duration-hide: 0.34s;
+  --duration-show: 0.32s;
+
+  /* z-index scale */
+  --z-bar: 10;
+  --z-panel: 5;
+  --z-overlay: 20;
+}
+
+/* ── Reset & Base ─────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+/* ═══════════════════════════════════════════════════════
+   NOTCH SHELL
+   ═══════════════════════════════════════════════════════ */
+.notch {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-notch);
+  border-radius: var(--radius-notch);
+  overflow: hidden;
+  /* Soft opacity only — Electron window owns slide/size geometry */
+  transition: opacity var(--duration-hide) var(--ease-out-quint);
+  will-change: opacity;
+  border: 1px solid rgba(255,255,255,0.04);
+  border-top: none;
+}
+
+.notch.collapsed {
+  height: 40px;
+  opacity: 1;
+}
+
+.notch.expanded {
+  height: 100%;
+  opacity: 1;
+}
+
+/* Keep full bar layout; window slides off-screen for hide.
+   Do NOT collapse height here — that made autohide feel abrupt. */
+.notch.hidden {
+  height: 40px;
+  opacity: 0.92;
+  transition: opacity var(--duration-hide) ease-in;
+}
+
+/* ═══════════════════════════════════════════════════════
+   NOTCH BAR — Collapsed top strip
+   ═══════════════════════════════════════════════════════ */
+.notch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  min-height: 40px;
+  padding: 0 14px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  position: relative;
+  z-index: var(--z-bar);
+  transition: background var(--duration-fast) ease;
+}
+
+.notch-bar:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+
+.notch-bar:hover {
+  background: rgba(255,255,255,0.03);
+}
+
+.notch-bar:hover .notch-chevron {
+  opacity: 1;
+}
+
+.notch-bar:active {
+  background: rgba(255,255,255,0.05);
+}
+
+/* Left — Agent icons */
+.notch-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.notch-agents {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ── Animated Agent Icon (+ running spinner beside it) ─ */
+.agent-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: inherit;
+}
+
+.agent-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  transition: opacity var(--duration-base) var(--ease-out),
+              transform var(--duration-base) var(--ease-out);
+  flex-shrink: 0;
+}
+
+.agent-icon svg {
+  image-rendering: pixelated;
+}
+
+.agent-icon.working {
+  animation: agentBreathe 2s ease-in-out infinite;
+}
+
+.agent-icon.attention {
+  animation: agentShake 0.4s ease-in-out infinite alternate;
+}
+
+.agent-icon.idle {
+  opacity: 0.5;
+}
+
+/* Spinner / pulse to the right of the pet — primary "still running" cue */
+.agent-run-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
+.agent-run-spinner {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.12);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  animation: agentSpin 0.8s linear infinite;
+  opacity: 0.95;
+}
+
+.agent-run-indicator.attention .agent-run-pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-attention);
+  animation: agentPulseRing 1s ease-in-out infinite;
+}
+
+@keyframes agentBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+@keyframes agentSpin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes agentShake {
+  0% { transform: translateX(-1px); }
+  100% { transform: translateX(1px); }
+}
+
+@keyframes agentPulseRing {
+  0%, 100% { opacity: 0.9; transform: scale(1); }
+  50% { opacity: 0.25; transform: scale(1.35); }
+}
+
+/* Center — Status text */
+.notch-bar-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.notch-status-text {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* Right — Stats + Chevron */
+.notch-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Keyword stats (active/done) replaced by spinner beside agent icons */
+.notch-stats {
+  display: none;
+}
+
+.stat {
+  display: none;
+}
+
+.notch-chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  opacity: 0;
+  transition: opacity var(--duration-base) ease,
+              transform var(--duration-expand) var(--ease-out-quint);
+}
+
+.notch.expanded .notch-chevron {
+  transform: rotate(180deg);
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════
+   NOTCH PANEL — Expanded content area
+   ═══════════════════════════════════════════════════════ */
+.notch-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-8px);
+  transition: opacity 0.28s var(--ease-out-quint) 0.05s,
+              transform var(--duration-expand) var(--ease-out-quint) 0.05s;
+}
+
+.notch.expanded .notch-panel {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* ── Notch Tabs ───────────────────────────────────────── */
+.notch-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.ntab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color var(--duration-base) ease,
+              border-color var(--duration-base) ease;
+}
+
+.ntab:hover {
+  color: var(--text-secondary);
+}
+
+.ntab:focus-visible {
+  outline: none;
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.4);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+
+.ntab.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--text-primary);
+}
+
+.ntab-icon {
+  margin-left: auto;
+  padding: 8px;
+}
+
+/* ── Usage limits strip (expanded top bar) ─────────────── */
+.usage-bar {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-shrink: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.usage-bar::-webkit-scrollbar {
+  display: none;
+}
+
+.notch.expanded .usage-bar {
+  display: flex;
+}
+
+.usage-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.usage-chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.usage-chip-name {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.usage-chip-pct {
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.usage-chip-pct.ok { color: var(--color-idle); }
+.usage-chip-pct.warn { color: #F59E0B; }
+.usage-chip-pct.crit { color: #EF4444; }
+.usage-chip-pct.na {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-family: var(--font-sans);
+}
+
+.usage-chip-meter {
+  width: 28px;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.usage-chip-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.ntab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--color-attention);
+  color: var(--text-inverse);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  font-family: var(--font-mono);
+  line-height: 1;
+  animation: badgeIn 0.22s var(--ease-out);
+}
+
+@keyframes badgeIn {
+  from { opacity: 0; transform: scale(0.85); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+/* ── Content Area ─────────────────────────────────────── */
+.notch-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.view {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--space-md);
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity var(--duration-base) ease,
+              transform var(--duration-base) var(--ease-out);
+}
+
+.view.active {
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+
+/* Scrollbar */
+.view::-webkit-scrollbar {
+  width: 4px;
+}
+
+.view::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.view::-webkit-scrollbar-thumb {
+  background: #222;
+  border-radius: 2px;
+}
+
+.view::-webkit-scrollbar-thumb:hover {
+  background: #333;
+}
+
+/* ── Empty State ──────────────────────────────────────── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2xl) var(--space-lg);
+  text-align: center;
+  min-height: 200px;
+}
+
+.empty-icon {
+  margin-bottom: var(--space-md);
+  animation: emptyFloat 3s ease-in-out infinite;
+}
+
+@keyframes emptyFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+.empty-title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-xs);
+  letter-spacing: -0.01em;
+}
+
+.empty-detection {
+  margin-top: var(--space-md);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  line-height: 1.5;
+  max-width: 320px;
+  text-align: center;
+}
+
+.empty-desc {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+/* ── Session List ─────────────────────────────────────── */
+.sessions-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+/* ── Dispatch Bar ─────────────────────────────────────── */
+.dispatch-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-notch);
+  flex-shrink: 0;
+}
+
+.dispatch-agent {
+  -webkit-appearance: none;
+  appearance: none;
+  background: #1a1a1a;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  padding: 5px 8px;
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  min-width: 65px;
+}
+
+.dispatch-agent:hover {
+  border-color: var(--border-light);
+  color: var(--text-primary);
+}
+
+.dispatch-agent:focus,
+.dispatch-agent:focus-visible {
+  outline: none;
+  border-color: var(--color-working);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+
+.dispatch-input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  padding: 5px 10px;
+  transition: all var(--duration-fast) ease;
+}
+
+.dispatch-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.dispatch-input:focus,
+.dispatch-input:focus-visible {
+  outline: none;
+  border-color: var(--color-working);
+  background: rgba(255,255,255,0.02);
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
+}
+
+.dispatch-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(96, 165, 250, 0.15);
+  color: var(--color-working);
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  flex-shrink: 0;
+}
+
+.dispatch-btn:hover {
+  background: rgba(96, 165, 250, 0.25);
+}
+
+.dispatch-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.dispatch-btn:active {
+  transform: scale(0.96);
+  transition-duration: 0.08s;
+}
+
+/* ── Animations ───────────────────────────────────────── */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes attentionPulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2); }
+}
+
+/* ── Reduced motion (PRODUCT: required) ───────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .notch,
+  .notch-panel,
+  .view,
+  .notch-chevron,
+  .agent-icon,
+  .dispatch-btn {
+    transition-duration: 0.01ms !important;
+  }
+
+  .agent-icon.working,
+  .agent-icon.attention,
+  .agent-run-spinner,
+  .agent-run-indicator.attention .agent-run-pulse,
+  .empty-icon {
+    animation: none !important;
+  }
+
+  .agent-icon.working {
+    opacity: 1;
+  }
+
+  .agent-icon.idle {
+    opacity: 0.55;
+  }
+
+  .ntab-badge {
+    animation: none;
+  }
+
+  .view {
+    transform: none;
+  }
+
+  .notch-panel {
+    transform: none;
+  }
+}
