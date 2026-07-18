@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-18T00:00:00.000Z",
+  "title": "Design System: AgentNotch",
+  "extensions": {
+    "colorMeta": {
+      "bg-notch": { "role": "neutral", "displayName": "Void Notch", "canonical": "#0a0a0a", "tonalRamp": ["#050505", "#0a0a0a", "#0d0d0d", "#151515", "#1c1c1c", "#2a2a2a", "#555555", "#f0f0f0"] },
+      "bg-panel": { "role": "neutral", "displayName": "Panel Ink", "canonical": "#0d0d0d", "tonalRamp": ["#050505", "#0a0a0a", "#0d0d0d", "#151515", "#1c1c1c", "#2a2a2a", "#555555", "#f0f0f0"] },
+      "bg-card": { "role": "neutral", "displayName": "Card Charcoal", "canonical": "#151515", "tonalRamp": ["#050505", "#0a0a0a", "#0d0d0d", "#151515", "#1c1c1c", "#2a2a2a", "#555555", "#f0f0f0"] },
+      "bg-card-hover": { "role": "neutral", "displayName": "Card Lift", "canonical": "#1c1c1c", "tonalRamp": ["#050505", "#0a0a0a", "#0d0d0d", "#151515", "#1c1c1c", "#2a2a2a", "#555555", "#f0f0f0"] },
+      "bg-input": { "role": "neutral", "displayName": "Input Graphite", "canonical": "#1a1a1a", "tonalRamp": ["#050505", "#0a0a0a", "#0d0d0d", "#151515", "#1a1a1a", "#2a2a2a", "#555555", "#f0f0f0"] },
+      "border-subtle": { "role": "neutral", "displayName": "Hairline Subtle", "canonical": "#1e1e1e", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#2a2a2a", "#333333", "#555555", "#8a8a8a", "#c0c0c0", "#f0f0f0"] },
+      "border-light": { "role": "neutral", "displayName": "Hairline Light", "canonical": "#2a2a2a", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#2a2a2a", "#333333", "#555555", "#8a8a8a", "#c0c0c0", "#f0f0f0"] },
+      "border-accent": { "role": "neutral", "displayName": "Hairline Accent", "canonical": "#333333", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#2a2a2a", "#333333", "#555555", "#8a8a8a", "#c0c0c0", "#f0f0f0"] },
+      "text-primary": { "role": "neutral", "displayName": "Ink Primary", "canonical": "#f0f0f0", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#555555", "#8a8a8a", "#b0b0b0", "#d0d0d0", "#f0f0f0", "#ffffff"] },
+      "text-secondary": { "role": "neutral", "displayName": "Ink Secondary", "canonical": "#8a8a8a", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#555555", "#8a8a8a", "#b0b0b0", "#d0d0d0", "#f0f0f0", "#ffffff"] },
+      "text-tertiary": { "role": "neutral", "displayName": "Ink Tertiary", "canonical": "#555555", "tonalRamp": ["#0a0a0a", "#1e1e1e", "#333333", "#555555", "#8a8a8a", "#b0b0b0", "#d0d0d0", "#f0f0f0"] },
+      "text-inverse": { "role": "neutral", "displayName": "Ink Inverse", "canonical": "#000000", "tonalRamp": ["#000000", "#0a0a0a", "#1e1e1e", "#555555", "#8a8a8a", "#b0b0b0", "#f0f0f0", "#ffffff"] },
+      "status-idle": { "role": "secondary", "displayName": "Idle Green", "canonical": "#4ADE80", "tonalRamp": ["#052e16", "#14532d", "#166534", "#16a34a", "#4ADE80", "#86EFAC", "#bbf7d0", "#dcfce7"] },
+      "status-idle-bright": { "role": "secondary", "displayName": "Idle Green Bright", "canonical": "#86EFAC", "tonalRamp": ["#052e16", "#14532d", "#166534", "#16a34a", "#4ADE80", "#86EFAC", "#bbf7d0", "#dcfce7"] },
+      "status-working": { "role": "primary", "displayName": "Working Blue", "canonical": "#60A5FA", "tonalRamp": ["#0c1a2e", "#1e3a5f", "#1d4ed8", "#3b82f6", "#60A5FA", "#93C5FD", "#bfdbfe", "#dbeafe"] },
+      "status-working-bright": { "role": "primary", "displayName": "Working Blue Bright", "canonical": "#93C5FD", "tonalRamp": ["#0c1a2e", "#1e3a5f", "#1d4ed8", "#3b82f6", "#60A5FA", "#93C5FD", "#bfdbfe", "#dbeafe"] },
+      "status-attention": { "role": "secondary", "displayName": "Attention Amber", "canonical": "#F59E0B", "tonalRamp": ["#1c1000", "#3d2a00", "#92400e", "#d97706", "#F59E0B", "#FCD34D", "#fde68a", "#fef3c7"] },
+      "status-attention-bright": { "role": "secondary", "displayName": "Attention Amber Bright", "canonical": "#FCD34D", "tonalRamp": ["#1c1000", "#3d2a00", "#92400e", "#d97706", "#F59E0B", "#FCD34D", "#fde68a", "#fef3c7"] },
+      "status-error": { "role": "secondary", "displayName": "Error Red", "canonical": "#EF4444", "tonalRamp": ["#1a0a0a", "#2e1414", "#7f1d1d", "#dc2626", "#EF4444", "#f87171", "#fca5a5", "#fee2e2"] },
+      "status-question": { "role": "secondary", "displayName": "Question Cyan", "canonical": "#06B6D4", "tonalRamp": ["#0a2630", "#0a3648", "#0e7490", "#0891b2", "#06B6D4", "#22D3EE", "#67e8f9", "#cffafe"] },
+      "status-question-bright": { "role": "secondary", "displayName": "Question Cyan Bright", "canonical": "#22D3EE", "tonalRamp": ["#0a2630", "#0a3648", "#0e7490", "#0891b2", "#06B6D4", "#22D3EE", "#67e8f9", "#cffafe"] },
+      "agent-claude": { "role": "tertiary", "displayName": "Claude Clay", "canonical": "#D97757", "tonalRamp": ["#2e1c14", "#4a2c20", "#9a4e32", "#c45c3a", "#D97757", "#e8a48a", "#f0c4b4", "#f8e4dc"] },
+      "agent-codex": { "role": "tertiary", "displayName": "Codex Emerald", "canonical": "#10B981", "tonalRamp": ["#0a2e1e", "#064e3b", "#047857", "#059669", "#10B981", "#34d399", "#6ee7b7", "#d1fae5"] },
+      "agent-cursor": { "role": "tertiary", "displayName": "Cursor Cyan", "canonical": "#06B6D4", "tonalRamp": ["#0a2630", "#0a3648", "#0e7490", "#0891b2", "#06B6D4", "#22D3EE", "#67e8f9", "#cffafe"] },
+      "agent-antigravity": { "role": "tertiary", "displayName": "Antigravity Blue", "canonical": "#4285F4", "tonalRamp": ["#0a1a3a", "#1e3a5f", "#1d4ed8", "#2563eb", "#4285F4", "#60a5fa", "#93c5fd", "#dbeafe"] },
+      "agent-grok": { "role": "tertiary", "displayName": "Grok Red", "canonical": "#EF4444", "tonalRamp": ["#1a0a0a", "#2e1414", "#7f1d1d", "#dc2626", "#EF4444", "#f87171", "#fca5a5", "#fee2e2"] }
+    },
+    "typographyMeta": {
+      "title": { "displayName": "Title", "purpose": "Session names and primary row labels at 13px/600." },
+      "body": { "displayName": "Body", "purpose": "Status lines, prompts, activity copy." },
+      "label": { "displayName": "Label", "purpose": "Tabs, secondary UI, dispatch input at 11px." },
+      "mono": { "displayName": "Mono Data", "purpose": "Durations, models, tools, paths, usage percentages." },
+      "eyebrow": { "displayName": "Eyebrow", "purpose": "Sparse section labels (settings, history dates) — not every section." }
+    },
+    "shadows": [
+      { "name": "attention-pulse", "value": "0 0 0 2px rgba(245, 158, 11, 0.2)", "purpose": "Attention-state session cards only; animated pulse." },
+      { "name": "plan-progress-ring", "value": "0 0 0 3px rgba(96, 165, 250, 0.12)", "purpose": "In-progress plan step markers only." }
+    ],
+    "motion": [
+      { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Default product ease for state transitions." },
+      { "name": "ease-out-quint", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Expand/collapse panel opacity and chevron." },
+      { "name": "duration-fast", "value": "0.12s", "purpose": "Hover and micro feedback." },
+      { "name": "duration-base", "value": "0.2s", "purpose": "Default UI state change." },
+      { "name": "duration-expand", "value": "0.42s", "purpose": "Notch expand choreography." },
+      { "name": "duration-collapse", "value": "0.3s", "purpose": "Notch collapse." },
+      { "name": "duration-hide", "value": "0.34s", "purpose": "Autohide opacity." },
+      { "name": "agent-breathe", "value": "2s ease-in-out infinite scale 1→1.08", "purpose": "Working agent icon only; disabled under reduced motion." },
+      { "name": "agent-spin", "value": "1.2s linear infinite ring", "purpose": "Working indicator ring; static under reduced motion." }
+    ],
+    "breakpoints": []
+  },
+  "components": [
+    {
+      "name": "Session Card",
+      "kind": "card",
+      "refersTo": "session-card",
+      "description": "Primary session row: agent identity, status, expandable detail.",
+      "html": "<article class=\"ds-session-card\"><div class=\"ds-session-header\"><span class=\"ds-session-dot\"></span><div class=\"ds-session-meta\"><div class=\"ds-session-name\">feature/auth-flow</div><div class=\"ds-session-status\"><span class=\"ds-pulse\"></span><span>Working · editing auth.ts</span></div></div><span class=\"ds-session-tag\">Claude</span></div></article>",
+      "css": ".ds-session-card{background:var(--bg-card,#151515);color:var(--text-primary,#f0f0f0);border:1px solid var(--border-subtle,#1e1e1e);border-radius:10px;padding:10px 12px;font-family:Inter,system-ui,sans-serif;transition:background .2s ease,border-color .2s ease}.ds-session-card:hover{background:#1c1c1c;border-color:#2a2a2a}.ds-session-header{display:flex;align-items:center;gap:8px}.ds-session-dot{width:8px;height:8px;border-radius:50%;background:#60A5FA;flex-shrink:0}.ds-session-meta{flex:1;min-width:0}.ds-session-name{font-size:13px;font-weight:600;letter-spacing:-0.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ds-session-status{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:500;color:#60A5FA;margin-top:2px}.ds-pulse{width:5px;height:5px;border-radius:50%;background:#60A5FA}.ds-session-tag{font-size:10px;font-weight:500;color:#D97757;border:1px solid #2e1c14;background:#1a1a1a;border-radius:6px;padding:1px 6px}"
+    },
+    {
+      "name": "Allow Button",
+      "kind": "button",
+      "refersTo": "button-allow",
+      "description": "Permission allow — green-tinted, only in approval context.",
+      "html": "<button class=\"ds-btn-allow\" type=\"button\">Allow <kbd>Y</kbd></button>",
+      "css": ".ds-btn-allow{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;border-radius:6px;border:1px solid #102a10;background:#0a1a0a;color:#4ADE80;font:600 11px Inter,system-ui,sans-serif;cursor:pointer;transition:background .12s ease}.ds-btn-allow:hover{background:#102a10}.ds-btn-allow:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}.ds-btn-allow kbd{font:500 10px 'JetBrains Mono',monospace;padding:1px 4px;border-radius:3px;background:#1a1a1a;opacity:.7}"
+    },
+    {
+      "name": "Deny Button",
+      "kind": "button",
+      "refersTo": "button-deny",
+      "description": "Permission deny — red-tinted, only in approval context.",
+      "html": "<button class=\"ds-btn-deny\" type=\"button\">Deny <kbd>N</kbd></button>",
+      "css": ".ds-btn-deny{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:5px 12px;border-radius:6px;border:1px solid #2a1010;background:#1a0a0a;color:#EF4444;font:600 11px Inter,system-ui,sans-serif;cursor:pointer;transition:background .12s ease}.ds-btn-deny:hover{background:#2a1010}.ds-btn-deny:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}.ds-btn-deny kbd{font:500 10px 'JetBrains Mono',monospace;padding:1px 4px;border-radius:3px;background:#1a1a1a;opacity:.7}"
+    },
+    {
+      "name": "Jump Button",
+      "kind": "button",
+      "refersTo": "button-jump",
+      "description": "Ghost action to focus the related agent app.",
+      "html": "<button class=\"ds-btn-jump\" type=\"button\">Jump</button>",
+      "css": ".ds-btn-jump{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #2a2a2a;border-radius:6px;background:transparent;color:#8a8a8a;font:500 10px Inter,system-ui,sans-serif;cursor:pointer;transition:background .12s ease,color .12s ease}.ds-btn-jump:hover{background:rgba(255,255,255,.05);color:#f0f0f0}.ds-btn-jump:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}"
+    },
+    {
+      "name": "Dispatch Input",
+      "kind": "input",
+      "refersTo": "input-dispatch",
+      "description": "Task dispatch field at the bottom of the expanded notch.",
+      "html": "<div class=\"ds-dispatch\"><select class=\"ds-dispatch-agent\"><option>Claude</option></select><input class=\"ds-dispatch-input\" type=\"text\" placeholder=\"Dispatch a task…\" /><button class=\"ds-dispatch-btn\" type=\"button\" aria-label=\"Send\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\"/><polygon points=\"22 2 15 22 11 13 2 9 22 2\"/></svg></button></div>",
+      "css": ".ds-dispatch{display:flex;align-items:center;gap:6px;padding:8px 12px;background:#0a0a0a;border-top:1px solid #1e1e1e}.ds-dispatch-agent{appearance:none;background:#1a1a1a;border:1px solid #1e1e1e;border-radius:6px;color:#8a8a8a;font:600 10px 'JetBrains Mono',monospace;padding:5px 8px;min-width:65px;cursor:pointer}.ds-dispatch-agent:focus{outline:none;border-color:#60A5FA}.ds-dispatch-input{flex:1;background:transparent;border:1px solid #1e1e1e;border-radius:6px;color:#f0f0f0;font:400 11px Inter,system-ui,sans-serif;padding:5px 10px}.ds-dispatch-input::placeholder{color:#555}.ds-dispatch-input:focus{outline:none;border-color:#60A5FA;background:rgba(255,255,255,.02)}.ds-dispatch-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;border-radius:6px;background:rgba(96,165,250,.15);color:#60A5FA;cursor:pointer;transition:background .12s ease,transform .12s ease}.ds-dispatch-btn:hover{background:rgba(96,165,250,.25);transform:scale(1.05)}.ds-dispatch-btn:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}"
+    },
+    {
+      "name": "Usage Chip",
+      "kind": "chip",
+      "refersTo": "chip-usage",
+      "description": "Compact usage limit pill in the expanded top bar.",
+      "html": "<span class=\"ds-usage-chip\"><span class=\"ds-usage-dot\"></span><span class=\"ds-usage-name\">Grok</span><span class=\"ds-usage-pct\">42%</span><span class=\"ds-usage-meter\"><span style=\"width:42%\"></span></span></span>",
+      "css": ".ds-usage-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.04);border:1px solid #1e1e1e;font-family:Inter,system-ui,sans-serif}.ds-usage-dot{width:6px;height:6px;border-radius:50%;background:#EF4444}.ds-usage-name{font-size:10px;font-weight:600;color:#8a8a8a}.ds-usage-pct{font:600 10px 'JetBrains Mono',monospace;color:#4ADE80}.ds-usage-meter{width:28px;height:3px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden}.ds-usage-meter>span{display:block;height:100%;border-radius:2px;background:#4ADE80}"
+    },
+    {
+      "name": "Notch Tabs",
+      "kind": "nav",
+      "refersTo": "tab-nav",
+      "description": "Sessions / History text tabs with active white underline.",
+      "html": "<nav class=\"ds-tabs\"><button class=\"ds-tab ds-tab-active\" type=\"button\">Sessions</button><button class=\"ds-tab\" type=\"button\">History</button></nav>",
+      "css": ".ds-tabs{display:flex;align-items:center;gap:2px;padding:0 12px;border-bottom:1px solid #1e1e1e;background:#0d0d0d}.ds-tab{padding:8px 10px;border:none;background:transparent;color:#555;font:500 11px Inter,system-ui,sans-serif;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .2s ease,border-color .2s ease}.ds-tab:hover{color:#8a8a8a}.ds-tab:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}.ds-tab-active{color:#f0f0f0;border-bottom-color:#fff}"
+    },
+    {
+      "name": "Toggle",
+      "kind": "input",
+      "refersTo": "toggle-on",
+      "description": "Settings switch — green only when on.",
+      "html": "<label class=\"ds-toggle-row\"><span>Sound alerts</span><input class=\"ds-toggle\" type=\"checkbox\" checked /></label>",
+      "css": ".ds-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;color:#f0f0f0;font:500 11px Inter,system-ui,sans-serif}.ds-toggle{appearance:none;width:34px;height:18px;border-radius:999px;background:#222;border:1px solid #333;cursor:pointer;position:relative;transition:background .2s ease,border-color .2s ease}.ds-toggle::after{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#666;transition:transform .2s cubic-bezier(0.16,1,0.3,1),background .2s ease}.ds-toggle:checked{background:#0a2a0a;border-color:#1a3a1a}.ds-toggle:checked::after{transform:translateX(16px);background:#4ADE80}.ds-toggle:focus-visible{outline:2px solid #60A5FA;outline-offset:2px}"
+    },
+    {
+      "name": "Collapsed Notch Bar",
+      "kind": "custom",
+      "refersTo": "tab-nav",
+      "description": "Signature 40px status strip — icons, status text, mono stats.",
+      "html": "<div class=\"ds-notch-bar\"><div class=\"ds-agents\"><span class=\"ds-agent-icon\" style=\"color:#60A5FA\">●</span><span class=\"ds-agent-icon idle\" style=\"color:#4ADE80\">●</span></div><span class=\"ds-status\">Claude working</span><div class=\"ds-stats\"><span class=\"ds-stat\"><i></i>1 active</span></div></div>",
+      "css": ".ds-notch-bar{display:flex;align-items:center;justify-content:space-between;height:40px;padding:0 14px;background:#0a0a0a;border:1px solid rgba(255,255,255,.04);border-top:none;border-radius:0 0 20px 20px;font-family:Inter,system-ui,sans-serif;color:#f0f0f0}.ds-agents{display:flex;gap:3px}.ds-agent-icon{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px}.ds-agent-icon.idle{opacity:.5}.ds-status{flex:1;text-align:center;font-size:11px;font-weight:500;color:#8a8a8a;letter-spacing:-0.01em;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ds-stats{display:flex;gap:8px}.ds-stat{display:inline-flex;align-items:center;gap:4px;font:600 10px 'JetBrains Mono',monospace;color:#60A5FA}.ds-stat i{width:5px;height:5px;border-radius:50%;background:#60A5FA;display:inline-block}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Signal Strip",
+    "overview": "AgentNotch is a thin, near-black system strip that lives at the top of the display. It is not a dashboard, not a marketing surface, and not a second IDE. It is an ambient status channel for solo developers running multiple AI coding agents — glanceable when idle, decisive when something needs a human.\n\nThe aesthetic is Calm · Precise · Unobtrusive. Surfaces stack as tonal near-blacks; chroma is reserved for status (working, idle, attention, error, question) and agent identity. Type is small, Inter for UI and JetBrains Mono for numbers, models, paths, and tool names. Motion is short and purposeful: breathe while working, pulse when attention is required, then get out of the way. Empty and idle states stay quiet.\n\nThis system explicitly rejects chatty SaaS dashboards (metric-hero cards, decorative card grids, “AI platform” bloat) and patterns that train ignore-behavior (constant badges, red-dot spam, alert noise without a clear next action). Color and animation are earned by real agent state.",
+    "keyCharacteristics": [
+      "Near-black tonal stack, hairline borders, almost no ambient shadow",
+      "Status and agent color only where state must be read in under a second",
+      "Dense, scannable session cards — not identical marketing tiles",
+      "Signature shell: 40px collapsed bar, bottom-rounded notch (0 0 20px 20px)",
+      "Refined and restrained controls; allow/deny and dispatch are the only “loud” moments"
+    ],
+    "rules": [
+      { "name": "The Earned Color Rule", "body": "Status and agent hues appear only on state, identity tags, or the action that state demands. Decorative fills, gradient washes, and rainbow chrome are prohibited.", "section": "colors" },
+      { "name": "The Interrupt Amber Rule", "body": "Attention amber is scarce. If everything is amber, nothing is. Prefer quiet idle green/blue until a real needs-attention or permission state.", "section": "colors" },
+      { "name": "The No-Hero-Type Rule", "body": "There is no 48px marketing headline in this product. Maximum type scale stays in the compact UI band (≤15px for primary UI text).", "section": "typography" },
+      { "name": "The Mono-Means-Data Rule", "body": "Use mono only for machine-readable or time-bound data. Do not set body prose in mono.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Surfaces are flat at rest. Glow appears only as a response to real agent attention or in-progress plan state.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep the shell near-black and let status color carry meaning (working blue, idle green, attention amber).",
+      "Do pair every status color with text and/or icon so state is not color-only (PRODUCT accessibility).",
+      "Do prefer tonal surface steps and 1px hairlines over drop shadows.",
+      "Do use mono for durations, models, tools, paths, and usage % only.",
+      "Do honor prefers-reduced-motion: replace breathe/shake/spin/pulse with static or simple opacity.",
+      "Do keep empty states quiet — short title + one-line desc, no hero marketing empty illustrations.",
+      "Do treat attention expansion and sound as earned by real agent need."
+    ],
+    "donts": [
+      "Don't build chatty SaaS dashboards: big empty marketing chrome, metric-hero cards, “AI platform” bloat, or decorative card grids that do not help act now.",
+      "Don't use patterns that train ignore-behavior: constant badges, red-dot spam, and alert noise without a clear next action.",
+      "Don't use gradient text, glassmorphism as default decoration, or wide soft card shadows with 1px borders as a “premium” recipe.",
+      "Don't put a colored side-stripe (border-left > 1px) on every card as scaffolding (plan inset is a rare, intentional exception for nested plan lists only — do not generalize).",
+      "Don't recolor the whole notch with agent brand colors; agent hues stay on tags/dots.",
+      "Don't ship hero display type, cream/sand marketing backgrounds, or light-mode SaaS defaults in this product surface.",
+      "Don't animate layout for decoration; window geometry owns expand/collapse size."
+    ]
+  }
+}
