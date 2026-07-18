@@ -1,0 +1,104 @@
+/**
+ * History view component — renders past sessions grouped by date.
+ */
+
+const AGENT_COLORS = {
+  'Claude Code': '#D97757',
+  'Codex': '#10B981',
+  'Cursor': '#06B6D4',
+  'Antigravity': '#4285F4',
+  'Grok': '#EF4444'
+};
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2, '0');
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const hour = h % 12 || 12;
+  return `${hour}:${m} ${ampm}`;
+}
+
+function getDateLabel(ts) {
+  if (!ts) return 'Unknown';
+  const now = new Date();
+  const d = new Date(ts);
+
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+
+  const sessionDate = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  if (sessionDate.getTime() === today.getTime()) return 'Today';
+  if (sessionDate.getTime() === yesterday.getTime()) return 'Yesterday';
+
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+}
+
+export function renderHistoryView(history, expandedId = null) {
+  if (!history || history.length === 0) return '';
+
+  // Group by date
+  const groups = new Map();
+  for (const entry of history) {
+    const label = getDateLabel(entry.archivedAt || entry.lastTime);
+    if (!groups.has(label)) {
+      groups.set(label, []);
+    }
+    groups.get(label).push(entry);
+  }
+
+  let html = '';
+
+  for (const [dateLabel, entries] of groups) {
+    html += `<div class="history-date-group">
+      <div class="history-date-label">${dateLabel}</div>`;
+
+    for (const entry of entries) {
+      const color = AGENT_COLORS[entry.agent] || '#60A5FA';
+      const cleanTask = (entry.taskName || 'Untitled').replace(/<[^>]+>/g, '').trim();
+      const isExpanded = entry.id === expandedId;
+      const prompt = entry.userPrompt ? `<div><span>Prompt</span>${escapeHtml(entry.userPrompt)}</div>` : '';
+      const activity = entry.lastMessage ? `<div><span>Last activity</span>${escapeHtml(entry.lastMessage)}</div>` : '';
+      const tools = entry.toolCalls && entry.toolCalls.length
+        ? `<div><span>Tools</span><div class="history-tools">${entry.toolCalls.map(tool => `<code>${escapeHtml(tool)}</code>`).join('')}</div></div>`
+        : '';
+
+      html += `
+        <article class="history-entry ${isExpanded ? 'expanded' : ''}" data-id="${entry.id}">
+          <div class="history-dot" style="background: ${color}"></div>
+          <div class="history-info">
+            <span class="history-name">${escapeHtml(cleanTask)}</span>
+            <span class="history-sub">${escapeHtml(entry.agent)}</span>
+          </div>
+          <div class="history-meta">
+            <span class="history-duration">${escapeHtml(entry.durationFormatted || '—')}</span>
+            <span class="history-time">${formatTime(entry.archivedAt || entry.lastTime)}</span>
+          </div>
+          <div class="history-detail">
+            <div class="history-detail-inner">
+              ${prompt}${activity}${tools}
+            </div>
+          </div>
+        </article>`;
+    }
+
+    html += '</div>';
+  }
+
+  html += `<button class="history-clear-btn" id="btn-clear-history">
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14H7L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+    Clear History
+  </button>`;
+
+  return html;
+}
