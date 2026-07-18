@@ -22,10 +22,28 @@ AgentNotch is a cross-platform system tray application that displays a Mac-style
 
 - 🟢 **Ambient Notch UI:** A thin status notch at the top center of your primary screen. It remains visible while any agent is working or requires attention, and autohides when all agents are idle.
 - ⚡ **Auto-Expand on Attention:** Automatically expands the notch whenever an agent requests permission, asks a question, or completes a turn, so you never miss a blocker.
+- ✅ **Claude remote approve:** Allow / Deny from the notch for Claude Code via a `PermissionRequest` hook (install once in Settings). Other agents still focus the app so you can approve there.
 - 🎛️ **Live Session Cards:** Hover or click to expand cards showing the active running model (e.g. `Grok 4.5`, `Gemini 1.5 Pro`), a live activity feed of recent commands/files edited, and active execution parameters.
 - 📊 **Usage Limits:** Displays real-time, local-only metric strips for resource usage (such as Grok weekly credits or Codex usage %) directly in the top bar.
 - 📥 **CLI Task Dispatch:** Submit tasks directly to agent CLIs from the expanded notch input field.
 - ⚙️ **Local Settings & History:** Manage per-agent watchers, notification sounds, desktop banners, and autostart settings. Session history is archived locally under `~/.agent-notch/history.json`.
+
+---
+
+## Claude remote approve setup
+
+1. Open AgentNotch → **Settings**.
+2. Under **Claude remote approve**, click **Install hook**.
+3. Restart any open Claude Code sessions (hooks load at session start).
+4. When Claude needs permission, the notch expands — press **Allow** (`Ctrl+Y`) or **Deny** (`Ctrl+N`). Claude continues without switching windows.
+
+What install does:
+
+- Copies the bridge script to `~/.agent-notch/bin/claude-permission-bridge.js`
+- Adds a `PermissionRequest` command hook in `~/.claude/settings.json` (other hooks are preserved)
+- Pending requests and decisions live under `~/.agent-notch/permissions/`
+
+If the hook times out (~10 minutes) or AgentNotch is not running, Claude falls back to its normal permission dialog.
 
 ---
 
@@ -59,11 +77,12 @@ agent-notch/
     │   │   ├── cursor-watcher.js      # Cursor process tracker
     │   │   ├── grok-watcher.js        # Grok session updates tailer
     │   │   └── session-utils.js       # JSONL stream helpers
-    │   ├── index.js       # Main Electron entrance point
-    │   ├── logger.js      # Quiet, file-based logging utility
-    │   ├── store.js       # Settings and session state persistence
-    │   ├── tray.js        # OS tray status colors & context menu
-    │   └── usage-limits.js# Local resource tracker
+    │   ├── index.js             # Main Electron entrance point
+    │   ├── logger.js            # Quiet, file-based logging utility
+    │   ├── permission-bridge.js # Claude PermissionRequest hook + decision files
+    │   ├── store.js             # Settings and session state persistence
+    │   ├── tray.js              # OS tray status colors & context menu
+    │   └── usage-limits.js      # Local resource tracker
     ├── preload/           # contextBridge secure IPC bridge
     │   └── index.js
     └── renderer/          # User Interface (Notch, Expanded Panel, Settings)
