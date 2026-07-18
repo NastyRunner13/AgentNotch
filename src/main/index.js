@@ -519,6 +519,18 @@ app.whenReady().then(() => {
     return agentManager.jumpToTerminal(sessionId);
   });
 
+  ipcMain.handle('install-claude-permission-hook', () => {
+    return agentManager.installClaudePermissionHook();
+  });
+
+  ipcMain.handle('uninstall-claude-permission-hook', () => {
+    return agentManager.uninstallClaudePermissionHook();
+  });
+
+  ipcMain.handle('get-claude-permission-hook-status', () => {
+    return agentManager.getClaudePermissionHookStatus();
+  });
+
   ipcMain.handle('get-platform', () => {
     return process.platform;
   });

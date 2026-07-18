@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const chokidar = require('chokidar');
 const { ClaudeWatcher } = require('./watchers/claude-watcher');
 const { CodexWatcher } = require('./watchers/codex-watcher');
 const { CursorWatcher } = require('./watchers/cursor-watcher');
@@ -10,6 +11,7 @@ const { AntigravityWatcher } = require('./watchers/antigravity-watcher');
 const { GrokWatcher } = require('./watchers/grok-watcher');
 const { createSettingsStore } = require('./store');
 const { collectUsageLimits } = require('./usage-limits');
+const permissionBridge = require('./permission-bridge');
 
 /**
  * @typedef {Object} AgentSession
@@ -92,6 +94,10 @@ class AgentManager extends EventEmitter {
     /** @type {Array|null} last usage snapshot */
     this._usageLimits = null;
     this._usageTimer = null;
+    /** @type {import('chokidar').FSWatcher|null} */
+    this._permissionWatcher = null;
+    /** @type {Set<string>} pending request ids already used for attention emit */
+    this._knownPendingIds = new Set();
 
     // Forward session updates from all watchers
     for (const watcher of Object.values(this.watchers)) {
@@ -107,6 +113,15 @@ class AgentManager extends EventEmitter {
     if (this.settings.enableCursor) this.watchers.cursor.start();
     if (this.settings.enableAntigravity) this.watchers.antigravity.start();
     if (this.settings.enableGrok) this.watchers.grok.start();
+
+    // Keep bridge script fresh for Claude PermissionRequest hooks
+    try {
+      permissionBridge.syncBridgeScript();
+      permissionBridge.pruneStalePending();
+    } catch (err) {
+      console.warn('[AgentManager] permission bridge sync failed:', err.message);
+    }
+    this._startPermissionWatcher();
 
     console.log('[AgentManager] Started all watchers');
 
@@ -124,6 +139,7 @@ class AgentManager extends EventEmitter {
     for (const watcher of Object.values(this.watchers)) {
       watcher.stop();
     }
+    this._stopPermissionWatcher();
     if (this._emitTimer) {
       clearTimeout(this._emitTimer);
       this._emitTimer = null;
@@ -138,6 +154,73 @@ class AgentManager extends EventEmitter {
     }
     this._saveHistory();
     console.log('[AgentManager] Stopped all watchers');
+  }
+
+  _startPermissionWatcher() {
+    this._stopPermissionWatcher();
+    try {
+      permissionBridge.ensureDirs();
+      const dir = permissionBridge.pendingDir();
+      this._permissionWatcher = chokidar.watch(dir, {
+        ignoreInitial: false,
+        depth: 0,
+        awaitWriteFinish: { stabilityThreshold: 80, pollInterval: 50 }
+      });
+      const onChange = () => {
+        this._onPendingPermissionsChanged();
+      };
+      this._permissionWatcher.on('add', onChange);
+      this._permissionWatcher.on('change', onChange);
+      this._permissionWatcher.on('unlink', onChange);
+    } catch (err) {
+      console.warn('[AgentManager] permission watcher failed:', err.message);
+    }
+  }
+
+  _stopPermissionWatcher() {
+    if (this._permissionWatcher) {
+      try {
+        this._permissionWatcher.close();
+      } catch {
+        // ignore
+      }
+      this._permissionWatcher = null;
+    }
+  }
+
+  _onPendingPermissionsChanged() {
+    const pending = permissionBridge.listPending();
+    const currentIds = new Set(pending.map((p) => p.id));
+
+    // Drop known ids that are gone
+    for (const id of this._knownPendingIds) {
+      if (!currentIds.has(id)) this._knownPendingIds.delete(id);
+    }
+
+    const newly = pending.filter((p) => !this._knownPendingIds.has(p.id));
+    for (const p of newly) {
+      this._knownPendingIds.add(p.id);
+    }
+
+    this._scheduleEmit();
+
+    if (newly.length > 0) {
+      // Build lightweight session-shaped objects for notifications
+      const sessions = this.getSessions().filter((s) => s.remoteApprove && s.status === 'permission-request');
+      const attention = sessions.length
+        ? sessions.filter((s) => newly.some((p) => p.notchSessionId === s.id || s.permissionRequest?.requestId === p.id))
+        : newly.map((p) => ({
+            id: p.notchSessionId || `claude-pending-${p.id}`,
+            agent: 'Claude Code',
+            taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
+            status: 'permission-request',
+            permissionRequest: permissionBridge.pendingToPermissionRequest(p),
+            remoteApprove: true
+          }));
+      if (attention.length > 0) {
+        this.emit('attention', attention);
+      }
+    }
   }
 
   _scheduleEmit() {
@@ -224,6 +307,10 @@ class AgentManager extends EventEmitter {
         session.status !== 'idle' || !this._archivedIds.has(session.id)
       ));
     }
+
+    // Merge Claude PermissionRequest hook pendings (true remote approve)
+    const merged = permissionBridge.mergePendingIntoSessions(all);
+
     // Sort: needs-attention first, then working, then idle
     const priority = {
       'permission-request': 0,
@@ -233,13 +320,13 @@ class AgentManager extends EventEmitter {
       'idle': 4,
       'stopped': 5
     };
-    all.sort((a, b) => {
+    merged.sort((a, b) => {
       const pa = priority[a.status] ?? 4;
       const pb = priority[b.status] ?? 4;
       if (pa !== pb) return pa - pb;
       return (b.lastTime || 0) - (a.lastTime || 0);
     });
-    return all;
+    return merged;
   }
 
   getSettings() {
@@ -398,29 +485,96 @@ class AgentManager extends EventEmitter {
   // ── Actions ────────────────────────────────────────
 
   /**
-   * Remote approval is not available for most agents.
-   * Focus the agent app so the user can approve there.
+   * Approve a permission request.
+   * Claude Code: write decision file for the PermissionRequest hook bridge (true remote).
+   * Others: focus the agent app so the user can approve there.
    */
   async approvePermission(sessionId) {
+    const remote = permissionBridge.submitDecisionForSession(sessionId, 'allow');
+    if (remote.success) {
+      this._scheduleEmit();
+      return remote;
+    }
+
+    // Explicit requestId on session card (synthetic / orphan)
+    const session = this.getSessions().find((s) => s.id === sessionId);
+    const requestId = session?.permissionRequest?.requestId;
+    if (requestId) {
+      const byId = permissionBridge.submitDecision(requestId, 'allow');
+      if (byId.success) {
+        this._scheduleEmit();
+        return byId;
+      }
+    }
+
     const result = await this.jumpToTerminal(sessionId);
     return {
       success: result.success,
       message: result.success
-        ? 'Opened agent — approve the permission request there. Remote approve is not supported yet.'
+        ? 'Opened agent — approve the permission request there. Install the Claude hook in Settings for in-notch approve.'
         : result.message,
-      focused: result.success
+      focused: result.success,
+      remote: false
     };
   }
 
   async denyPermission(sessionId) {
+    const remote = permissionBridge.submitDecisionForSession(sessionId, 'deny');
+    if (remote.success) {
+      this._scheduleEmit();
+      return remote;
+    }
+
+    const session = this.getSessions().find((s) => s.id === sessionId);
+    const requestId = session?.permissionRequest?.requestId;
+    if (requestId) {
+      const byId = permissionBridge.submitDecision(requestId, 'deny');
+      if (byId.success) {
+        this._scheduleEmit();
+        return byId;
+      }
+    }
+
     const result = await this.jumpToTerminal(sessionId);
     return {
       success: result.success,
       message: result.success
-        ? 'Opened agent — deny the permission request there. Remote deny is not supported yet.'
+        ? 'Opened agent — deny the permission request there. Install the Claude hook in Settings for in-notch deny.'
         : result.message,
-      focused: result.success
+      focused: result.success,
+      remote: false
     };
+  }
+
+  installClaudePermissionHook() {
+    try {
+      return permissionBridge.installClaudeHook();
+    } catch (err) {
+      return { success: false, message: err.message || 'Install failed' };
+    }
+  }
+
+  uninstallClaudePermissionHook() {
+    try {
+      return permissionBridge.uninstallClaudeHook();
+    } catch (err) {
+      return { success: false, message: err.message || 'Uninstall failed' };
+    }
+  }
+
+  getClaudePermissionHookStatus() {
+    try {
+      return permissionBridge.getHookStatus();
+    } catch (err) {
+      return {
+        installed: false,
+        bridgeExists: false,
+        bridgePath: permissionBridge.bridgeInstallPath(),
+        settingsPath: path.join(os.homedir(), '.claude', 'settings.json'),
+        pendingCount: 0,
+        error: err.message
+      };
+    }
   }
 
   async answerQuestion(sessionId, answer) {

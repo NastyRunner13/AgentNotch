@@ -346,6 +346,7 @@ html, body {
    NOTCH PANEL — Expanded content area
    ═══════════════════════════════════════════════════════ */
 .notch-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;

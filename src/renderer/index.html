@@ -161,6 +161,20 @@
             </label>
             <p class="settings-hint">Global hotkey: Ctrl+Shift+A (⌘⇧A on Mac) toggles the notch.</p>
 
+            <h3 class="settings-heading">Claude remote approve</h3>
+            <p class="settings-hint settings-hint-block">
+              Install a Claude Code <code>PermissionRequest</code> hook so Allow / Deny in the notch
+              approves tools without switching windows. Other agents still open the agent app.
+            </p>
+            <div class="setting-row setting-row-actions">
+              <span class="setting-label" id="claude-hook-status">Checking hook…</span>
+              <div class="setting-actions">
+                <button type="button" id="btn-install-claude-hook" class="btn-settings-action">Install hook</button>
+                <button type="button" id="btn-uninstall-claude-hook" class="btn-settings-action secondary" hidden>Remove</button>
+              </div>
+            </div>
+            <p class="settings-hint" id="claude-hook-detail"></p>
+
             <div class="settings-footer">
               <span class="settings-version">AgentNotch</span>
             </div>

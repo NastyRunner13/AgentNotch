@@ -207,6 +207,11 @@ class App {
     const res = await window.agentNotch.approvePermission(sessionId);
     if (res && !res.success) {
       console.warn('[AgentNotch]', res.message);
+      this.showToast(res.message || 'Approve failed', 'error');
+    } else if (res?.remote) {
+      this.showToast(res.message || 'Approved', 'ok');
+    } else if (res?.message) {
+      this.showToast(res.message, 'info');
     }
   }
 
@@ -215,7 +220,33 @@ class App {
     const res = await window.agentNotch.denyPermission(sessionId);
     if (res && !res.success) {
       console.warn('[AgentNotch]', res.message);
+      this.showToast(res.message || 'Deny failed', 'error');
+    } else if (res?.remote) {
+      this.showToast(res.message || 'Denied', 'ok');
+    } else if (res?.message) {
+      this.showToast(res.message, 'info');
     }
+  }
+
+  showToast(message, kind = 'info') {
+    if (!message) return;
+    let el = document.getElementById('notch-toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'notch-toast';
+      el.className = 'notch-toast';
+      el.setAttribute('role', 'status');
+      const panel = document.getElementById('notch-panel') || document.getElementById('app');
+      if (panel) panel.appendChild(el);
+      else document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.dataset.kind = kind;
+    el.classList.add('visible');
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      el.classList.remove('visible');
+    }, 3200);
   }
 
   async handleAnswer(sessionId, answer) {

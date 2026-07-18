@@ -443,13 +443,20 @@ export function renderSessionCard(session, index = 0) {
 }
 
 function renderInlineApproval(session, pr) {
+  const remote = Boolean(session.remoteApprove || pr.remote);
   const fileName = pr.filePath ? pr.filePath.split(/[/\\]/).pop() : '';
 
   let diffHtml = '';
   if (pr.input) {
-    const content = pr.input.content || pr.input.code || pr.input.diff || '';
+    const content =
+      pr.input.content ||
+      pr.input.code ||
+      pr.input.diff ||
+      pr.input.command ||
+      pr.input.description ||
+      '';
     if (content) {
-      const lines = content.split('\n').slice(0, 6);
+      const lines = String(content).split('\n').slice(0, 6);
       diffHtml = lines.map((line, i) => {
         let cls = 'ctx';
         if (line.startsWith('+')) cls = 'add';
@@ -460,19 +467,28 @@ function renderInlineApproval(session, pr) {
     }
   }
 
+  const denyTitle = remote ? 'Deny from AgentNotch' : 'Open agent to deny';
+  const allowTitle = remote ? 'Approve from AgentNotch' : 'Open agent to approve';
+  const hint = remote
+    ? 'Approves or denies in Claude Code without leaving the notch.'
+    : session.agent === 'Claude Code'
+      ? 'Opens Claude — or install the remote-approve hook in Settings for in-notch Allow/Deny.'
+      : 'Opens the agent so you can approve or deny there.';
+
   return `
-    <div class="session-approval">
+    <div class="session-approval ${remote ? 'remote' : 'focus-only'}">
       <div class="approval-info">
         <span class="approval-icon">⚠</span>
         <span class="approval-name">${escapeHtml(pr.tool)}</span>
         ${pr.filePath ? `<span class="approval-path">${escapeHtml(pr.filePath)}</span>` : ''}
+        ${remote ? '<span class="approval-badge" title="Remote approve via Claude hook">Notch</span>' : ''}
       </div>
       ${diffHtml}
       <div class="approval-btns">
-        <button class="btn-deny" data-session-id="${session.id}" title="Open agent to deny">Deny <kbd>Ctrl+N</kbd></button>
-        <button class="btn-allow" data-session-id="${session.id}" title="Open agent to approve">Allow <kbd>Ctrl+Y</kbd></button>
+        <button class="btn-deny" data-session-id="${session.id}" title="${denyTitle}">Deny <kbd>Ctrl+N</kbd></button>
+        <button class="btn-allow" data-session-id="${session.id}" title="${allowTitle}">Allow <kbd>Ctrl+Y</kbd></button>
       </div>
-      <p class="approval-hint">Opens the agent so you can approve or deny there.</p>
+      <p class="approval-hint">${hint}</p>
     </div>`;
 }
 

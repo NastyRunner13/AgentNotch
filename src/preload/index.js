@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('agentNotch', {
   answerQuestion: (sessionId, answer) => ipcRenderer.invoke('answer-question', sessionId, answer),
   jumpToTerminal: (sessionId) => ipcRenderer.invoke('jump-to-terminal', sessionId),
 
+  // Claude remote approve (PermissionRequest hook)
+  installClaudePermissionHook: () => ipcRenderer.invoke('install-claude-permission-hook'),
+  uninstallClaudePermissionHook: () => ipcRenderer.invoke('uninstall-claude-permission-hook'),
+  getClaudePermissionHookStatus: () => ipcRenderer.invoke('get-claude-permission-hook-status'),
+
   // Platform / app info
   getPlatform: () => ipcRenderer.invoke('get-platform'),
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),
