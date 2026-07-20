@@ -28,6 +28,7 @@ colors:
   agent-cursor: "#06B6D4"
   agent-antigravity: "#4285F4"
   agent-grok: "#EF4444"
+  agent-opencode: "#8B5CF6"
 typography:
   title:
     fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"

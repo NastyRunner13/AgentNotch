@@ -5,13 +5,14 @@
   "main": "src/main/index.js",
   "scripts": {
     "dev": "electron .",
-    "test": "node --test test/**/*.test.js",
+    "test": "node --test \"test/**/*.test.js\"",
     "permission-bridge": "node src/main/permission-bridge.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux"
   },
+  "engines": { "node": ">=20" },
   "author": "AgentNotch",
   "license": "MIT",
   "devDependencies": {

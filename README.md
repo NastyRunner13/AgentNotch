@@ -15,6 +15,9 @@ AgentNotch is a cross-platform system tray application that displays a Mac-style
 | **Cursor** | Process presence (`Cursor.exe` / `Cursor`) | Running / active state |
 | **Antigravity** | `~/.gemini/antigravity-ide/brain/**/transcript.jsonl` | Planning phases, subagent execution, task status |
 | **Grok Build** | `~/.grok/sessions/**/updates.jsonl` | Active tool names, command parameters, weekly credits |
+| **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite WAL, read-only) | Tool execution, step completion, model + token/cost usage |
+
+> **Note:** OpenCode live permission requests are not persisted to disk, so OpenCode sessions report working/idle + activity only — approvals happen in the OpenCode app (no remote approve).
 
 ---
 
@@ -66,7 +69,8 @@ agent-notch/
 ├── .agents/               # Customization hooks
 ├── assets/                # Application icons and assets
 ├── test/                  # Test suite (Node.js test runner)
-│   └── analyzers.test.js  # Agent log parser unit tests
+│   ├── analyzers.test.js         # Agent log parser unit tests
+│   └── permission-bridge.test.js # Permission bridge filesystem tests
 └── src/
     ├── main/              # Main process (Tray, Window, Agent Manager)
     │   ├── watchers/      # Agent-specific file watchers and log tailers
@@ -76,6 +80,7 @@ agent-notch/
     │   │   ├── codex-watcher.js       # Codex log parser
     │   │   ├── cursor-watcher.js      # Cursor process tracker
     │   │   ├── grok-watcher.js        # Grok session updates tailer
+    │   │   ├── opencode-watcher.js    # OpenCode SQLite (WAL) session reader
     │   │   └── session-utils.js       # JSONL stream helpers
     │   ├── index.js             # Main Electron entrance point
     │   ├── logger.js            # Quiet, file-based logging utility
