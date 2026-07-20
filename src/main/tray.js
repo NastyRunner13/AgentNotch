@@ -41,12 +41,12 @@ function createTrayIcon(color = '#4ADE80', badgeCount = 0) {
     }
   }
 
-  // Draw badge count if > 0
+  // Draw badge with digit count if > 0
   if (badgeCount > 0 && badgeCount <= 9) {
-    // Small dot in top-right corner
-    const badgeR = 3;
-    const badgeCX = size - badgeR - 1;
-    const badgeCY = badgeR + 1;
+    // Badge circle in top-right corner
+    const badgeR = 3.5;
+    const badgeCX = size - badgeR - 0.5;
+    const badgeCY = badgeR + 0.5;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const idx = (y * size + x) * 4;
@@ -54,6 +54,37 @@ function createTrayIcon(color = '#4ADE80', badgeCount = 0) {
         const dy = y - badgeCY;
         const dist = Math.sqrt(dx * dx + dy * dy);
         if (dist <= badgeR) {
+          buf[idx] = 255;
+          buf[idx + 1] = 60;
+          buf[idx + 2] = 60;
+          buf[idx + 3] = 255;
+        }
+      }
+    }
+    // Render a single white pixel digit centred in the badge (3×5 pixel font)
+    // Each digit pattern is a 3-column × 5-row bitmask (row 0 = top)
+    const DIGIT_PIXELS = {
+      1: [[1,1,0],[0,1,0],[0,1,0],[0,1,0],[1,1,1]],
+      2: [[1,1,1],[0,0,1],[0,1,0],[1,0,0],[1,1,1]],
+      3: [[1,1,1],[0,0,1],[0,1,1],[0,0,1],[1,1,1]],
+      4: [[1,0,1],[1,0,1],[1,1,1],[0,0,1],[0,0,1]],
+      5: [[1,1,1],[1,0,0],[1,1,1],[0,0,1],[1,1,1]],
+      6: [[1,1,1],[1,0,0],[1,1,1],[1,0,1],[1,1,1]],
+      7: [[1,1,1],[0,0,1],[0,1,0],[0,1,0],[0,1,0]],
+      8: [[1,1,1],[1,0,1],[1,1,1],[1,0,1],[1,1,1]],
+      9: [[1,1,1],[1,0,1],[1,1,1],[0,0,1],[1,1,1]]
+    };
+    const pattern = DIGIT_PIXELS[badgeCount];
+    if (pattern) {
+      const startX = Math.round(badgeCX) - 1;
+      const startY = Math.round(badgeCY) - 2;
+      for (let row = 0; row < pattern.length; row++) {
+        for (let col = 0; col < pattern[row].length; col++) {
+          if (!pattern[row][col]) continue;
+          const px = startX + col;
+          const py = startY + row;
+          if (px < 0 || px >= size || py < 0 || py >= size) continue;
+          const idx = (py * size + px) * 4;
           buf[idx] = 255;
           buf[idx + 1] = 255;
           buf[idx + 2] = 255;

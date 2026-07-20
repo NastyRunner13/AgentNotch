@@ -12,7 +12,8 @@ const AGENTS = [
   { id: 'codex', name: 'Codex', short: 'Codex', color: '#10B981' },
   { id: 'cursor', name: 'Cursor', short: 'Cursor', color: '#06B6D4' },
   { id: 'antigravity', name: 'Antigravity', short: 'Gemini', color: '#4285F4' },
-  { id: 'grok', name: 'Grok', short: 'Grok', color: '#EF4444' }
+  { id: 'grok', name: 'Grok', short: 'Grok', color: '#EF4444' },
+  { id: 'opencode', name: 'OpenCode', short: 'OpenCode', color: '#8B5CF6' }
 ];
 
 function safeReadJson(filePath) {
@@ -57,6 +58,22 @@ function formatReset(resetsAt) {
     hour: 'numeric',
     minute: '2-digit'
   });
+}
+
+/**
+ * Format a minute-based window duration.
+ * Shows hours when < 24h (e.g. 300min → "5h"), days otherwise.
+ */
+function formatWindowMinutes(minutes) {
+  if (!minutes || minutes <= 0) return null;
+  const totalMins = Math.round(minutes);
+  if (totalMins < 1440) {
+    // Less than a full day — show hours (rounded)
+    const hours = Math.round(totalMins / 60);
+    return hours > 0 ? `${hours}h` : `${totalMins}m`;
+  }
+  const days = Math.round(totalMins / (60 * 24));
+  return `${days}d`;
 }
 
 /**
@@ -123,7 +140,7 @@ function formatIsoDate(iso) {
  * Codex: rate_limits on token_count events in session JSONL.
  * Prefer live session data when provided; fall back to scanning recent files.
  */
-function readCodexUsage(home = os.homedir(), sessionHints = []) {
+async function readCodexUsage(home = os.homedir(), sessionHints = []) {
   // Prefer freshest rate limit from live sessions
   let best = null;
   for (const s of sessionHints) {
@@ -134,7 +151,7 @@ function readCodexUsage(home = os.homedir(), sessionHints = []) {
   }
 
   if (!best) {
-    best = scanCodexSessionsForRateLimit(path.join(home, '.codex', 'sessions'));
+    best = await scanCodexSessionsForRateLimit(path.join(home, '.codex', 'sessions'));
   }
 
   if (!best || best.usedPercent == null) {
@@ -154,7 +171,8 @@ function readCodexUsage(home = os.homedir(), sessionHints = []) {
     available: true,
     usedPercent: used,
     remainingPercent: Math.max(0, 100 - used),
-    window: best.windowMinutes ? `${Math.round(best.windowMinutes / (60 * 24))}d` : null,
+    // Bug fix: show hours when < 24h (e.g. Codex 5h window was "0d")
+    window: best.windowMinutes ? formatWindowMinutes(best.windowMinutes) : null,
     resetsAt: best.resetsAt || null,
     resetsLabel: formatReset(best.resetsAt),
     plan: best.planType || null,
@@ -178,34 +196,43 @@ function readCodexDefaultModel(home) {
   }
 }
 
-function scanCodexSessionsForRateLimit(sessionsDir) {
-  if (!fs.existsSync(sessionsDir)) return null;
+/**
+ * Async scan of ~/.codex/sessions for the most recent rate-limit entry.
+ * Avoids blocking the main event loop with depth-4 sync walks + large sync reads.
+ */
+async function scanCodexSessionsForRateLimit(sessionsDir) {
+  try {
+    if (!fs.existsSync(sessionsDir)) return null;
+  } catch {
+    return null;
+  }
+
   const files = [];
-  walkJsonl(sessionsDir, files, 4);
+  await walkJsonlAsync(sessionsDir, files, 4);
   files.sort((a, b) => b.mtime - a.mtime);
 
   for (const file of files.slice(0, 8)) {
-    const found = extractCodexRateLimitFromFile(file.path);
+    const found = await extractCodexRateLimitFromFileAsync(file.path);
     if (found) return found;
   }
   return null;
 }
 
-function walkJsonl(dir, out, maxDepth, depth = 0) {
+async function walkJsonlAsync(dir, out, maxDepth, depth = 0) {
   if (depth > maxDepth) return;
   let entries;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return;
   }
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      walkJsonl(full, out, maxDepth, depth + 1);
+      await walkJsonlAsync(full, out, maxDepth, depth + 1);
     } else if (entry.name.endsWith('.jsonl')) {
       try {
-        const st = fs.statSync(full);
+        const st = await fs.promises.stat(full);
         out.push({ path: full, mtime: st.mtimeMs });
       } catch {
         // skip
@@ -214,6 +241,61 @@ function walkJsonl(dir, out, maxDepth, depth = 0) {
   }
 }
 
+async function extractCodexRateLimitFromFileAsync(filePath) {
+  let content;
+  try {
+    const stat = await fs.promises.stat(filePath);
+    const size = stat.size;
+    if (size <= 0) return null;
+    const maxBytes = 200_000;
+    if (size <= maxBytes) {
+      content = await fs.promises.readFile(filePath, 'utf-8');
+    } else {
+      // Tail read to avoid loading huge files
+      const start = size - maxBytes;
+      const fd = await fs.promises.open(filePath, 'r');
+      try {
+        const buf = Buffer.alloc(maxBytes);
+        await fd.read(buf, 0, maxBytes, start);
+        content = buf.toString('utf-8');
+      } finally {
+        await fd.close();
+      }
+    }
+  } catch {
+    return null;
+  }
+  if (!content) return null;
+
+  let best = null;
+  let model = null;
+  for (const line of content.split(/\r?\n/)) {
+    if (!line) continue;
+    try {
+      const entry = JSON.parse(line);
+      const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : entry;
+      if (payload.model && typeof payload.model === 'string') model = payload.model;
+      if (payload.type === 'token_count' && payload.rate_limits) {
+        const primary = payload.rate_limits.primary;
+        if (primary && primary.used_percent != null) {
+          best = {
+            usedPercent: primary.used_percent,
+            windowMinutes: primary.window_minutes,
+            resetsAt: primary.resets_at,
+            planType: payload.rate_limits.plan_type || null,
+            model,
+            updatedAt: entry.timestamp ? Date.parse(entry.timestamp) : Date.now()
+          };
+        }
+      }
+    } catch {
+      // skip
+    }
+  }
+  return best;
+}
+
+// Keep the sync version exported for backward-compat with tests
 function extractCodexRateLimitFromFile(filePath) {
   const tail = readFileTail(filePath, 200_000);
   if (!tail) return null;
@@ -316,22 +398,37 @@ function readAntigravityUsage() {
   return emptyUsage('antigravity', { note: 'Limit not available locally' });
 }
 
+function readOpencodeUsage(home = os.homedir()) {
+  // OpenCode stores data in SQLite; model info comes from live sessions
+  const dbPaths = [
+    path.join(home, '.local', 'share', 'opencode', 'opencode.db'),
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'opencode', 'opencode.db') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'opencode', 'opencode.db') : null
+  ].filter(Boolean);
+
+  const installed = dbPaths.some(p => { try { return fs.existsSync(p); } catch { return false; } });
+  return emptyUsage('opencode', {
+    note: installed ? 'Model shown when active' : 'Not installed'
+  });
+}
+
 /**
  * @param {{ sessions?: Array, home?: string, enabled?: Record<string, boolean> }} opts
- * @returns {Array<object>}
+ * @returns {Promise<Array<object>>}
  */
-function collectUsageLimits(opts = {}) {
+async function collectUsageLimits(opts = {}) {
   const home = opts.home || os.homedir();
   const sessions = Array.isArray(opts.sessions) ? opts.sessions : [];
   const enabled = opts.enabled || {};
 
-  const all = [
-    readClaudeUsage(home, sessions),
+  const all = await Promise.all([
+    Promise.resolve(readClaudeUsage(home, sessions)),
     readCodexUsage(home, sessions),
-    readCursorUsage(),
-    readAntigravityUsage(),
-    readGrokUsage(home)
-  ];
+    Promise.resolve(readCursorUsage()),
+    Promise.resolve(readAntigravityUsage()),
+    Promise.resolve(readGrokUsage(home)),
+    Promise.resolve(readOpencodeUsage(home))
+  ]);
 
   // Enrich models from live sessions when available
   for (const usage of all) {
@@ -341,6 +438,7 @@ function collectUsageLimits(opts = {}) {
       if (usage.id === 'grok') return s.agent === 'Grok' && s.model;
       if (usage.id === 'cursor') return s.agent === 'Cursor' && s.model;
       if (usage.id === 'antigravity') return s.agent === 'Antigravity' && s.model;
+      if (usage.id === 'opencode') return s.agent === 'OpenCode' && s.model;
       return false;
     });
     if (match?.model) usage.model = match.model;
@@ -353,6 +451,7 @@ function collectUsageLimits(opts = {}) {
     if (u.id === 'cursor' && enabled.enableCursor === false) return false;
     if (u.id === 'antigravity' && enabled.enableAntigravity === false) return false;
     if (u.id === 'grok' && enabled.enableGrok === false) return false;
+    if (u.id === 'opencode' && enabled.enableOpencode === false) return false;
     return true;
   });
 }
@@ -362,5 +461,6 @@ module.exports = {
   readGrokUsage,
   readCodexUsage,
   readClaudeUsage,
+  readOpencodeUsage,
   extractCodexRateLimitFromFile
 };

@@ -9,6 +9,7 @@ const { CodexWatcher } = require('./watchers/codex-watcher');
 const { CursorWatcher } = require('./watchers/cursor-watcher');
 const { AntigravityWatcher } = require('./watchers/antigravity-watcher');
 const { GrokWatcher } = require('./watchers/grok-watcher');
+const { OpencodeWatcher } = require('./watchers/opencode-watcher');
 const { createSettingsStore } = require('./store');
 const { collectUsageLimits } = require('./usage-limits');
 const permissionBridge = require('./permission-bridge');
@@ -45,6 +46,7 @@ const DEFAULT_SETTINGS = {
   enableCursor: true,
   enableAntigravity: true,
   enableGrok: true,
+  enableOpencode: true,
   soundAlerts: true,
   launchAtStartup: false,
   desktopNotifications: true,
@@ -56,7 +58,8 @@ const AGENT_APP_MAP = {
   'Codex': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'codex'] },
   'Cursor': { win: 'Cursor.exe', mac: 'Cursor', linux: 'cursor', processNames: ['Cursor'] },
   'Antigravity': { win: null, mac: null, linux: null, processNames: ['Antigravity', 'gemini'] },
-  'Grok': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'grok'] }
+  'Grok': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'grok'] },
+  'OpenCode': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'opencode'] }
 };
 
 /**
@@ -77,7 +80,8 @@ class AgentManager extends EventEmitter {
       codex: new CodexWatcher({ pollInterval: poll }),
       cursor: new CursorWatcher({ pollInterval: Math.max(poll, 5000) }),
       antigravity: new AntigravityWatcher({ pollInterval: poll }),
-      grok: new GrokWatcher({ pollInterval: poll })
+      grok: new GrokWatcher({ pollInterval: poll }),
+      opencode: new OpencodeWatcher({ pollInterval: poll })
     };
 
     // Session history
@@ -113,6 +117,7 @@ class AgentManager extends EventEmitter {
     if (this.settings.enableCursor) this.watchers.cursor.start();
     if (this.settings.enableAntigravity) this.watchers.antigravity.start();
     if (this.settings.enableGrok) this.watchers.grok.start();
+    if (this.settings.enableOpencode) this.watchers.opencode.start();
 
     // Keep bridge script fresh for Claude PermissionRequest hooks
     try {
@@ -279,10 +284,12 @@ class AgentManager extends EventEmitter {
     }
   }
 
-  _refreshUsageLimits() {
+  async _refreshUsageLimits() {
     try {
+      // Prune orphaned pending requests on every usage refresh tick (every 15s)
+      permissionBridge.pruneStalePending();
       const sessions = this.getSessions();
-      const usage = collectUsageLimits({
+      const usage = await collectUsageLimits({
         sessions,
         enabled: this.settings
       });
@@ -295,6 +302,7 @@ class AgentManager extends EventEmitter {
 
   getUsageLimits() {
     if (!this._usageLimits) {
+      // Fire async refresh but return empty synchronously for first call
       this._refreshUsageLimits();
     }
     return this._usageLimits || [];
@@ -341,18 +349,33 @@ class AgentManager extends EventEmitter {
     const exists = (p) => {
       try { return fs.existsSync(p); } catch { return false; }
     };
+    const opencodeDbPaths = [
+      path.join(home, '.local', 'share', 'opencode', 'opencode.db'),
+      process.env.APPDATA ? path.join(process.env.APPDATA, 'opencode', 'opencode.db') : null,
+      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'opencode', 'opencode.db') : null
+    ].filter(Boolean);
     return {
       claude: exists(path.join(home, '.claude', 'projects')),
       codex: exists(path.join(home, '.codex', 'sessions')),
       cursor: true, // process-based
       antigravity: exists(path.join(home, '.gemini', 'antigravity-ide', 'brain')),
-      grok: exists(path.join(home, '.grok', 'sessions'))
+      grok: exists(path.join(home, '.grok', 'sessions')),
+      opencode: opencodeDbPaths.some(exists)
     };
   }
 
   updateSettings(newSettings) {
     const prev = { ...this.settings };
-    Object.assign(this.settings, newSettings);
+    // Whitelist: only accept known keys from DEFAULT_SETTINGS (prevents __proto__
+    // pollution), and only when the value type matches the default (prevents
+    // type confusion from a compromised/buggy renderer).
+    const safeUpdate = {};
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (!Object.prototype.hasOwnProperty.call(newSettings, key)) continue;
+      if (typeof newSettings[key] !== typeof DEFAULT_SETTINGS[key]) continue;
+      safeUpdate[key] = newSettings[key];
+    }
+    Object.assign(this.settings, safeUpdate);
 
     // Persist settings (only known keys)
     const toSave = {};
@@ -369,7 +392,8 @@ class AgentManager extends EventEmitter {
       enableCodex: 'codex',
       enableCursor: 'cursor',
       enableAntigravity: 'antigravity',
-      enableGrok: 'grok'
+      enableGrok: 'grok',
+      enableOpencode: 'opencode'
     };
 
     for (const [setting, watcherKey] of Object.entries(watcherMap)) {
@@ -620,7 +644,8 @@ class AgentManager extends EventEmitter {
       'Claude Code': { bin: 'claude', args: [text] },
       'Codex': { bin: 'codex', args: [text] },
       'Antigravity': { bin: 'gemini', args: [text] },
-      'Grok': { bin: 'grok', args: [text] }
+      'Grok': { bin: 'grok', args: [text] },
+      'OpenCode': { bin: 'opencode', args: [text] }
     };
 
     const spec = cliMap[agent];

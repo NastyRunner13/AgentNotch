@@ -19,6 +19,7 @@ function createSettingsStore() {
       enableCursor: true,
       enableAntigravity: true,
       enableGrok: true,
+      enableOpencode: true,
       soundAlerts: true,
       launchAtStartup: false,
       desktopNotifications: true,

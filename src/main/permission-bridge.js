@@ -45,8 +45,15 @@ function bridgeInstallPath() {
 }
 
 function ensureDirs() {
+  // mode 0o700 — owner-only; pending/decision files may contain tool input / secrets.
+  // (mode only applies to newly created dirs on POSIX; no-op on Windows.)
   for (const dir of [pendingDir(), decisionsDir(), path.dirname(bridgeInstallPath())]) {
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(dir, 0o700);
+    } catch {
+      // Windows may ignore chmod
+    }
   }
 }
 
@@ -82,11 +89,23 @@ function extractFilePath(toolInput) {
 // ── Pending / decision I/O ─────────────────────────────
 
 function pendingPath(id) {
+  validateRequestId(id);
   return path.join(pendingDir(), `${id}.json`);
 }
 
 function decisionPath(id) {
+  validateRequestId(id);
   return path.join(decisionsDir(), `${id}.json`);
+}
+
+/**
+ * Reject ids that don't look like UUIDs — path-traversal defence.
+ * @param {string} id
+ */
+function validateRequestId(id) {
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    throw new Error(`Invalid permission request id: ${String(id).slice(0, 64)}`);
+  }
 }
 
 function readJsonSafe(filePath) {
@@ -100,7 +119,8 @@ function readJsonSafe(filePath) {
 function writeJsonAtomic(filePath, data) {
   ensureDirs();
   const tmp = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+  // mode 0o600 — owner read/write only; pending/decision files may contain tool input / secrets
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, filePath);
 }
 
@@ -474,7 +494,7 @@ function mergePendingIntoSessions(sessions) {
   if (pending.length === 0) {
     return sessions.map((s) => ({
       ...s,
-      remoteApprove: s.agent === 'Claude Code' && false
+      remoteApprove: s.agent === 'Claude Code'
     }));
   }
 
