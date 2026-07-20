@@ -162,6 +162,7 @@ class BaseWatcher extends EventEmitter {
       session.status = 'stopped';
       this.emit('session-update', session);
       this.sessions.delete(id);
+      this._onSessionRemoved(id);
     }
   }
 
@@ -169,6 +170,8 @@ class BaseWatcher extends EventEmitter {
   _start() {}
   _stop() {}
   async _poll() {}
+  /** Called after a session is removed. Override to clean up per-session state. */
+  _onSessionRemoved(_id) {}
 }
 
 /**

@@ -2,6 +2,10 @@ const { app, BrowserWindow, ipcMain, screen, shell, globalShortcut, Notification
 const path = require('path');
 const { createTray, updateTrayIcon } = require('./tray');
 const { AgentManager } = require('./agent-manager');
+const { installConsoleCapture, closeLogger } = require('./logger');
+
+// Mirror all main-process console.* output to ~/.agent-notch/logs/
+installConsoleCapture();
 
 // Prevent multiple instances
 const gotLock = app.requestSingleInstanceLock();
@@ -143,7 +147,7 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: true
     }
   });
 
@@ -503,19 +507,32 @@ app.whenReady().then(() => {
     return true;
   });
 
+  // Session-id format validation — ids are prefixed slugs derived from on-disk filenames.
+  // Reject anything that could be path-traversal or injection.
+  const SESSION_ID_RE = /^[a-z][a-z0-9_-]*-[a-zA-Z0-9._~%-]{1,220}$/;
+  function validateSessionId(id) {
+    if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) {
+      throw new Error(`Invalid session id: ${String(id).slice(0, 80)}`);
+    }
+  }
+
   ipcMain.handle('approve-permission', async (_, sessionId) => {
+    validateSessionId(sessionId);
     return agentManager.approvePermission(sessionId);
   });
 
   ipcMain.handle('deny-permission', async (_, sessionId) => {
+    validateSessionId(sessionId);
     return agentManager.denyPermission(sessionId);
   });
 
   ipcMain.handle('answer-question', async (_, sessionId, answer) => {
+    validateSessionId(sessionId);
     return agentManager.answerQuestion(sessionId, answer);
   });
 
   ipcMain.handle('jump-to-terminal', async (_, sessionId) => {
+    validateSessionId(sessionId);
     return agentManager.jumpToTerminal(sessionId);
   });
 
@@ -603,6 +620,7 @@ app.on('before-quit', () => {
   if (agentManager) {
     agentManager.stop();
   }
+  closeLogger();
 });
 
 // Focus existing window when second instance launched

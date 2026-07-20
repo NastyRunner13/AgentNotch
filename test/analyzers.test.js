@@ -4,6 +4,7 @@ const { analyzeClaudeEntries } = require('../src/main/watchers/claude-watcher');
 const { analyzeCodexEntries } = require('../src/main/watchers/codex-watcher');
 const { analyzeGrokEntries } = require('../src/main/watchers/grok-watcher');
 const { analyzeAntigravityEntries } = require('../src/main/watchers/antigravity-watcher');
+const { analyzeOpencodeSession } = require('../src/main/watchers/opencode-watcher');
 const { extractTaskName, parseJSONL, formatDuration } = require('../src/main/watchers/base-watcher');
 const { getText, normalizePlan } = require('../src/main/watchers/session-utils');
 const { collectUsageLimits } = require('../src/main/usage-limits');
@@ -288,6 +289,64 @@ describe('Grok events analyzer', () => {
     assert.ok(result.lastMessage.includes('refactor'));
   });
 
+  it('captures agent_thought_chunk into activity as thinking', () => {
+    const entries = [
+      {
+        timestamp: 1784471756,
+        method: 'session/update',
+        params: {
+          update: {
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: 'The user wants fuller thinking in the notch feed. ' }
+          }
+        }
+      },
+      {
+        timestamp: 1784471758,
+        method: 'session/update',
+        params: {
+          update: {
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: 'I will surface thought chunks next to tools.' }
+          }
+        }
+      },
+      {
+        timestamp: 1784471760,
+        method: 'session/update',
+        params: {
+          update: {
+            sessionUpdate: 'tool_call',
+            title: 'read_file',
+            rawInput: { target_file: 'src/renderer/components/session-card.js' },
+            _meta: { 'x.ai/tool': { name: 'read_file' } }
+          }
+        }
+      },
+      {
+        timestamp: 1784471762,
+        method: 'session/update',
+        params: {
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Thinking is now in the live activity feed.' }
+          }
+        }
+      }
+    ];
+    const result = analyzeGrokEntries(entries, 'g1', '', fileTimes, '');
+    assert.equal(result.status, 'working');
+    assert.ok(
+      (result.recentThoughts || []).some(t => String(t.text || t).includes('fuller thinking')),
+      'expected recentThoughts to include thought text'
+    );
+    const thinkingRows = (result.activity || []).filter(a => a.kind === 'thinking');
+    assert.ok(thinkingRows.length >= 1, 'expected thinking activity rows');
+    assert.ok(thinkingRows.some(a => a.text.includes('fuller thinking') || a.text.includes('thought chunks')));
+    assert.ok((result.activity || []).some(a => a.kind === 'message' && a.text.includes('live activity')));
+    assert.ok((result.activity || []).some(a => a.kind === 'file' || (a.tool && String(a.tool).includes('read'))));
+  });
+
   it('parses chat_history assistant text and user_query', () => {
     const chat = analyzeChatHistory([
       { type: 'user', content: [{ type: 'text', text: '<user_query>\nFix the notch\n</user_query>' }] },
@@ -360,7 +419,7 @@ describe('Antigravity analyzer', () => {
 });
 
 describe('Usage limits', () => {
-  it('reads Grok creditUsagePercent from unified log', () => {
+  it('reads Grok creditUsagePercent from unified log', async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-notch-usage-'));
     try {
       const logDir = path.join(tmp, '.grok', 'logs');
@@ -382,7 +441,7 @@ describe('Usage limits', () => {
       });
       fs.writeFileSync(path.join(logDir, 'unified.jsonl'), line + '\n');
 
-      const usage = collectUsageLimits({
+      const usage = await collectUsageLimits({
         home: tmp,
         sessions: [{ agent: 'Grok', model: 'grok-4.5' }]
       });
@@ -397,8 +456,8 @@ describe('Usage limits', () => {
     }
   });
 
-  it('prefers Codex rateLimit from live sessions', () => {
-    const usage = collectUsageLimits({
+  it('prefers Codex rateLimit from live sessions', async () => {
+    const usage = await collectUsageLimits({
       home: path.join(os.tmpdir(), 'agent-notch-no-home'),
       sessions: [{
         agent: 'Codex',
@@ -415,5 +474,164 @@ describe('Usage limits', () => {
     assert.equal(codex.available, true);
     assert.equal(codex.usedPercent, 41);
     assert.equal(codex.model, 'gpt-5.6-terra');
+  });
+});
+
+describe('OpenCode analyzer', () => {
+  const now = Date.now();
+  // Mirrors the real opencode.db schema verified against a live install:
+  // session.model = {"id":...,"providerID":...}, token/cost columns, ms epochs
+  const baseSession = {
+    id: 'ses_07f90e00effemsC1YABbM76Wxn',
+    title: 'Fix auth bug',
+    model: JSON.stringify({ id: 'kimi-k3', providerID: 'opencode-go' }),
+    cost: 0.742,
+    tokens_input: 92027,
+    tokens_output: 3450,
+    tokens_reasoning: 6908,
+    tokens_cache_read: 1037056,
+    tokens_cache_write: 0,
+    time_created: now - 120_000,
+    time_updated: now - 1_000
+  };
+  const userMsg = {
+    id: 'msg_user1',
+    time_created: now - 119_000,
+    data: JSON.stringify({ role: 'user' })
+  };
+  const assistantMsg = {
+    id: 'msg_asst1',
+    time_created: now - 60_000,
+    data: JSON.stringify({ role: 'assistant' })
+  };
+
+  it('detects working state from running tool part (state.input shape)', () => {
+    const parts = [
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 2_000,
+        data: JSON.stringify({
+          type: 'tool',
+          tool: 'bash',
+          callID: 'bash_1',
+          state: { status: 'running', input: { command: 'npm test' } }
+        })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [userMsg, assistantMsg], parts, now);
+    assert.equal(result.status, 'working');
+    assert.equal(result.currentTool, 'bash: npm test');
+    assert.equal(result.agent, 'OpenCode');
+  });
+
+  it('detects idle state from step-finish part', () => {
+    const parts = [
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 5_000,
+        data: JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'running', input: { command: 'npm test' } } })
+      },
+      {
+        id: 'prt_2',
+        message_id: 'msg_asst1',
+        time_created: now - 1_000,
+        data: JSON.stringify({ type: 'step-finish' })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [], parts, now);
+    assert.equal(result.status, 'idle');
+    assert.equal(result.currentTool, null);
+  });
+
+  it('uses session title as taskName', () => {
+    const result = analyzeOpencodeSession(baseSession, [], [], now);
+    assert.equal(result.taskName, 'Fix auth bug');
+  });
+
+  it('falls back to first user text part when title is empty', () => {
+    const session = { ...baseSession, title: '' };
+    const parts = [
+      {
+        id: 'prt_0',
+        message_id: 'msg_user1',
+        time_created: now - 118_000,
+        data: JSON.stringify({ type: 'text', text: 'refactor the auth middleware to validate tokens' })
+      }
+    ];
+    const result = analyzeOpencodeSession(session, [userMsg], parts, now);
+    // extractTaskName truncates to 40 chars with ellipsis
+    assert.equal(result.taskName, 'refactor the auth middleware to validat…');
+  });
+
+  it('extracts model from JSON session.model field', () => {
+    const result = analyzeOpencodeSession(baseSession, [], [], now);
+    assert.equal(result.model, 'kimi-k3');
+  });
+
+  it('surfaces tokens and cost from the session row', () => {
+    const result = analyzeOpencodeSession(baseSession, [], [], now);
+    assert.deepEqual(result.tokens, {
+      input: 92027,
+      output: 3450,
+      reasoning: 6908,
+      cacheRead: 1037056,
+      cacheWrite: 0
+    });
+    assert.equal(result.cost, 0.742);
+  });
+
+  it('builds an activity timeline with kinds and part timestamps', () => {
+    const parts = [
+      {
+        id: 'prt_0',
+        message_id: 'msg_user1',
+        time_created: now - 118_000,
+        data: JSON.stringify({ type: 'text', text: 'please run the tests' })
+      },
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 60_000,
+        data: JSON.stringify({ type: 'reasoning', text: 'thinking about the failure' })
+      },
+      {
+        id: 'prt_2',
+        message_id: 'msg_asst1',
+        time_created: now - 30_000,
+        data: JSON.stringify({ type: 'tool', tool: 'bash', state: { status: 'completed', input: { command: 'npm test' } } })
+      },
+      {
+        id: 'prt_3',
+        message_id: 'msg_asst1',
+        time_created: now - 5_000,
+        data: JSON.stringify({ type: 'text', text: 'All tests pass now.' })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [userMsg, assistantMsg], parts, now);
+    assert.equal(result.activity.length, 4);
+    assert.equal(result.activity[0].kind, 'message');
+    assert.equal(result.activity[1].kind, 'thinking');
+    assert.equal(result.activity[2].kind, 'terminal');
+    assert.equal(result.activity[2].at, now - 30_000);
+    assert.equal(result.activity[3].kind, 'message');
+    // Last assistant text becomes lastMessage for the status line
+    assert.equal(result.lastMessage, 'All tests pass now.');
+  });
+
+  it('demotes working to idle when update is stale', () => {
+    const staleMs = 5_000;
+    const staleNow = now + 10_000; // simulate 10s passing after last update
+    const parts = [
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 2_000,
+        data: JSON.stringify({ type: 'tool', tool: 'grep', state: { status: 'running', input: {} } })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [], parts, staleNow, staleMs);
+    assert.equal(result.status, 'idle', 'should demote working to idle when stale');
   });
 });

@@ -1,4 +1,3 @@
-const fs = require('fs');
 const { parseJSONL, formatDuration, getDurationFromFile, isFileActive } = require('./base-watcher');
 
 /**
@@ -91,121 +90,11 @@ function classifyActivityTool(label) {
   return 'tool';
 }
 
-/**
- * Read a file from a byte offset (incremental JSONL tail).
- * @returns {{ content: string, newOffset: number, truncated: boolean, size: number } | null}
- */
-function readFileDelta(filePath, lastOffset = 0) {
-  let stat;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    return null;
-  }
-
-  const size = stat.size;
-  // Truncated or rewritten
-  if (size < lastOffset) {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return { content, newOffset: size, truncated: true, size, full: true };
-  }
-
-  if (size === lastOffset) {
-    return { content: '', newOffset: lastOffset, truncated: false, size, full: false, unchanged: true };
-  }
-
-  // First read or force full
-  if (lastOffset === 0) {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return { content, newOffset: size, truncated: false, size, full: true };
-  }
-
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const length = size - lastOffset;
-    const buf = Buffer.alloc(length);
-    fs.readSync(fd, buf, 0, length, lastOffset);
-    return {
-      content: buf.toString('utf-8'),
-      newOffset: size,
-      truncated: false,
-      size,
-      full: false
-    };
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/**
- * Parse only complete JSONL lines from a chunk; return remainder for next read.
- */
-function parseJSONLChunk(chunk, pendingLine = '') {
-  const combined = pendingLine + chunk;
-  const lines = combined.split('\n');
-  const incomplete = combined.endsWith('\n') ? '' : (lines.pop() || '');
-  const text = lines.join('\n');
-  const entries = text.trim() ? parseJSONL(text) : [];
-  return { entries, pendingLine: incomplete };
-}
-
-/**
- * If file hasn't grown, optionally mark a working session idle based on mtime.
- * @returns {'skip'|'idle-update'|null} null means caller should re-read
- */
-function checkUnchangedSession(filePath, lastSize, hasSession, existingStatus) {
-  let stat;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    return 'skip';
-  }
-
-  if (stat.size <= lastSize && hasSession) {
-    const isActive = isFileActive(filePath, 60000);
-    if (!isActive && existingStatus === 'working') {
-      return 'idle-update';
-    }
-    return 'skip';
-  }
-  return null;
-}
-
-/**
- * Apply idle status when file is stale.
- */
-function applyActiveIdle(status, filePath, thresholdMs = 60000) {
-  const isActive = isFileActive(filePath, thresholdMs);
-  if (!isActive && status === 'working') {
-    return { status: 'idle', isActive: false, currentTool: null };
-  }
-  return { status, isActive, currentTool: undefined };
-}
-
-function resolveTimes(startTime, lastTime, filePath) {
-  const fileTimes = getDurationFromFile(filePath);
-  const start = startTime || fileTimes.startTime;
-  const last = lastTime || fileTimes.lastTime;
-  const duration = start && last ? last - start : 0;
-  return {
-    startTime: start,
-    lastTime: last,
-    lastActivityAt: fileTimes.lastTime,
-    duration,
-    durationFormatted: formatDuration(duration)
-  };
-}
-
 module.exports = {
   getText,
   normalizePlan,
   buildActivity,
   classifyActivityTool,
-  readFileDelta,
-  parseJSONLChunk,
-  checkUnchangedSession,
-  applyActiveIdle,
-  resolveTimes,
   parseJSONL,
   formatDuration,
   getDurationFromFile,
