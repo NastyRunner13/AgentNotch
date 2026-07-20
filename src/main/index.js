@@ -20,6 +20,9 @@ let isExpanded = false;
 let isAutoHidden = false;
 let autoHideTimer = null;
 let notchAnimationTimer = null;
+/** Auto-collapse after agent finished (so the panel does not stay open forever). */
+let doneCollapseTimer = null;
+const DONE_COLLAPSE_MS = 5500;
 
 // Notch dimensions
 const NOTCH_WIDTH_COLLAPSED = 420;
@@ -178,11 +181,20 @@ function createWindow() {
 
 }
 
+function cancelDoneCollapse() {
+  if (doneCollapseTimer) {
+    clearTimeout(doneCollapseTimer);
+    doneCollapseTimer = null;
+  }
+}
+
 function expandNotch() {
   if (!mainWindow || isExpanded) return;
   isExpanded = true;
   isAutoHidden = false;
   cancelAutoHide();
+  // User opened the panel — don't auto-collapse a prior "done" surface
+  cancelDoneCollapse();
 
   mainWindow.webContents.send('notch-state', 'expanded');
   // Smooth ease-out expand — no overshoot bounce (avoids Windows setBounds jitter)
@@ -196,6 +208,7 @@ function expandNotch() {
 function collapseNotch() {
   if (!mainWindow || !isExpanded) return;
   isExpanded = false;
+  cancelDoneCollapse();
 
   mainWindow.webContents.send('notch-state', 'collapsed');
   animateNotchBounds(
@@ -206,6 +219,45 @@ function collapseNotch() {
 
   // Start autohide timer
   scheduleAutoHide();
+}
+
+/**
+ * Surface the notch when an agent finishes, then auto-collapse if nothing
+ * still needs attention. Avoids re-running expand animation when already open
+ * (that setBounds thrash was a major source of flicker).
+ */
+function surfaceDoneResult() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  cancelDoneCollapse();
+
+  if (isAutoHidden) {
+    // Reveal collapsed bar only — full expand restarts on every poll flicker
+    showNotch();
+  }
+
+  // Expand once to show the finished result; skip if already expanded
+  if (!isExpanded) {
+    isExpanded = true;
+    isAutoHidden = false;
+    cancelAutoHide();
+    mainWindow.webContents.send('notch-state', 'expanded');
+    animateNotchBounds(
+      { width: NOTCH_WIDTH_EXPANDED, height: NOTCH_HEIGHT_EXPANDED, y: 0 },
+      NOTCH_EXPAND_DURATION,
+      easeOutQuint
+    );
+  }
+
+  doneCollapseTimer = setTimeout(() => {
+    doneCollapseTimer = null;
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!isExpanded) return;
+    const sessions = agentManager ? agentManager.getSessions() : [];
+    // Stay open if something still needs the user
+    if (hasPinnedSessions(sessions)) return;
+    collapseNotch();
+  }, DONE_COLLAPSE_MS);
 }
 
 function toggleNotch() {
@@ -429,6 +481,7 @@ app.whenReady().then(() => {
 
   agentManager.on('attention', (sessions) => {
     // Always pop the notch open so the user can approve / answer
+    cancelDoneCollapse();
     showAndExpand();
     const settings = agentManager.getSettings();
     if (settings.soundAlerts) {
@@ -443,8 +496,8 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('done', (sessions) => {
-    // Agent finished implementing — surface the notch with the result
-    showAndExpand();
+    // Agent finished — surface result, then auto-collapse (no stuck open panel)
+    surfaceDoneResult();
     const settings = agentManager.getSettings();
     if (settings.desktopNotifications !== false) {
       const unfocused = !mainWindow || !mainWindow.isFocused();
@@ -582,6 +635,17 @@ app.whenReady().then(() => {
     if (hovering) {
       if (isAutoHidden) showNotch();
       cancelAutoHide();
+      // User is looking at the done panel — give them more time
+      if (doneCollapseTimer) {
+        cancelDoneCollapse();
+        doneCollapseTimer = setTimeout(() => {
+          doneCollapseTimer = null;
+          if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
+          const sessions = agentManager ? agentManager.getSessions() : [];
+          if (hasPinnedSessions(sessions)) return;
+          collapseNotch();
+        }, DONE_COLLAPSE_MS);
+      }
     } else if (!isExpanded) {
       scheduleAutoHide();
     }

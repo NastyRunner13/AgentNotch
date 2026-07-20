@@ -158,9 +158,24 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
     const at = Number(part.time_created) || lastTime;
     const role = roleByMessageId.get(String(part.message_id)) || '';
 
-    if (type === 'step-start' || type === 'step-finish') {
-      // step-finish → idle (agent completed a reasoning step)
-      if (type === 'step-finish') {
+    // OpenCode multi-step turns look like:
+    //   step-start → reasoning/text/tools → step-finish(reason=tool-calls)
+    //   → more steps… → step-finish(reason=stop)
+    // Only reason=stop ends the turn. Intermediate step-finish must stay working
+    // or the UI flickers "Finished" on every streamed event.
+    if (type === 'step-start') {
+      status = 'working';
+      continue;
+    }
+
+    if (type === 'step-finish') {
+      const reason = data.reason || '';
+      if (reason === 'tool-calls') {
+        // Model finished a generation step but will continue with tools / more steps
+        status = 'working';
+        currentTool = null;
+      } else {
+        // reason === 'stop' (or unknown terminal) → agent turn completed
         status = 'idle';
         currentTool = null;
       }
@@ -175,8 +190,10 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
         status = 'working';
         currentTool = label;
       } else if (toolStatus === 'completed' || toolStatus === 'error') {
-        // Tool finished — revert to idle unless a subsequent tool is running
-        if (status !== 'working') status = 'idle';
+        // Tool done — agent usually continues with the next step. Stay working
+        // if we already were; don't flip to idle here (step-finish reason=stop does that).
+        status = 'working';
+        if (currentTool && label && currentTool === label) currentTool = null;
       }
 
       if (label) {
@@ -199,6 +216,11 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
         }
         if (type === 'text' && role === 'assistant') {
           lastAssistantText = text.trim();
+          status = 'working';
+        }
+        if (type === 'reasoning') {
+          // Thinking stream while the agent is mid-turn
+          status = 'working';
         }
         activity.push({
           text: text.slice(0, 1200),
@@ -363,6 +385,7 @@ class OpencodeWatcher extends BaseWatcher {
       // next poll can skip when nothing new was written.
       this._lastChangeToken = changeToken;
 
+      // console.log(`[OpenCode] Poll: ${sessionRows.length} session(s) in 12h window`);
       const activeIds = new Set();
 
       for (const row of sessionRows) {

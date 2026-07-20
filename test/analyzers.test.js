@@ -525,7 +525,7 @@ describe('OpenCode analyzer', () => {
     assert.equal(result.agent, 'OpenCode');
   });
 
-  it('detects idle state from step-finish part', () => {
+  it('detects idle state from step-finish with reason=stop', () => {
     const parts = [
       {
         id: 'prt_1',
@@ -537,12 +537,123 @@ describe('OpenCode analyzer', () => {
         id: 'prt_2',
         message_id: 'msg_asst1',
         time_created: now - 1_000,
-        data: JSON.stringify({ type: 'step-finish' })
+        data: JSON.stringify({ type: 'step-finish', reason: 'stop' })
       }
     ];
     const result = analyzeOpencodeSession(baseSession, [], parts, now);
     assert.equal(result.status, 'idle');
     assert.equal(result.currentTool, null);
+  });
+
+  it('stays working on step-finish with reason=tool-calls (multi-step turn)', () => {
+    const parts = [
+      {
+        id: 'prt_0',
+        message_id: 'msg_asst1',
+        time_created: now - 6_000,
+        data: JSON.stringify({ type: 'step-start' })
+      },
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 5_000,
+        data: JSON.stringify({ type: 'reasoning', text: 'I should run the tests first' })
+      },
+      {
+        id: 'prt_2',
+        message_id: 'msg_asst1',
+        time_created: now - 3_000,
+        data: JSON.stringify({
+          type: 'tool',
+          tool: 'bash',
+          state: { status: 'completed', input: { command: 'npm test' } }
+        })
+      },
+      {
+        id: 'prt_3',
+        message_id: 'msg_asst1',
+        time_created: now - 1_000,
+        data: JSON.stringify({ type: 'step-finish', reason: 'tool-calls' })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [assistantMsg], parts, now);
+    assert.equal(result.status, 'working', 'tool-calls step-finish must not mark the turn complete');
+  });
+
+  it('stays working while streaming reasoning / assistant text', () => {
+    const parts = [
+      {
+        id: 'prt_0',
+        message_id: 'msg_asst1',
+        time_created: now - 3_000,
+        data: JSON.stringify({ type: 'step-start' })
+      },
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 2_000,
+        data: JSON.stringify({ type: 'reasoning', text: 'thinking about the approach…' })
+      },
+      {
+        id: 'prt_2',
+        message_id: 'msg_asst1',
+        time_created: now - 500,
+        data: JSON.stringify({ type: 'text', text: 'I will inspect the auth middleware next.' })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [assistantMsg], parts, now);
+    assert.equal(result.status, 'working');
+    assert.equal(result.lastMessage, 'I will inspect the auth middleware next.');
+  });
+
+  it('only goes idle after the final step-finish stop in a multi-step run', () => {
+    const parts = [
+      {
+        id: 'prt_0',
+        message_id: 'msg_asst1',
+        time_created: now - 10_000,
+        data: JSON.stringify({ type: 'step-start' })
+      },
+      {
+        id: 'prt_1',
+        message_id: 'msg_asst1',
+        time_created: now - 9_000,
+        data: JSON.stringify({ type: 'reasoning', text: 'need files' })
+      },
+      {
+        id: 'prt_2',
+        message_id: 'msg_asst1',
+        time_created: now - 8_000,
+        data: JSON.stringify({ type: 'tool', tool: 'read', state: { status: 'completed', input: { path: 'a.js' } } })
+      },
+      {
+        id: 'prt_3',
+        message_id: 'msg_asst1',
+        time_created: now - 7_000,
+        data: JSON.stringify({ type: 'step-finish', reason: 'tool-calls' })
+      },
+      {
+        id: 'prt_4',
+        message_id: 'msg_asst1',
+        time_created: now - 6_000,
+        data: JSON.stringify({ type: 'step-start' })
+      },
+      {
+        id: 'prt_5',
+        message_id: 'msg_asst1',
+        time_created: now - 5_000,
+        data: JSON.stringify({ type: 'text', text: 'Here is the summary of the auth flow.' })
+      },
+      {
+        id: 'prt_6',
+        message_id: 'msg_asst1',
+        time_created: now - 1_000,
+        data: JSON.stringify({ type: 'step-finish', reason: 'stop' })
+      }
+    ];
+    const result = analyzeOpencodeSession(baseSession, [assistantMsg], parts, now);
+    assert.equal(result.status, 'idle');
+    assert.equal(result.lastMessage, 'Here is the summary of the auth flow.');
   });
 
   it('uses session title as taskName', () => {
