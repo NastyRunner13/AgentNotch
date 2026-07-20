@@ -2,14 +2,31 @@
  * History view component — renders past sessions grouped by date.
  */
 
-const AGENT_COLORS = {
-  'Claude Code': '#D97757',
-  'Codex': '#10B981',
-  'Cursor': '#06B6D4',
-  'Antigravity': '#4285F4',
-  'Grok': '#EF4444',
-  'OpenCode': '#8B5CF6'
+/** Agent logo filenames under assets/icons/ (relative to the renderer HTML). */
+const AGENT_LOGOS = {
+  'Claude Code': 'claude-code.png',
+  'Codex': 'codex.png',
+  'Cursor': 'cursor.png',
+  'Antigravity': 'antigravity.png',
+  'Grok': 'grok-build.png',
+  'OpenCode': 'opencode.png'
 };
+
+const LOGO_BASE = '../../assets/icons';
+
+/**
+ * Agent logo for history entries.
+ * Falls back to a monogram when the agent is unknown.
+ */
+function getHistoryLogo(agentName, size = 16) {
+  const file = AGENT_LOGOS[agentName];
+  if (file) {
+    const src = `${LOGO_BASE}/${file}`;
+    return `<img class="history-logo" src="${src}" width="${size}" height="${size}" alt="" draggable="false" />`;
+  }
+  const letter = escapeHtml(String(agentName || '?').trim().charAt(0).toUpperCase() || '?');
+  return `<span class="history-logo history-logo-fallback" aria-hidden="true">${letter}</span>`;
+}
 
 function escapeHtml(text) {
   // Explicit String() cast so falsy values like 0 are preserved (not treated as empty)
@@ -69,7 +86,6 @@ export function renderHistoryView(history, expandedId = null) {
       <div class="history-date-label">${dateLabel}</div>`;
 
     for (const entry of entries) {
-      const color = AGENT_COLORS[entry.agent] || '#60A5FA';
       const cleanTask = (entry.taskName || 'Untitled').replace(/<[^>]+>/g, '').trim();
       const isExpanded = entry.id === expandedId;
       const prompt = entry.userPrompt ? `<div><span>Prompt</span>${escapeHtml(entry.userPrompt)}</div>` : '';
@@ -80,7 +96,7 @@ export function renderHistoryView(history, expandedId = null) {
 
       html += `
         <article class="history-entry ${isExpanded ? 'expanded' : ''}" data-id="${escapeHtml(entry.id)}">
-          <div class="history-dot" style="background: ${color}"></div>
+          ${getHistoryLogo(entry.agent, 16)}
           <div class="history-info">
             <span class="history-name">${escapeHtml(cleanTask)}</span>
             <span class="history-sub">${escapeHtml(entry.agent)}</span>

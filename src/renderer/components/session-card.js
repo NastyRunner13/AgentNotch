@@ -28,7 +28,7 @@ function getStatusInfo(session) {
     return { dotClass: 'attention', textClass: 'attention', text: 'Needs attention' };
   }
   if (session.status === 'working') {
-    // Status is shown by the running animation beside the icon.
+    // Status is shown by the harness logo animation.
     // Keep a short activity hint — never raw "exec" / phase keywords.
     const hint = activityHint(session);
     return {
@@ -97,22 +97,32 @@ function oneLine(text, max = 80) {
   return `${s.slice(0, max - 1)}…`;
 }
 
-function getPixelPet(status, agentName) {
-  const colors = AGENT_COLORS[agentName] || { main: '#60A5FA', bright: '#93C5FD' };
-  const isIdle = status === 'idle' || status === 'stopped';
-  const mainColor = isIdle ? '#4ADE80' : colors.main;
-  const brightColor = isIdle ? '#86EFAC' : colors.bright;
+/** Harness logo filenames under assets/icons/ (relative to the renderer HTML). */
+const AGENT_LOGOS = {
+  'Claude Code': 'claude-code.png',
+  'Codex': 'codex.png',
+  'Cursor': 'cursor.png',
+  'Antigravity': 'antigravity.png',
+  'Grok': 'grok-build.png',
+  'OpenCode': 'opencode.png'
+};
 
-  return `<svg width="24" height="14" viewBox="0 0 13 8" shape-rendering="crispEdges">
-    <rect x="2" y="2" width="1" height="1" fill="${brightColor}"/>
-    <rect x="5" y="2" width="1" height="1" fill="${brightColor}"/>
-    <rect x="1" y="3" width="6" height="1" fill="${mainColor}"/>
-    <rect x="2" y="3" width="1" height="1" fill="#000"/>
-    <rect x="5" y="3" width="1" height="1" fill="#000"/>
-    <rect x="1" y="4" width="6" height="1" fill="${mainColor}"/>
-    <rect x="2" y="5" width="2" height="1" fill="${mainColor}"/>
-    <rect x="5" y="5" width="2" height="1" fill="${mainColor}"/>
-  </svg>`;
+const LOGO_BASE = '../../assets/icons';
+
+/**
+ * Harness brand logo for bar + session cards.
+ * Falls back to a tiny monogram when the agent is unknown.
+ */
+function getAgentLogo(agentName, size = 20) {
+  const file = AGENT_LOGOS[agentName];
+  if (file) {
+    const src = `${LOGO_BASE}/${file}`;
+    return `<img class="agent-logo" src="${src}" width="${size}" height="${size}" alt="" draggable="false" />`;
+  }
+
+  // Unknown harness — monogram from first letter
+  const letter = escapeHtml(String(agentName || '?').trim().charAt(0).toUpperCase() || '?');
+  return `<span class="agent-logo agent-logo-fallback" aria-hidden="true">${letter}</span>`;
 }
 
 function escapeHtml(text) {
@@ -261,21 +271,24 @@ function renderPlan(plan) {
   </section>`;
 }
 
-function activityKindLabel(kind, tool) {
+/**
+ * Mono glyph per activity kind — a scannable type marker for the stream's
+ * leading column. Deliberately chroma-free: kind is shape, not color.
+ */
+function activityGlyph(kind, tool) {
   const k = (kind || '').toLowerCase();
   const t = String(tool || '').toLowerCase();
-  if (k === 'thinking') return 'think';
-  if (k === 'message') return 'msg';
-  if (k === 'terminal' || t.includes('terminal') || t.includes('bash')) return 'term';
+  if (k === 'thinking') return '…';
+  if (k === 'message') return '›';
+  if (k === 'terminal' || t.includes('terminal') || t.includes('bash')) return '$';
   if (k === 'file') {
-    if (t.includes('write') || t.includes('create')) return 'write';
-    if (t.includes('read')) return 'read';
-    if (t.includes('edit') || t.includes('replace') || t.includes('patch')) return 'edit';
-    return 'file';
+    if (t.includes('write') || t.includes('create')) return '+';
+    if (t.includes('read')) return '→';
+    if (t.includes('edit') || t.includes('replace') || t.includes('patch')) return '~';
+    return '≡';
   }
-  if (k === 'search' || t.includes('grep') || t.includes('search')) return 'find';
-  if (k === 'phase') return '…';
-  return 'tool';
+  if (k === 'search' || t.includes('grep') || t.includes('search')) return '*';
+  return '▸';
 }
 
 function formatActivityText(update) {
@@ -344,14 +357,41 @@ function renderActivity(session) {
   }
 
   const stream = (updates.length ? updates : fallback).slice(-56);
-  if (!stream.length) return '';
+
+  // Phase labels ("Thinking…", "Running tools…") are transient state, not
+  // events. Keep them out of the stream; the latest one becomes the quiet
+  // live footer pinned under the feed while the agent works.
+  let latestPhase = '';
+  const events = [];
+  for (const u of stream) {
+    const kind = typeof u === 'object' && u.kind ? u.kind : 'tool';
+    if (kind === 'phase') {
+      latestPhase = formatActivityText(u);
+      continue;
+    }
+    events.push(u);
+  }
+
+  const isWorking = session.status === 'working';
+  const footer = isWorking ? renderPhaseFooter(latestPhase || activityHint(session)) : '';
+
+  if (!events.length) {
+    // Turn just started (only phase labels so far): footer alone says "live".
+    if (!footer) return '';
+    return `<section class="session-activity-block">
+      <div class="session-activity-header">
+        <div class="session-prompt-label">Live activity</div>
+      </div>
+      ${footer}
+    </section>`;
+  }
 
   // Chronological (oldest → newest) so it feels like a live agent transcript
-  const sorted = [...stream].sort((a, b) => {
+  const sorted = [...events].sort((a, b) => {
     const ta = (typeof a === 'object' && a.at) || 0;
     const tb = (typeof b === 'object' && b.at) || 0;
     if (ta !== tb) return ta - tb;
-    const rank = { phase: 0, thinking: 1, tool: 2, file: 2, search: 2, terminal: 3, message: 4 };
+    const rank = { thinking: 1, tool: 2, file: 2, search: 2, terminal: 3, message: 4 };
     const ka = typeof a === 'object' ? a.kind : 'tool';
     const kb = typeof b === 'object' ? b.kind : 'tool';
     return (rank[ka] || 2) - (rank[kb] || 2);
@@ -359,6 +399,7 @@ function renderActivity(session) {
 
   const rows = sorted.map((update, i) => {
     const isLast = i === sorted.length - 1;
+    const isLive = isLast && isWorking;
     const kind = typeof update === 'object' && update.kind ? update.kind : 'tool';
     const tool = typeof update === 'object' ? (update.tool || '') : '';
     const text = formatActivityText(update);
@@ -366,8 +407,11 @@ function renderActivity(session) {
     const isProse = kind === 'thinking' || kind === 'message';
     const kindClass = kind ? ` activity-${kind}` : '';
     const proseClass = isProse ? ' activity-prose' : '';
-    const liveClass = isLast && session.status === 'working' ? ' activity-live' : '';
-    const badge = activityKindLabel(kind, tool);
+    const liveClass = isLive ? ' activity-live' : '';
+    // The live row trades its kind glyph for a blinking caret — "agent is here"
+    const marker = isLive
+      ? '<span class="activity-caret" aria-hidden="true"></span>'
+      : `<span class="activity-glyph" aria-hidden="true">${escapeHtml(activityGlyph(kind, tool))}</span>`;
     const title = typeof update === 'object' && update.filePath
       ? escapeHtml(update.filePath)
       : escapeHtml(String(typeof update === 'object' ? (update.tool || text) : text).slice(0, 280));
@@ -379,13 +423,13 @@ function renderActivity(session) {
       : escapeHtml(text).replace(/\n/g, '<br>');
 
     return `<div class="activity-row${kindClass}${proseClass}${liveClass}" title="${title}">
-      <span class="activity-badge" aria-hidden="true">${escapeHtml(badge)}</span>
+      ${marker}
       <div class="activity-text${isProse ? ' activity-md' : ''}">${htmlText}</div>
       <time class="activity-time" title="${escapeHtml(formatClock(at))}">${escapeHtml(formatRelativeTime(at))}</time>
     </div>`;
   }).join('');
 
-  const count = stream.length;
+  const count = sorted.length;
   const countLabel = count === 1 ? '1 event' : `${count} events`;
 
   return `<section class="session-activity-block">
@@ -394,12 +438,22 @@ function renderActivity(session) {
       <span class="session-activity-count">${escapeHtml(countLabel)}</span>
     </div>
     <div class="activity-list activity-live-feed" data-activity-feed="1">${rows}</div>
+    ${footer}
   </section>`;
 }
 
+/** Quiet "current action" line pinned under the feed while the agent works. */
+function renderPhaseFooter(text) {
+  const label = oneLine(String(text || '').replace(/\s+/g, ' ').trim() || 'Working', 96);
+  return `<div class="activity-phase-footer">
+    <span class="activity-phase-dot" aria-hidden="true"></span>
+    <span class="activity-phase-text">${escapeHtml(label)}</span>
+  </div>`;
+}
+
 /**
- * Compact agent icon for the collapsed bar, with a status animation
- * beside the pet when the session is still running.
+ * Compact harness logo for the collapsed bar.
+ * No logo animation — running = bright, completed = dull.
  */
 export function getAgentBarIcon(session) {
   const colors = AGENT_COLORS[session.agent] || { main: '#60A5FA' };
@@ -411,32 +465,39 @@ export function getAgentBarIcon(session) {
     ? ` — ${humanizeTool(session.currentTool)}`
     : isWorking
       ? ' — running'
-      : '';
+      : session.status === 'idle'
+        ? ' — finished'
+        : '';
 
-  // Spinner sits beside the icon so "still running" is obvious at a glance
-  const runIndicator = isWorking
-    ? `<span class="agent-run-indicator" aria-hidden="true" title="Running">
-         <span class="agent-run-spinner"></span>
+  // Static amber dot for attention only (logo itself never animates)
+  const runIndicator = isAttention
+    ? `<span class="agent-run-indicator attention" aria-hidden="true" title="Needs attention">
+         <span class="agent-run-pulse"></span>
        </span>`
-    : isAttention
-      ? `<span class="agent-run-indicator attention" aria-hidden="true" title="Needs attention">
-           <span class="agent-run-pulse"></span>
-         </span>`
-      : '';
+    : '';
 
   return `<div class="agent-icon-wrap ${statusClass}" style="color: ${colors.main}" title="${escapeHtml(session.agent)}: ${escapeHtml(session.taskName)}${escapeHtml(toolHint)}">
     <div class="agent-icon ${statusClass}">
-      ${getPixelPet(session.status, session.agent)}
+      ${getAgentLogo(session.agent, 18)}
     </div>
     ${runIndicator}
   </div>`;
 }
 
-export function renderSessionCard(session, index = 0) {
+/**
+ * @param {object} session
+ * @param {number} [index]
+ * @param {{ animateIn?: boolean }} [options] animateIn only for brand-new cards (avoids poll flicker)
+ */
+export function renderSessionCard(session, index = 0, options = {}) {
   const agent = AGENT_COLORS[session.agent] || { main: '#60A5FA', class: 'agent-claude' };
   const statusInfo = getStatusInfo(session);
   const needsAttention = ['permission-request', 'question', 'needs-attention'].includes(session.status);
+  const isWorking = session.status === 'working';
   const delay = index * 50;
+  const animateIn = options.animateIn !== false && options.animateIn !== undefined
+    ? options.animateIn
+    : false;
 
   // Build expandable detail content
   let detailContent = '';
@@ -489,34 +550,47 @@ export function renderSessionCard(session, index = 0) {
       </button>
     </div>`;
 
-  const isWorking = session.status === 'working';
-  const petIndicator = isWorking
-    ? `<span class="session-run-indicator" aria-label="Running" title="Still running">
-         <span class="session-run-spinner"></span>
+  // Logo stays still (bright/dull via CSS); static side cues for attention / finished
+  const petIndicator = needsAttention
+    ? `<span class="session-run-indicator attention" aria-label="Needs attention" title="Needs attention">
+         <span class="session-run-pulse"></span>
        </span>`
-    : needsAttention
-      ? `<span class="session-run-indicator attention" aria-label="Needs attention" title="Needs attention">
-           <span class="session-run-pulse"></span>
+    : session.status === 'idle'
+      ? `<span class="session-run-indicator idle" aria-label="Finished" title="Finished">
+           <span class="session-run-check"></span>
          </span>`
-      : session.status === 'idle'
-        ? `<span class="session-run-indicator idle" aria-label="Finished" title="Finished">
-             <span class="session-run-check"></span>
-           </span>`
-        : '';
+      : '';
+
+  // Multicolor laser that sweeps active (working) session windows
+  const sessionLaser = isWorking
+    ? `<div class="session-laser" aria-hidden="true">
+         <span class="session-laser-beam"></span>
+         <span class="session-laser-glow"></span>
+       </div>`
+    : '';
+
+  const cardClasses = [
+    'session-card',
+    needsAttention ? 'attention' : '',
+    isWorking ? 'is-working' : '',
+    animateIn ? 'card-enter' : 'card-static'
+  ].filter(Boolean).join(' ');
 
   return `
-    <div class="session-card ${needsAttention ? 'attention' : ''}"
+    <div class="${cardClasses}"
          data-session-id="${escapeHtml(session.id)}"
          data-status="${escapeHtml(session.status)}"
          role="button"
          tabindex="0"
          aria-expanded="false"
          aria-label="${escapeHtml(session.agent)}: ${escapeHtml(session.taskName)}"
-         style="animation-delay: ${delay}ms">
+         style="${animateIn ? `animation-delay: ${delay}ms` : ''}">
+      ${sessionLaser}
       <div class="session-header">
-        <div class="session-pet-wrap ${isWorking ? 'working' : needsAttention ? 'attention' : session.status === 'idle' ? 'idle' : ''}">
+        <div class="session-pet-wrap ${isWorking ? 'working' : needsAttention ? 'attention' : session.status === 'idle' ? 'idle' : ''}"
+             style="color: ${agent.main}">
           <div class="session-pet">
-            ${getPixelPet(session.status, session.agent)}
+            ${getAgentLogo(session.agent, 22)}
           </div>
           ${petIndicator}
         </div>

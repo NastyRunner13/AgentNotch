@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' file: data:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self';">
   <title>AgentNotch</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,6 +16,11 @@
 
     <!-- ═══ COLLAPSED BAR (always visible) ═══ -->
     <div id="notch-bar" class="notch-bar" role="button" tabindex="0" aria-label="Toggle AgentNotch panel">
+      <!-- Multicolor laser beam — sweeps the notch while agents are working -->
+      <div id="notch-laser" class="notch-laser" hidden aria-hidden="true">
+        <span class="notch-laser-beam"></span>
+        <span class="notch-laser-trail"></span>
+      </div>
       <div class="notch-bar-left">
         <div id="notch-agents" class="notch-agents">
           <!-- Animated agent icons rendered dynamically -->
@@ -112,42 +117,42 @@
             <h3 class="settings-heading">Agents</h3>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #D97757"></span>
+                <img class="setting-logo" src="../../assets/icons/claude-code.png" width="14" height="14" alt="" draggable="false" />
                 Claude Code
               </span>
               <input type="checkbox" id="set-claude" class="toggle" checked>
             </label>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #10B981"></span>
+                <img class="setting-logo" src="../../assets/icons/codex.png" width="14" height="14" alt="" draggable="false" />
                 Codex
               </span>
               <input type="checkbox" id="set-codex" class="toggle" checked>
             </label>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #06B6D4"></span>
+                <img class="setting-logo" src="../../assets/icons/cursor.png" width="14" height="14" alt="" draggable="false" />
                 Cursor
               </span>
               <input type="checkbox" id="set-cursor" class="toggle" checked>
             </label>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #4285F4"></span>
+                <img class="setting-logo" src="../../assets/icons/antigravity.png" width="14" height="14" alt="" draggable="false" />
                 Antigravity
               </span>
               <input type="checkbox" id="set-antigravity" class="toggle" checked>
             </label>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #EF4444"></span>
+                <img class="setting-logo" src="../../assets/icons/grok-build.png" width="14" height="14" alt="" draggable="false" />
                 Grok Build
               </span>
               <input type="checkbox" id="set-grok" class="toggle" checked>
             </label>
             <label class="setting-row">
               <span class="setting-label">
-                <span class="setting-dot" style="background: #8B5CF6"></span>
+                <img class="setting-logo" src="../../assets/icons/opencode.png" width="14" height="14" alt="" draggable="false" />
                 OpenCode
               </span>
               <input type="checkbox" id="set-opencode" class="toggle" checked>
