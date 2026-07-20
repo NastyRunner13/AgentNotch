@@ -43,6 +43,10 @@ class GrokWatcher extends BaseWatcher {
     this._lastFileSize.clear();
   }
 
+  _onSessionRemoved(id) {
+    this._lastFileSize.delete(id);
+  }
+
   async _poll() {
     const sessionsDir = path.join(this.grokDir, 'sessions');
     if (!fs.existsSync(sessionsDir)) return;
@@ -286,9 +290,16 @@ class GrokWatcher extends BaseWatcher {
         ? chatState.recentMessages
         : updateState.recentMessages) || []);
 
+    const recentThoughts = (updateState.recentThoughts && updateState.recentThoughts.length)
+      ? updateState.recentThoughts
+      : [];
+    const lastThought = updateState.lastThought || '';
+
     const activity = buildRichActivity({
       lastMessage,
       recentMessages,
+      recentThoughts,
+      lastThought,
       toolCalls: updateState.toolCalls,
       toolDetails: updateState.toolDetails,
       terminalSnippet,
@@ -355,6 +366,8 @@ function emptyUpdateState() {
     toolCalls: [],
     toolDetails: [],
     recentMessages: [],
+    recentThoughts: [],
+    lastThought: '',
     plan: [],
     isActive: false,
     turnComplete: false
@@ -447,10 +460,13 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
   let toolDetails = [];
   /** @type {Array<{text:string, at?:number}>} */
   let recentMessages = [];
+  /** @type {Array<{text:string, at?:number}>} */
+  let recentThoughts = [];
   let plan = [];
   let permissionRequest = null;
   let question = null;
   let messageBuf = '';
+  let thoughtBuf = '';
   let userBuf = '';
   let turnComplete = false;
 
@@ -458,10 +474,19 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     const text = messageBuf.trim();
     if (!text) return;
     // Keep a longer window for the live activity feed (still capped)
-    lastMessage = text.length > 2000 ? text.slice(-2000) : text;
+    lastMessage = text.length > 4000 ? text.slice(-4000) : text;
     recentMessages.push({ text: lastMessage, at });
     if (recentMessages.length > 24) recentMessages = recentMessages.slice(-24);
     messageBuf = '';
+  };
+
+  const flushThoughtBuf = (at) => {
+    const text = thoughtBuf.trim();
+    if (!text) return;
+    const capped = text.length > 3000 ? text.slice(-3000) : text;
+    recentThoughts.push({ text: capped, at });
+    if (recentThoughts.length > 20) recentThoughts = recentThoughts.slice(-20);
+    thoughtBuf = '';
   };
 
   for (const entry of entries) {
@@ -493,14 +518,16 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
       if (kind === 'agent_message_chunk') {
         const text = extractChunkText(update);
         if (text) {
+          // Visible reply starts — seal any prior thinking segment
+          flushThoughtBuf(at);
           turnComplete = false;
           messageBuf += text;
           // Soft cap buffer while streaming; final text still flushed on tool/turn end
-          if (messageBuf.length > 6000) {
-            messageBuf = messageBuf.slice(-4000);
+          if (messageBuf.length > 12000) {
+            messageBuf = messageBuf.slice(-8000);
           }
-          lastMessage = messageBuf.trim().length > 2000
-            ? messageBuf.trim().slice(-2000)
+          lastMessage = messageBuf.trim().length > 4000
+            ? messageBuf.trim().slice(-4000)
             : messageBuf.trim();
           status = 'working';
         }
@@ -508,13 +535,24 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
       }
 
       if (kind === 'agent_thought_chunk') {
-        // Thinking still means the agent is working
-        turnComplete = false;
-        status = 'working';
+        // Reasoning stream — same source the agent UI shows as "thinking"
+        const text = extractChunkText(update);
+        if (text) {
+          turnComplete = false;
+          thoughtBuf += text;
+          if (thoughtBuf.length > 10000) {
+            thoughtBuf = thoughtBuf.slice(-8000);
+          }
+          status = 'working';
+        } else {
+          turnComplete = false;
+          status = 'working';
+        }
         continue;
       }
 
       if (kind === 'tool_call') {
+        flushThoughtBuf(at);
         flushMessageBuf(at);
         const name = extractToolName(update);
         const input = update.rawInput || update.input || update.arguments;
@@ -558,6 +596,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
       }
 
       if (kind === 'task_backgrounded') {
+        flushThoughtBuf(at);
         flushMessageBuf(at);
         const cmd = update.command || update.title || 'background task';
         currentTool = `run_terminal_command: ${truncate(String(cmd), 100)}`;
@@ -575,6 +614,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
       }
 
       if (kind === 'permission_request' || kind === 'confirmation_request') {
+        flushThoughtBuf(at);
         turnComplete = false;
         status = 'permission-request';
         permissionRequest = {
@@ -587,6 +627,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
 
       // Turn finished — Grok emits this on the updates stream (not events.jsonl)
       if (kind === 'turn_completed' || kind === 'turn_ended' || kind === 'session_ended') {
+        flushThoughtBuf(at);
         flushMessageBuf(at);
         turnComplete = true;
         status = 'idle';
@@ -597,10 +638,11 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
 
       // Recap arrives after completion — treat as idle and prefer its summary text
       if (kind === 'session_recap') {
+        flushThoughtBuf(at);
         flushMessageBuf(at);
         const summaryText = update.summary || update.text || extractChunkText(update);
         if (summaryText) {
-          lastMessage = String(summaryText).trim().slice(0, 2000);
+          lastMessage = String(summaryText).trim().slice(0, 4000);
           recentMessages.push({ text: lastMessage, at });
           if (recentMessages.length > 24) recentMessages = recentMessages.slice(-24);
         }
@@ -706,8 +748,15 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     if (Array.isArray(candidatePlan)) plan = normalizePlan(candidatePlan);
   }
 
-  // Flush any in-progress streamed assistant text
+  // Flush completed streams; keep open thoughtBuf as live lastThought mid-turn
+  if (turnComplete) {
+    flushThoughtBuf(lastTime);
+  }
   flushMessageBuf(lastTime);
+
+  const liveThought = thoughtBuf.trim()
+    ? (thoughtBuf.trim().length > 3000 ? thoughtBuf.trim().slice(-3000) : thoughtBuf.trim())
+    : '';
 
   const isActive = filePath ? isFileActive(filePath, 90000) : true;
   if (turnComplete) {
@@ -730,7 +779,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     taskName: taskName || 'Grok session',
     status,
     currentTool,
-    lastMessage: lastMessage ? lastMessage.substring(0, 2000) : '',
+    lastMessage: lastMessage ? lastMessage.substring(0, 4000) : '',
     userPrompt: userPrompt ? userPrompt.substring(0, 600) : '',
     permissionRequest,
     question,
@@ -743,7 +792,18 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     toolCalls,
     toolDetails,
     recentMessages,
-    activity: buildActivity(lastMessage, toolCalls, fileTimes.lastTime),
+    recentThoughts,
+    lastThought: liveThought,
+    activity: buildRichActivity({
+      lastMessage,
+      recentMessages,
+      recentThoughts,
+      lastThought: liveThought,
+      toolCalls,
+      toolDetails,
+      status,
+      at: fileTimes.lastTime
+    }),
     plan,
     isActive: status === 'working' || status === 'permission-request',
     turnComplete
@@ -1082,6 +1142,8 @@ function mergeUniqueTail(a, b, n) {
 function buildRichActivity({
   lastMessage,
   recentMessages,
+  recentThoughts,
+  lastThought,
   toolCalls,
   toolDetails,
   terminalSnippet,
@@ -1091,6 +1153,39 @@ function buildRichActivity({
 }) {
   /** @type {Array<{text:string, at?:number, kind?:string, filePath?:string, tool?:string}>} */
   const activity = [];
+
+  const cleanText = (raw, max = 2500) => {
+    const cleaned = String(raw || '').replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+    if (!cleaned) return '';
+    return cleaned.length > max ? cleaned.slice(-max) : cleaned;
+  };
+
+  // Reasoning / thinking segments (what the agent UI shows as thinking)
+  const thoughts = Array.isArray(recentThoughts) ? recentThoughts.slice(-16) : [];
+  for (const t of thoughts) {
+    const text = cleanText(typeof t === 'string' ? t : t.text, 2500);
+    if (!text) continue;
+    activity.push({
+      text,
+      at: (typeof t === 'object' && t.at) || at,
+      kind: 'thinking'
+    });
+  }
+
+  // Live thinking buffer not yet sealed into recentThoughts
+  if (lastThought) {
+    const live = cleanText(lastThought, 2500);
+    const lastThink = [...activity].reverse().find(a => a.kind === 'thinking');
+    const lastText = lastThink ? lastThink.text : '';
+    if (live && live !== lastText && !lastText.endsWith(live) && !live.endsWith(lastText)) {
+      activity.push({ text: live, at, kind: 'thinking' });
+    } else if (live && lastThink && live.length > lastText.length && live.startsWith(lastText.slice(0, 40))) {
+      lastThink.text = live;
+      lastThink.at = at;
+    } else if (live && !lastThink) {
+      activity.push({ text: live, at, kind: 'thinking' });
+    }
+  }
 
   // Full chronological tool stream (file edits, reads, terminal, search)
   const details = Array.isArray(toolDetails) ? toolDetails.slice(-36) : [];
@@ -1130,12 +1225,10 @@ function buildRichActivity({
     : [];
 
   for (const m of msgs) {
-    const text = typeof m === 'string' ? m : (m.text || '');
+    const text = cleanText(typeof m === 'string' ? m : (m.text || ''), 2500);
     if (!text) continue;
-    // Preserve newlines lightly for multi-line agent replies in the feed
-    const cleaned = String(text).replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
     activity.push({
-      text: cleaned.length > 1200 ? cleaned.slice(-1200) : cleaned,
+      text,
       at: (typeof m === 'object' && m.at) || at,
       kind: 'message'
     });
@@ -1143,31 +1236,24 @@ function buildRichActivity({
 
   // Live streaming text may not be flushed into recentMessages yet
   if (lastMessage) {
-    const live = String(lastMessage).replace(/\r\n/g, '\n').replace(/[ \t]+\n/g, '\n').trim();
+    const live = cleanText(lastMessage, 2500);
     const lastMsgEntry = [...activity].reverse().find(a => a.kind === 'message');
     const lastText = lastMsgEntry ? lastMsgEntry.text : '';
     if (live && live !== lastText && !lastText.endsWith(live) && !live.endsWith(lastText)) {
-      activity.push({
-        text: live.length > 1200 ? live.slice(-1200) : live,
-        at,
-        kind: 'message'
-      });
+      activity.push({ text: live, at, kind: 'message' });
     } else if (live && lastMsgEntry && live.length > lastText.length && live.startsWith(lastText.slice(0, 40))) {
       // Replace stale shorter message with longer streamed version
-      lastMsgEntry.text = live.length > 1200 ? live.slice(-1200) : live;
+      lastMsgEntry.text = live;
       lastMsgEntry.at = at;
     } else if (live && !lastMsgEntry) {
-      activity.push({
-        text: live.length > 1200 ? live.slice(-1200) : live,
-        at,
-        kind: 'message'
-      });
+      activity.push({ text: live, at, kind: 'message' });
     }
   }
 
+  const hasThoughts = thoughts.length > 0 || Boolean(lastThought);
   if (!activity.length && phaseLabel) {
     activity.push({ text: phaseLabel, at, kind: 'phase' });
-  } else if (status === 'working' && phaseLabel && !details.length && !msgs.length) {
+  } else if (status === 'working' && phaseLabel && !details.length && !msgs.length && !hasThoughts) {
     activity.push({ text: phaseLabel, at, kind: 'phase' });
   }
 
@@ -1176,13 +1262,13 @@ function buildRichActivity({
     const ta = a.at || 0;
     const tb = b.at || 0;
     if (ta !== tb) return ta - tb;
-    // Messages after tools at same tick feels more natural
-    const rank = { phase: 0, tool: 1, file: 1, search: 1, terminal: 2, message: 3 };
-    return (rank[a.kind] || 1) - (rank[b.kind] || 1);
+    // thinking → tools → terminal → visible message (agent-UI order)
+    const rank = { phase: 0, thinking: 1, tool: 2, file: 2, search: 2, terminal: 3, message: 4 };
+    return (rank[a.kind] || 2) - (rank[b.kind] || 2);
   });
 
   // Keep a long live window (UI scrolls)
-  return activity.slice(-48);
+  return activity.slice(-56);
 }
 
 /**

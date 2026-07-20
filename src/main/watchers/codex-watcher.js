@@ -23,6 +23,7 @@ class CodexWatcher extends BaseWatcher {
     super('Codex', { pollInterval: 3000, ...options });
     this.codexDir = options.codexDir || path.join(os.homedir(), '.codex');
     this._lastFileSize = new Map();
+    this._sessionFilePath = new Map();
   }
 
   _start() {
@@ -35,6 +36,7 @@ class CodexWatcher extends BaseWatcher {
 
   _stop() {
     this._lastFileSize.clear();
+    this._sessionFilePath.clear();
   }
 
   async _poll() {
@@ -105,6 +107,7 @@ class CodexWatcher extends BaseWatcher {
     const read = readJsonlEfficient(filePath);
     if (!read) return;
     this._lastFileSize.set(filePath, read.size);
+    this._sessionFilePath.set(sessionId, filePath);
 
     const entries = parseJSONL(read.content);
     if (entries.length === 0) return;
@@ -113,6 +116,14 @@ class CodexWatcher extends BaseWatcher {
     const sessionData = analyzeCodexEntries(entries, sessionId, filePath, fileTimes);
 
     this._updateSession(sessionId, sessionData);
+  }
+
+  _onSessionRemoved(id) {
+    const fp = this._sessionFilePath.get(id);
+    if (fp) {
+      this._lastFileSize.delete(fp);
+      this._sessionFilePath.delete(id);
+    }
   }
 }
 
@@ -265,8 +276,6 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
         } else if (parsed.path || parsed.file_path || parsed.target_file) {
           const fp = parsed.path || parsed.file_path || parsed.target_file;
           label = `${name}: ${String(fp).split(/[/\\]/).pop()}`;
-        } else if (parsed.cmd) {
-          label = `run_terminal_command: ${String(parsed.cmd).slice(0, 100)}`;
         }
       }
       currentTool = label;

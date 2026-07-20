@@ -23,6 +23,7 @@ class AntigravityWatcher extends BaseWatcher {
     this.geminiDir = options.geminiDir || path.join(os.homedir(), '.gemini');
     this.brainDir = path.join(this.geminiDir, 'antigravity-ide', 'brain');
     this._lastFileSize = new Map();
+    this._sessionFilePath = new Map();
   }
 
   _start() {
@@ -34,6 +35,7 @@ class AntigravityWatcher extends BaseWatcher {
 
   _stop() {
     this._lastFileSize.clear();
+    this._sessionFilePath.clear();
   }
 
   async _poll() {
@@ -98,6 +100,7 @@ class AntigravityWatcher extends BaseWatcher {
     const read = readJsonlEfficient(filePath);
     if (!read) return;
     this._lastFileSize.set(filePath, read.size);
+    this._sessionFilePath.set(sessionId, filePath);
 
     const entries = parseJSONL(read.content);
     if (entries.length === 0) return;
@@ -106,6 +109,14 @@ class AntigravityWatcher extends BaseWatcher {
     const sessionData = analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes);
 
     this._updateSession(sessionId, sessionData);
+  }
+
+  _onSessionRemoved(id) {
+    const fp = this._sessionFilePath.get(id);
+    if (fp) {
+      this._lastFileSize.delete(fp);
+      this._sessionFilePath.delete(id);
+    }
   }
 }
 

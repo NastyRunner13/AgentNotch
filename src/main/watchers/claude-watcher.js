@@ -24,6 +24,7 @@ class ClaudeWatcher extends BaseWatcher {
     super('Claude Code', { pollInterval: 2000, ...options });
     this.claudeDir = options.claudeDir || path.join(os.homedir(), '.claude');
     this._lastFileSize = new Map();
+    this._sessionFilePath = new Map();
     this._missingLogged = false;
   }
 
@@ -39,6 +40,7 @@ class ClaudeWatcher extends BaseWatcher {
 
   _stop() {
     this._lastFileSize.clear();
+    this._sessionFilePath.clear();
   }
 
   async _poll() {
@@ -116,6 +118,7 @@ class ClaudeWatcher extends BaseWatcher {
     const read = readJsonlEfficient(filePath);
     if (!read) return;
     this._lastFileSize.set(filePath, read.size);
+    this._sessionFilePath.set(sessionId, filePath);
 
     const entries = parseJSONL(read.content);
     if (entries.length === 0) return;
@@ -123,6 +126,14 @@ class ClaudeWatcher extends BaseWatcher {
     const fileTimes = getDurationFromFile(filePath);
     const sessionData = this._analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes);
     this._updateSession(sessionId, sessionData);
+  }
+
+  _onSessionRemoved(id) {
+    const fp = this._sessionFilePath.get(id);
+    if (fp) {
+      this._lastFileSize.delete(fp);
+      this._sessionFilePath.delete(id);
+    }
   }
 
   _analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes) {
@@ -180,11 +191,22 @@ class ClaudeWatcher extends BaseWatcher {
         }
         if (Array.isArray(entry.message.content)) {
           for (const block of entry.message.content) {
+            if ((block.type === 'thinking' || block.type === 'redacted_thinking') && (block.thinking || block.text)) {
+              const thinkText = block.thinking || block.text || '';
+              if (thinkText) {
+                status = 'working';
+                timeline.push({
+                  text: thinkText.length > 2500 ? thinkText.slice(-2500) : thinkText,
+                  at,
+                  kind: 'thinking'
+                });
+              }
+            }
             if (block.type === 'text' && block.text) {
               lastMessage = block.text;
               status = 'working';
               timeline.push({
-                text: block.text.length > 1200 ? block.text.slice(-1200) : block.text,
+                text: block.text.length > 2500 ? block.text.slice(-2500) : block.text,
                 at,
                 kind: 'message'
               });
@@ -276,7 +298,7 @@ class ClaudeWatcher extends BaseWatcher {
 
     // Prefer full timeline; fall back to compact builder
     const activity = timeline.length
-      ? timeline.slice(-40)
+      ? timeline.slice(-56)
       : buildActivity(lastMessage, toolCalls, lastTime || fileTimes.lastTime);
 
     return {
