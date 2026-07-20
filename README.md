@@ -1,146 +1,143 @@
-# AgentNotch
+<p align="center">
+  <strong>AgentNotch</strong>
+</p>
 
-> **Calm · Precise · Unobtrusive** — The ambient multi-agent status strip for solo AI-assisted developers.
+<p align="center">
+  <em>The quiet status strip for multi-agent developers.</em>
+</p>
 
-AgentNotch is a cross-platform system tray application that displays a Mac-style top notch UI for real-time status updates of local AI coding agents. It watches local session files and process presence, surfaces status states (idle, working, attention, error, question) in a glanceable strip, and expands automatically when an agent requires your input.
+<p align="center">
+  <a href="#supported-agents">Agents</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#getting-started">Get Started</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="DESIGN.md">Design System</a>
+</p>
 
 ---
 
+AgentNotch is a cross-platform system-tray application that surfaces a Mac-style notch at the top of your primary display. It watches local session files and process presence for your AI coding agents, distills them into glanceable status states — **idle**, **working**, **attention**, **error**, **question** — and expands only when something actually needs a human.
+
+One strip. Every agent. No tab-switching.
+
 ## Supported Agents
 
-| Agent | Watched Path / Source | State Detections |
+| Agent | Source | What it detects |
 | :--- | :--- | :--- |
-| **Claude Code** | `~/.claude/projects/**` (session `.jsonl`) | Tool execution, user input prompt, task completion |
-| **Codex** | `~/.codex/sessions/**` (session `.jsonl`) | Command runs, prompt updates, rate limits |
+| **Claude Code** | `~/.claude/projects/**/*.jsonl` | Tool execution, user-input prompts, task completion |
+| **Codex** | `~/.codex/sessions/**/*.jsonl` | Command runs, prompt updates, rate limits |
 | **Cursor** | Process presence (`Cursor.exe` / `Cursor`) | Running / active state |
 | **Antigravity** | `~/.gemini/antigravity-ide/brain/**/transcript.jsonl` | Planning phases, subagent execution, task status |
 | **Grok Build** | `~/.grok/sessions/**/updates.jsonl` | Active tool names, command parameters, weekly credits |
 | **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite WAL, read-only) | Tool execution, step completion, model + token/cost usage |
 
-> **Note:** OpenCode live permission requests are not persisted to disk, so OpenCode sessions report working/idle + activity only — approvals happen in the OpenCode app (no remote approve).
+> **Note:** OpenCode does not persist live permission requests to disk. Sessions report working/idle and activity only — approvals happen inside the OpenCode app.
 
----
+## Features
 
-## Key Features
+**Ambient Notch UI** — A thin status bar at the top center of your screen. Visible while any agent is working or needs attention; autohides when everything is idle.
 
-- 🟢 **Ambient Notch UI:** A thin status notch at the top center of your primary screen. It remains visible while any agent is working or requires attention, and autohides when all agents are idle.
-- ⚡ **Auto-Expand on Attention:** Automatically expands the notch whenever an agent requests permission, asks a question, or completes a turn, so you never miss a blocker.
-- ✅ **Claude remote approve:** Allow / Deny from the notch for Claude Code via a `PermissionRequest` hook (install once in Settings). Other agents still focus the app so you can approve there.
-- 🎛️ **Live Session Cards:** Hover or click to expand cards showing the active running model (e.g. `Grok 4.5`, `Gemini 1.5 Pro`), a live activity feed of recent commands/files edited, and active execution parameters.
-- 📊 **Usage Limits:** Displays real-time, local-only metric strips for resource usage (such as Grok weekly credits or Codex usage %) directly in the top bar.
-- 📥 **CLI Task Dispatch:** Submit tasks directly to agent CLIs from the expanded notch input field.
-- ⚙️ **Local Settings & History:** Manage per-agent watchers, notification sounds, desktop banners, and autostart settings. Session history is archived locally under `~/.agent-notch/history.json`.
+**Auto-Expand on Attention** — The notch expands automatically whenever an agent requests permission, asks a question, or completes a turn. You never miss a blocker.
 
----
+**Claude Remote Approve** — Allow or Deny Claude Code permission requests directly from the notch via a `PermissionRequest` hook. Other agents focus their native app for approval.
 
-## Claude remote approve setup
+**Live Session Cards** — Hover or click to see the running model (`Grok 4.5`, `Gemini 1.5 Pro`, etc.), a live activity feed of recent commands and edited files, and current execution parameters.
+
+**Usage Limits** — Real-time, local-only metric strips for resource usage (Grok weekly credits, Codex usage %) displayed inline.
+
+**CLI Task Dispatch** — Submit tasks to agent CLIs directly from the expanded notch input field.
+
+**Settings & History** — Per-agent watcher toggles, notification sounds, desktop banners, autostart, and locally-archived session history under `~/.agent-notch/history.json`.
+
+## Claude Remote Approve Setup
 
 1. Open AgentNotch → **Settings**.
 2. Under **Claude remote approve**, click **Install hook**.
 3. Restart any open Claude Code sessions (hooks load at session start).
-4. When Claude needs permission, the notch expands — press **Allow** (`Ctrl+Y`) or **Deny** (`Ctrl+N`). Claude continues without switching windows.
+4. When Claude needs permission, the notch expands — press **Allow** (`Ctrl+Y`) or **Deny** (`Ctrl+N`).
 
-What install does:
+<details>
+<summary>What install does</summary>
 
 - Copies the bridge script to `~/.agent-notch/bin/claude-permission-bridge.js`
-- Adds a `PermissionRequest` command hook in `~/.claude/settings.json` (other hooks are preserved)
+- Adds a `PermissionRequest` command hook in `~/.claude/settings.json` (existing hooks are preserved)
 - Pending requests and decisions live under `~/.agent-notch/permissions/`
+- If the hook times out (~10 min) or AgentNotch is not running, Claude falls back to its normal permission dialog.
 
-If the hook times out (~10 minutes) or AgentNotch is not running, Claude falls back to its normal permission dialog.
+</details>
 
----
+## Getting Started
 
-## Visual Design System
+> Requires [Node.js](https://nodejs.org/) ≥ 20.
 
-AgentNotch is designed with a dark, premium, and focused aesthetic to prevent notification fatigue and look beautiful. Detailed visual specifications are located in [DESIGN.md](file:///c:/Users/princ/OneDrive/Desktop/AI%20Agents/agent-notch/DESIGN.md).
+```bash
+# Install dependencies
+npm install
 
-- **Colors:** Restrained, near-black tonal stack (`#0a0a0a` to `#1c1c1c`) to stay out of the way. Vibrant colors are reserved strictly for semantic states (Working: Blue, Attention: Amber, Idle: Green, Question: Cyan).
-- **Typography:** Modern sans-serif (Inter) for controls and UI, and monospaced (JetBrains Mono) for code snippets, running models, and terminal output paths.
-- **Motion:** Micro-animations (breathing pulse when working, alert bounce when attention is needed). Honors `prefers-reduced-motion` settings.
+# Run in development mode
+npm run dev
 
----
-
-## Technical Stack & Architecture
-
-AgentNotch is built with **Electron**, **Chokidar** (high-performance file system watcher), and **Vanilla CSS/JS** for visual speed and a lightweight memory footprint.
-
+# Run the parser test suite
+npm test
 ```
-agent-notch/
-├── .agents/               # Customization hooks
-├── assets/                # Application icons and assets
-├── test/                  # Test suite (Node.js test runner)
-│   ├── analyzers.test.js         # Agent log parser unit tests
-│   └── permission-bridge.test.js # Permission bridge filesystem tests
-└── src/
-    ├── main/              # Main process (Tray, Window, Agent Manager)
-    │   ├── watchers/      # Agent-specific file watchers and log tailers
-    │   │   ├── base-watcher.js        # Base abstract watcher class
-    │   │   ├── antigravity-watcher.js # Antigravity logs parser
-    │   │   ├── claude-watcher.js      # Claude Code session parser
-    │   │   ├── codex-watcher.js       # Codex log parser
-    │   │   ├── cursor-watcher.js      # Cursor process tracker
-    │   │   ├── grok-watcher.js        # Grok session updates tailer
-    │   │   ├── opencode-watcher.js    # OpenCode SQLite (WAL) session reader
-    │   │   └── session-utils.js       # JSONL stream helpers
-    │   ├── index.js             # Main Electron entrance point
-    │   ├── logger.js            # Quiet, file-based logging utility
-    │   ├── permission-bridge.js # Claude PermissionRequest hook + decision files
-    │   ├── store.js             # Settings and session state persistence
-    │   ├── tray.js              # OS tray status colors & context menu
-    │   └── usage-limits.js      # Local resource tracker
-    ├── preload/           # contextBridge secure IPC bridge
-    │   └── index.js
-    └── renderer/          # User Interface (Notch, Expanded Panel, Settings)
-        ├── index.html     # Frame markup
-        ├── app.js         # Renderer coordination & IPC handler
-        ├── components/    # UI elements (Header, History, SessionCards, Settings)
-        └── styles/        # Near-black CSS theme (main.css, components.css)
-```
-
----
-
-## Installation & Setup
-
-Ensure you have [Node.js](https://nodejs.org/) (version 18 or higher) installed.
-
-1. **Clone the repository and install dependencies:**
-   ```bash
-   npm install
-   ```
-
-2. **Run in development mode:**
-   ```bash
-   npm run dev
-   ```
-
-3. **Run the parser test suite:**
-   ```bash
-   npm test
-   ```
-
----
 
 ## Production Builds
 
-Build target packages using [electron-builder](https://github.com/electron-userland/electron-builder):
+Build target packages with [electron-builder](https://github.com/electron-userland/electron-builder):
 
-| Target OS | Command | Output |
-| :--- | :--- | :--- |
-| Windows | `npm run build:win` | NSIS Installer (`.exe`) |
-| macOS | `npm run build:mac` | Disk Image (`.dmg`) |
-| Linux | `npm run build:linux` | AppImage (`.AppImage`) |
+```bash
+npm run build:win     # Windows → NSIS installer (.exe)
+npm run build:mac     # macOS   → Disk image (.dmg)
+npm run build:linux   # Linux   → AppImage (.AppImage)
+```
 
----
+## Architecture
 
-## Local Privacy Commitments
+Electron + Chokidar + Vanilla CSS/JS. No frameworks, no bundlers — fast startup, low memory.
 
-AgentNotch is **local-first and private by design**:
-- No cloud dashboards, no accounts, and no remote telemetry.
-- It parses local session logs directly in the watcher thread.
-- Settings and historical metrics never leave your machine (`~/.agent-notch/`).
+```
+src/
+├── main/                   # Main process
+│   ├── index.js            # Electron entry point
+│   ├── tray.js             # OS tray status colors & context menu
+│   ├── store.js            # Settings & session state persistence
+│   ├── logger.js           # Quiet, file-based logging
+│   ├── permission-bridge.js # Claude PermissionRequest hook + decision files
+│   ├── usage-limits.js     # Local resource tracker
+│   └── watchers/           # Agent-specific file watchers
+│       ├── base-watcher.js          # Abstract watcher base class
+│       ├── claude-watcher.js        # Claude Code session parser
+│       ├── codex-watcher.js         # Codex log parser
+│       ├── cursor-watcher.js        # Cursor process tracker
+│       ├── antigravity-watcher.js   # Antigravity transcript parser
+│       ├── grok-watcher.js          # Grok session updates tailer
+│       ├── opencode-watcher.js      # OpenCode SQLite (WAL) reader
+│       └── session-utils.js         # JSONL stream helpers
+├── preload/
+│   └── index.js            # contextBridge secure IPC
+└── renderer/               # UI (Notch, Expanded Panel, Settings)
+    ├── index.html
+    ├── app.js              # Renderer coordination & IPC handler
+    ├── components/         # Session cards, history, settings
+    └── styles/             # Near-black CSS theme
 
----
+test/
+├── analyzers.test.js              # Agent log parser unit tests
+└── permission-bridge.test.js      # Permission bridge filesystem tests
+```
+
+## Design
+
+Dark, dense, interrupt-only. Near-black tonal stack (`#0a0a0a` → `#1c1c1c`), status color earned by real agent state, Inter + JetBrains Mono typography. Full specification in [DESIGN.md](DESIGN.md).
+
+## Privacy
+
+AgentNotch is **local-first and private by design**.
+
+- No cloud dashboards, no accounts, no telemetry.
+- Session logs are parsed directly in the watcher thread.
+- Settings and history never leave your machine (`~/.agent-notch/`).
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+[MIT](LICENSE)
