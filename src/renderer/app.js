@@ -21,6 +21,11 @@ class App {
     /** Track which session ids were already in attention to avoid re-locking on every update */
     this._prevAttentionIds = new Set();
     this._clearHistoryPendingConfirm = false;
+    /** Fingerprints to skip full DOM rebuilds that restart animations (flicker) */
+    this._lastBarFp = '';
+    this._lastSessionsFp = '';
+    this._lastUsageFp = '';
+    this._knownSessionIds = new Set();
   }
 
   async init() {
@@ -421,6 +426,67 @@ class App {
     });
   }
 
+  /**
+   * Stable fingerprint of what the UI actually shows.
+   * Used to skip full innerHTML rebuilds that restart CSS animations (flicker).
+   */
+  _sessionFingerprint(sessions) {
+    return sessions.map(s => {
+      const act = Array.isArray(s.activity) ? s.activity : [];
+      const lastAct = act.length ? act[act.length - 1] : null;
+      const actKey = lastAct
+        ? `${lastAct.at || ''}|${String(lastAct.text || '').slice(0, 80)}|${act.length}`
+        : '0';
+      const plan = Array.isArray(s.plan) ? s.plan : [];
+      const planKey = plan.map(p => `${p.step || ''}:${p.status || ''}`).join(',');
+      return [
+        s.id,
+        s.status,
+        s.agent,
+        s.taskName || '',
+        s.currentTool || '',
+        String(s.lastMessage || '').slice(0, 120),
+        s.durationFormatted || '',
+        actKey,
+        planKey,
+        s.permissionRequest?.requestId || '',
+        s.question?.prompt || s.question?.text || ''
+      ].join('\x1f');
+    }).join('\x1e');
+  }
+
+  _barFingerprint(sessions) {
+    return sessions.map(s => [
+      s.id,
+      s.status,
+      s.agent,
+      s.taskName || '',
+      s.currentTool || '',
+      String(s.lastMessage || '').slice(0, 80)
+    ].join('\x1f')).join('\x1e');
+  }
+
+  /** Multicolor laser beam — active while any agent is working. */
+  updateLaserState() {
+    const appEl = document.getElementById('app');
+    const notchLaser = document.getElementById('notch-laser');
+    if (!appEl) return;
+
+    const active = this.sessions.filter(s => s.status !== 'stopped');
+    const working = active.some(s => s.status === 'working');
+    const attention = active.some(s =>
+      ['permission-request', 'question', 'needs-attention'].includes(s.status)
+    );
+
+    appEl.classList.toggle('laser-active', working);
+    appEl.classList.toggle('laser-attention', attention && !working);
+
+    if (notchLaser) {
+      notchLaser.hidden = !working;
+      notchLaser.setAttribute('aria-hidden', working ? 'false' : 'true');
+    }
+  }
+
   render() {
     this.renderNotchBar();
     this.renderUsageBar();
@@ -430,6 +496,7 @@ class App {
       this.renderHistory();
     }
     this.updateBadges();
+    this.updateLaserState();
   }
 
   renderUsageBar() {
@@ -437,12 +504,31 @@ class App {
     if (!bar) return;
 
     const items = Array.isArray(this.usageLimits) ? this.usageLimits : [];
-    if (items.length === 0) {
-      bar.innerHTML = `<span class="usage-chip"><span class="usage-chip-name">Usage</span><span class="usage-chip-pct na">—</span></span>`;
+
+    // Only show usage for harnesses with a live session — if OpenCode is the
+    // only agent running, its chip is the only one shown. No sessions → no bar.
+    const activeAgents = new Set(
+      this.sessions.filter(s => s.status !== 'stopped').map(s => s.agent)
+    );
+    const visible = activeAgents.size > 0
+      ? items.filter(u => activeAgents.has(u.name) || activeAgents.has(u.short))
+      : [];
+
+    const fp = visible.map(u =>
+      `${u.id || u.name}|${u.usedPercent ?? 'na'}|${u.available ? 1 : 0}|${u.resetsLabel || ''}`
+    ).join(';');
+    if (fp === this._lastUsageFp && bar.dataset.rendered === '1') return;
+    this._lastUsageFp = fp;
+    bar.dataset.rendered = '1';
+
+    if (visible.length === 0) {
+      bar.style.display = 'none';
+      bar.innerHTML = '';
       return;
     }
+    bar.style.display = '';
 
-    bar.innerHTML = items.map(u => {
+    bar.innerHTML = visible.map(u => {
       const name = escapeHtml(u.short || u.name || u.id || '?');
       const color = u.color || '#888';
       const titleParts = [
@@ -485,48 +571,56 @@ class App {
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
     const runningCount = activeSessions.filter(s => s.status === 'working').length;
     const doneCount = activeSessions.filter(s => s.status === 'idle').length;
+    const barFp = this._barFingerprint(activeSessions);
 
-    // Render animated agent icons
-    if (activeSessions.length === 0) {
-      iconsContainer.innerHTML = '';
-      if (statusTextEl) statusTextEl.textContent = 'AgentNotch';
-    } else {
-      iconsContainer.innerHTML = activeSessions.map(s => getAgentBarIcon(s)).join('');
+    // Skip full icon rebuild when nothing visible changed
+    if (barFp !== this._lastBarFp) {
+      this._lastBarFp = barFp;
 
-      // Set status text to tell what's currently going on
-      if (statusTextEl) {
-        const needsAttention = activeSessions.find(s =>
-          ['permission-request', 'question', 'needs-attention'].includes(s.status)
-        );
-        const running = activeSessions.find(s => s.status === 'working');
+      if (activeSessions.length === 0) {
+        iconsContainer.innerHTML = '';
+        if (statusTextEl) {
+          statusClass(statusTextEl, '');
+          statusTextEl.textContent = 'AgentNotch';
+          statusTextEl.removeAttribute('title');
+        }
+      } else {
+        iconsContainer.innerHTML = activeSessions.map(s => getAgentBarIcon(s)).join('');
 
-        if (needsAttention) {
-          statusClass(statusTextEl, 'attention');
-          statusTextEl.textContent = needsAttention.status === 'permission-request'
-            ? `${needsAttention.agent} needs permission`
-            : `${needsAttention.agent} asks a question`;
-        } else if (running) {
-          statusClass(statusTextEl, 'working');
-          // Spinner beside the icon is the primary "running" cue;
-          // text is a short activity hint (never raw exec/done keywords).
-          const tool = running.currentTool || '';
-          const noise = /^(exec|done|tool|bash|run)$/i.test(tool.trim())
-            || /…$|\.\.\.$|Thinking|Responding|Streaming|Waiting|Planning|Running tools/i.test(tool);
-          const detail = (!noise && tool)
-            || running.lastMessage
-            || `${running.agent} running`;
-          const line = String(detail).replace(/\s+/g, ' ').trim();
-          statusTextEl.textContent = line.length > 52 ? `${line.slice(0, 51)}…` : line;
-          statusTextEl.title = line;
-        } else {
-          statusClass(statusTextEl, 'idle');
-          const finished = activeSessions.find(s => s.status === 'idle' && s.lastMessage);
-          if (finished && activeSessions.length === 1) {
-            const line = String(finished.lastMessage).replace(/\s+/g, ' ').trim();
+        if (statusTextEl) {
+          const needsAttention = activeSessions.find(s =>
+            ['permission-request', 'question', 'needs-attention'].includes(s.status)
+          );
+          const running = activeSessions.find(s => s.status === 'working');
+
+          if (needsAttention) {
+            statusClass(statusTextEl, 'attention');
+            statusTextEl.textContent = needsAttention.status === 'permission-request'
+              ? `${needsAttention.agent} needs permission`
+              : `${needsAttention.agent} asks a question`;
+            statusTextEl.removeAttribute('title');
+          } else if (running) {
+            statusClass(statusTextEl, 'working');
+            const tool = running.currentTool || '';
+            const noise = /^(exec|done|tool|bash|run)$/i.test(tool.trim())
+              || /…$|\.\.\.$|Thinking|Responding|Streaming|Waiting|Planning|Running tools/i.test(tool);
+            const detail = (!noise && tool)
+              || running.lastMessage
+              || `${running.agent} running`;
+            const line = String(detail).replace(/\s+/g, ' ').trim();
             statusTextEl.textContent = line.length > 52 ? `${line.slice(0, 51)}…` : line;
             statusTextEl.title = line;
           } else {
-            statusTextEl.textContent = `${activeSessions.length} agent${activeSessions.length > 1 ? 's' : ''} finished`;
+            statusClass(statusTextEl, 'idle');
+            const finished = activeSessions.find(s => s.status === 'idle' && s.lastMessage);
+            if (finished && activeSessions.length === 1) {
+              const line = String(finished.lastMessage).replace(/\s+/g, ' ').trim();
+              statusTextEl.textContent = line.length > 52 ? `${line.slice(0, 51)}…` : line;
+              statusTextEl.title = line;
+            } else {
+              statusTextEl.textContent = `${activeSessions.length} agent${activeSessions.length > 1 ? 's' : ''} finished`;
+              statusTextEl.removeAttribute('title');
+            }
           }
         }
       }
@@ -552,9 +646,18 @@ class App {
     if (!list) return;
 
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
+    const sessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${this.expandedSessionId || ''}`;
+
+    // Skip full card rebuild when content is unchanged (stops poll-driven flicker)
+    if (sessionsFp === this._lastSessionsFp && list.dataset.bound === '1') {
+      return;
+    }
+    this._lastSessionsFp = sessionsFp;
 
     if (activeSessions.length === 0) {
       list.innerHTML = '';
+      list.dataset.bound = '0';
+      this._knownSessionIds.clear();
       if (empty) empty.style.display = '';
       this.updateEmptyDetection();
       return;
@@ -574,10 +677,17 @@ class App {
       }
     }
 
-    // Render unified cards
+    const prevIds = this._knownSessionIds;
+    const nextIds = new Set(activeSessions.map(s => s.id));
+
+    // Render unified cards — only brand-new sessions get entrance animation
     list.innerHTML = activeSessions.map((session, i) => {
-      return renderSessionCard(session, i);
+      const isNew = !prevIds.has(session.id);
+      return renderSessionCard(session, i, { animateIn: isNew });
     }).join('');
+
+    this._knownSessionIds = nextIds;
+    list.dataset.bound = '1';
 
     // Restore expanded class
     if (this.expandedSessionId) {
@@ -593,6 +703,8 @@ class App {
         this.expandedSessionId = firstCard.dataset.sessionId;
         firstCard.classList.add('expanded');
         firstCard.setAttribute('aria-expanded', 'true');
+        // Fingerprint included expandedSessionId — keep in sync without re-render loop
+        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${this.expandedSessionId}`;
       }
     }
 
@@ -624,6 +736,7 @@ class App {
         target.classList.add('expanded');
         target.setAttribute('aria-expanded', 'true');
         this.expandedSessionId = sessionId;
+        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${sessionId}`;
         // Pin live feed to latest after expand
         requestAnimationFrame(() => {
           const feed = target.querySelector('.activity-live-feed');
@@ -631,6 +744,7 @@ class App {
         });
       } else {
         this.expandedSessionId = null;
+        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + '\x1d';
       }
     };
 
@@ -785,7 +899,7 @@ class App {
 
 function statusClass(el, cls) {
   el.classList.remove('working', 'idle', 'attention');
-  el.classList.add(cls);
+  if (cls) el.classList.add(cls);
 }
 
 function escapeHtml(text) {

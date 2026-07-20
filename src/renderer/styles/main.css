@@ -206,7 +206,7 @@ html, body {
   gap: 8px;
 }
 
-/* ── Animated Agent Icon (+ running spinner beside it) ─ */
+/* ── Harness logo icons — no motion; bright when running, dull when done ─ */
 .agent-icon-wrap {
   display: inline-flex;
   align-items: center;
@@ -215,35 +215,80 @@ html, body {
 }
 
 .agent-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
   transition: opacity var(--duration-base) var(--ease-out),
-              transform var(--duration-base) var(--ease-out);
+              filter var(--duration-base) var(--ease-out);
   flex-shrink: 0;
+  /* No transform/shake animations — those caused flicker */
+  animation: none !important;
 }
 
-.agent-icon svg {
-  image-rendering: pixelated;
+.agent-logo {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+  border-radius: 4px;
+  user-select: none;
+  pointer-events: none;
+  /* Keep natural logo colors; never tint red via filter animations */
+  animation: none !important;
 }
 
-.agent-icon.working {
-  animation: agentBreathe 2s ease-in-out infinite;
+.agent-logo-fallback {
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
 }
 
-.agent-icon.attention {
-  animation: agentShake 0.4s ease-in-out infinite alternate;
+/* Running: full brightness, clear and sharp */
+.agent-icon.working,
+.agent-icon-wrap.working {
+  opacity: 1;
 }
 
-.agent-icon.idle {
-  opacity: 0.5;
+.agent-icon.working .agent-logo {
+  opacity: 1;
+  filter: brightness(1.12) contrast(1.05);
 }
 
-/* Spinner / pulse to the right of the pet — primary "still running" cue */
+/* Needs attention: still bright (dot indicator carries urgency) */
+.agent-icon.attention,
+.agent-icon-wrap.attention {
+  opacity: 1;
+}
+
+.agent-icon.attention .agent-logo {
+  opacity: 1;
+  filter: brightness(1.08);
+}
+
+/* Completed / idle: dull */
+.agent-icon.idle,
+.agent-icon-wrap.idle {
+  opacity: 0.38;
+}
+
+.agent-icon.idle .agent-logo {
+  opacity: 1;
+  filter: grayscale(0.15) brightness(0.85);
+}
+
+/* Attention cue sits beside the logo — logo itself stays still */
 .agent-run-indicator {
   display: inline-flex;
   align-items: center;
@@ -253,42 +298,88 @@ html, body {
   flex-shrink: 0;
 }
 
-.agent-run-spinner {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 255, 255, 0.12);
-  border-top-color: currentColor;
-  border-right-color: currentColor;
-  animation: agentSpin 0.8s linear infinite;
-  opacity: 0.95;
-}
-
 .agent-run-indicator.attention .agent-run-pulse {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: var(--color-attention);
-  animation: agentPulseRing 1s ease-in-out infinite;
+  /* Static amber dot — no pulsing that steals focus from logos */
+  opacity: 0.95;
 }
 
-@keyframes agentBreathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.08); }
+/* ── Multicolor laser beam (notch bar) ─────────────────── */
+.notch-laser {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
 }
 
-@keyframes agentSpin {
-  to { transform: rotate(360deg); }
+.notch-laser[hidden] {
+  display: none !important;
 }
 
-@keyframes agentShake {
-  0% { transform: translateX(-1px); }
-  100% { transform: translateX(1px); }
+.notch-laser-beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 38%;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    #60A5FA 12%,
+    #A78BFA 32%,
+    #F472B6 52%,
+    #FBBF24 72%,
+    #34D399 88%,
+    transparent 100%
+  );
+  box-shadow:
+    0 0 6px 1px rgba(167, 139, 250, 0.55),
+    0 0 12px 2px rgba(96, 165, 250, 0.35);
+  animation: laserSweep 2.2s linear infinite;
+  will-change: transform;
 }
 
-@keyframes agentPulseRing {
-  0%, 100% { opacity: 0.9; transform: scale(1); }
-  50% { opacity: 0.25; transform: scale(1.35); }
+.notch-laser-trail {
+  position: absolute;
+  inset: 0;
+  opacity: 0.22;
+  background: linear-gradient(
+    90deg,
+    #60A5FA,
+    #A78BFA,
+    #F472B6,
+    #FBBF24,
+    #34D399,
+    #60A5FA
+  );
+  background-size: 200% 100%;
+  animation: laserHueShift 3.5s linear infinite;
+  filter: blur(1px);
+}
+
+/* Soft bottom edge glow while agents run */
+.notch.laser-active {
+  box-shadow:
+    0 1px 0 0 rgba(96, 165, 250, 0.12),
+    0 4px 18px -8px rgba(167, 139, 250, 0.35);
+}
+
+@keyframes laserSweep {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(280%); }
+}
+
+@keyframes laserHueShift {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
 }
 
 /* Center — Status text */
@@ -319,7 +410,7 @@ html, body {
   gap: 8px;
 }
 
-/* Keyword stats (active/done) replaced by spinner beside agent icons */
+/* Keyword stats (active/done) replaced by logo motion on agent icons */
 .notch-stats {
   display: none;
 }
@@ -741,20 +832,44 @@ html, body {
     transition-duration: 0.01ms !important;
   }
 
-  .agent-icon.working,
-  .agent-icon.attention,
-  .agent-run-spinner,
-  .agent-run-indicator.attention .agent-run-pulse,
-  .empty-icon {
+  .empty-icon,
+  .notch-laser-beam,
+  .notch-laser-trail {
     animation: none !important;
   }
 
-  .agent-icon.working {
+  /* Logos stay bright/dull only — no motion */
+  .agent-icon.working,
+  .agent-icon.attention {
     opacity: 1;
   }
 
   .agent-icon.idle {
-    opacity: 0.55;
+    opacity: 0.4;
+  }
+
+  /* Static multicolor strip instead of sweeping laser */
+  .notch.laser-active .notch-laser {
+    display: block !important;
+  }
+
+  .notch.laser-active .notch-laser-beam {
+    width: 100%;
+    transform: none;
+    opacity: 0.85;
+    background: linear-gradient(
+      90deg,
+      #60A5FA,
+      #A78BFA,
+      #F472B6,
+      #FBBF24,
+      #34D399
+    );
+    box-shadow: none;
+  }
+
+  .notch.laser-active .notch-laser-trail {
+    opacity: 0;
   }
 
   .ntab-badge {
