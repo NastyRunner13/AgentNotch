@@ -7,14 +7,19 @@ const AGENT_COLORS = {
   'Codex': '#10B981',
   'Cursor': '#06B6D4',
   'Antigravity': '#4285F4',
-  'Grok': '#EF4444'
+  'Grok': '#EF4444',
+  'OpenCode': '#8B5CF6'
 };
 
 function escapeHtml(text) {
-  if (!text) return '';
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  // Explicit String() cast so falsy values like 0 are preserved (not treated as empty)
+  if (text === undefined || text === null) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatTime(ts) {
@@ -74,7 +79,7 @@ export function renderHistoryView(history, expandedId = null) {
         : '';
 
       html += `
-        <article class="history-entry ${isExpanded ? 'expanded' : ''}" data-id="${entry.id}">
+        <article class="history-entry ${isExpanded ? 'expanded' : ''}" data-id="${escapeHtml(entry.id)}">
           <div class="history-dot" style="background: ${color}"></div>
           <div class="history-info">
             <span class="history-name">${escapeHtml(cleanTask)}</span>

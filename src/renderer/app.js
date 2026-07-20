@@ -18,6 +18,9 @@ class App {
     this.initialized = false;
     this.expandedSessionId = null;
     this.expandedHistoryId = null;
+    /** Track which session ids were already in attention to avoid re-locking on every update */
+    this._prevAttentionIds = new Set();
+    this._clearHistoryPendingConfirm = false;
   }
 
   async init() {
@@ -87,13 +90,20 @@ class App {
 
       window.agentNotch.onSessionsUpdate((sessions) => {
         this.sessions = sessions;
-        // Prefer focusing the session that needs approval / just finished
-        const attention = sessions.find(s =>
-          ['permission-request', 'question', 'needs-attention'].includes(s.status)
+        // Only auto-focus the attention session when it NEWLY enters attention
+        // (not on every update) so the user can keep a different card expanded.
+        const ATTENTION = ['permission-request', 'question', 'needs-attention'];
+        const newlyAttention = sessions.find(s =>
+          ATTENTION.includes(s.status) && !this._prevAttentionIds.has(s.id)
         );
-        if (attention) {
-          this.expandedSessionId = attention.id;
+        if (newlyAttention) {
+          this.expandedSessionId = newlyAttention.id;
         }
+        // Update the tracked set
+        const currentAttentionIds = new Set(
+          sessions.filter(s => ATTENTION.includes(s.status)).map(s => s.id)
+        );
+        this._prevAttentionIds = currentAttentionIds;
         this.render();
       });
 
@@ -118,12 +128,23 @@ class App {
       }
 
       // Initialize state
-      const state = await window.agentNotch.getNotchState();
+      let state = 'collapsed';
+      try {
+        state = await window.agentNotch.getNotchState();
+      } catch {
+        // fall back to collapsed
+      }
       this.isExpanded = state === 'expanded';
       this.isAutoHidden = state === 'hidden';
       this.updateNotchClass();
 
-      const sessions = await window.agentNotch.getSessions();
+      let sessions;
+      try {
+        sessions = await window.agentNotch.getSessions();
+      } catch (err) {
+        sessions = [];
+        this.showToast(`Failed to load sessions: ${err.message}`, 'error');
+      }
       this.sessions = sessions || [];
       if (window.agentNotch.getUsageLimits) {
         try {
@@ -139,8 +160,6 @@ class App {
       this.usageLimits = getMockUsageLimits();
       this.render();
     }
-
-    console.log('[AgentNotch] Renderer App initialized');
   }
 
   initKeyboardShortcuts() {
@@ -204,9 +223,14 @@ class App {
 
   async handleApprove(sessionId) {
     if (!window.agentNotch) return;
-    const res = await window.agentNotch.approvePermission(sessionId);
+    let res;
+    try {
+      res = await window.agentNotch.approvePermission(sessionId);
+    } catch (err) {
+      this.showToast(`Approve failed: ${err.message || 'main process error'}`, 'error');
+      return;
+    }
     if (res && !res.success) {
-      console.warn('[AgentNotch]', res.message);
       this.showToast(res.message || 'Approve failed', 'error');
     } else if (res?.remote) {
       this.showToast(res.message || 'Approved', 'ok');
@@ -217,9 +241,14 @@ class App {
 
   async handleDeny(sessionId) {
     if (!window.agentNotch) return;
-    const res = await window.agentNotch.denyPermission(sessionId);
+    let res;
+    try {
+      res = await window.agentNotch.denyPermission(sessionId);
+    } catch (err) {
+      this.showToast(`Deny failed: ${err.message || 'main process error'}`, 'error');
+      return;
+    }
     if (res && !res.success) {
-      console.warn('[AgentNotch]', res.message);
       this.showToast(res.message || 'Deny failed', 'error');
     } else if (res?.remote) {
       this.showToast(res.message || 'Denied', 'ok');
@@ -251,9 +280,13 @@ class App {
 
   async handleAnswer(sessionId, answer) {
     if (!window.agentNotch) return;
-    const res = await window.agentNotch.answerQuestion(sessionId, answer);
-    if (res && !res.success) {
-      console.warn('[AgentNotch]', res.message);
+    try {
+      const res = await window.agentNotch.answerQuestion(sessionId, answer);
+      if (res && !res.success) {
+        this.showToast(res.message || 'Answer failed', 'error');
+      }
+    } catch (err) {
+      this.showToast(`Answer failed: ${err.message || 'main process error'}`, 'error');
     }
   }
 
@@ -311,7 +344,12 @@ class App {
 
   async loadHistory() {
     if (window.agentNotch) {
-      this.history = await window.agentNotch.getHistory();
+      try {
+        this.history = await window.agentNotch.getHistory();
+      } catch (err) {
+        this.history = [];
+        this.showToast(`Failed to load history: ${err.message}`, 'error');
+      }
     } else {
       this.history = getMockHistory();
     }
@@ -346,15 +384,14 @@ class App {
               t.classList.toggle('active', t.dataset.tab === 'sessions');
             });
           } else {
-            alert(`Dispatch failed: ${res ? res.message : 'Unknown error'}`);
+            this.showToast(`Dispatch failed: ${res ? res.message : 'Unknown error'}`, 'error');
           }
         } else {
           // Dev mode stub
-          console.log(`Mock dispatch ${agent}: ${prompt}`);
           input.value = '';
         }
       } catch (err) {
-        alert(`Error: ${err.message}`);
+        this.showToast(`Error: ${err.message}`, 'error');
       } finally {
         input.disabled = false;
         btn.disabled = false;
@@ -518,18 +555,18 @@ class App {
 
     if (activeSessions.length === 0) {
       list.innerHTML = '';
-      empty.style.display = '';
+      if (empty) empty.style.display = '';
       this.updateEmptyDetection();
       return;
     }
 
-    empty.style.display = 'none';
+    if (empty) empty.style.display = 'none';
 
     // Preserve activity-feed scroll for the expanded session (live follow)
     let prevFeedScroll = null;
     if (this.expandedSessionId) {
       const prevFeed = list.querySelector(
-        `.session-card[data-session-id="${this.expandedSessionId}"] .activity-live-feed`
+        `.session-card[data-session-id="${CSS.escape(this.expandedSessionId)}"] .activity-live-feed`
       );
       if (prevFeed) {
         const nearBottom = (prevFeed.scrollHeight - prevFeed.scrollTop - prevFeed.clientHeight) < 48;
@@ -544,7 +581,7 @@ class App {
 
     // Restore expanded class
     if (this.expandedSessionId) {
-      const card = list.querySelector(`.session-card[data-session-id="${this.expandedSessionId}"]`);
+      const card = list.querySelector(`.session-card[data-session-id="${CSS.escape(this.expandedSessionId)}"]`);
       if (card) {
         card.classList.add('expanded');
         card.setAttribute('aria-expanded', 'true');
@@ -562,7 +599,7 @@ class App {
     // Keep live activity feed pinned to the latest event (unless user scrolled up)
     if (this.expandedSessionId) {
       const feed = list.querySelector(
-        `.session-card[data-session-id="${this.expandedSessionId}"] .activity-live-feed`
+        `.session-card[data-session-id="${CSS.escape(this.expandedSessionId)}"] .activity-live-feed`
       );
       if (feed) {
         if (!prevFeedScroll || prevFeedScroll.nearBottom) {
@@ -647,7 +684,10 @@ class App {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
-        if (sid && window.agentNotch) window.agentNotch.jumpToTerminal(sid);
+        if (sid && window.agentNotch) {
+          Promise.resolve(window.agentNotch.jumpToTerminal(sid))
+            .catch((err) => this.showToast(`Jump failed: ${err.message || 'main process error'}`, 'error'));
+        }
       });
     });
   }
@@ -660,11 +700,11 @@ class App {
 
     if (this.history.length === 0) {
       list.innerHTML = '';
-      empty.style.display = '';
+      if (empty) empty.style.display = '';
       return;
     }
 
-    empty.style.display = 'none';
+    if (empty) empty.style.display = 'none';
     list.innerHTML = renderHistoryView(this.history, this.expandedHistoryId);
 
     // Clear history button
@@ -672,12 +712,23 @@ class App {
     if (clearBtn) {
       clearBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (confirm('Clear all session history?')) {
-          if (window.agentNotch) {
-            await window.agentNotch.clearHistory();
+        if (!this._clearHistoryPendingConfirm) {
+          // First click: show toast asking to confirm
+          this._clearHistoryPendingConfirm = true;
+          this.showToast('Click Clear History again to confirm', 'info');
+          setTimeout(() => { this._clearHistoryPendingConfirm = false; }, 4000);
+        } else {
+          // Second click within 4s: execute
+          this._clearHistoryPendingConfirm = false;
+          try {
+            if (window.agentNotch) {
+              await window.agentNotch.clearHistory();
+            }
+            this.history = [];
+            this.renderHistory();
+          } catch (err) {
+            this.showToast(`Clear failed: ${err.message}`, 'error');
           }
-          this.history = [];
-          this.renderHistory();
         }
       });
     }
@@ -720,7 +771,8 @@ class App {
         ['Codex', d.codex],
         ['Cursor', d.cursor],
         ['Antigravity', d.antigravity],
-        ['Grok', d.grok]
+        ['Grok', d.grok],
+        ['OpenCode', d.opencode]
       ];
       el.textContent = labels
         .map(([name, ok]) => `${name}: ${ok ? 'data found' : 'not detected'}`)

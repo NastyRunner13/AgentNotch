@@ -42,6 +42,7 @@
   --color-cursor: #06B6D4;
   --color-antigravity: #4285F4;
   --color-grok: #EF4444;
+  --color-opencode: #8B5CF6;
 
   /* Status-tinted surfaces (buttons, approval, diffs) */
   --surface-allow: #0a1a0a;

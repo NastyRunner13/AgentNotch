@@ -35,6 +35,7 @@ export function initSettings(app) {
     'set-cursor': 'enableCursor',
     'set-antigravity': 'enableAntigravity',
     'set-grok': 'enableGrok',
+    'set-opencode': 'enableOpencode',
     'set-sound': 'soundAlerts',
     'set-notifications': 'desktopNotifications',
     'set-startup': 'launchAtStartup'
@@ -109,6 +110,7 @@ function applySettings(settings) {
     'set-cursor': 'enableCursor',
     'set-antigravity': 'enableAntigravity',
     'set-grok': 'enableGrok',
+    'set-opencode': 'enableOpencode',
     'set-sound': 'soundAlerts',
     'set-notifications': 'desktopNotifications',
     'set-startup': 'launchAtStartup'

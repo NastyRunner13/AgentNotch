@@ -86,7 +86,7 @@
               </svg>
             </div>
             <p class="empty-title">No agents running</p>
-            <p class="empty-desc">Start Claude Code, Codex, Cursor, Antigravity, or Grok Build and they'll appear here.</p>
+            <p class="empty-desc">Start Claude Code, Codex, Cursor, Antigravity, Grok Build, or OpenCode and they'll appear here.</p>
             <p id="empty-detection" class="empty-detection"></p>
           </div>
         </section>
@@ -145,6 +145,13 @@
               </span>
               <input type="checkbox" id="set-grok" class="toggle" checked>
             </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <span class="setting-dot" style="background: #8B5CF6"></span>
+                OpenCode
+              </span>
+              <input type="checkbox" id="set-opencode" class="toggle" checked>
+            </label>
 
             <h3 class="settings-heading">Preferences</h3>
             <label class="setting-row">
@@ -189,6 +196,7 @@
           <option value="Codex">Codex</option>
           <option value="Antigravity">Gemini</option>
           <option value="Grok">Grok</option>
+          <option value="OpenCode">OpenCode</option>
         </select>
         <input type="text" id="dispatch-input" class="dispatch-input" placeholder="Dispatch a task…" autocomplete="off">
         <button id="dispatch-btn" class="dispatch-btn" title="Send">

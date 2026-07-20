@@ -8,7 +8,8 @@ const AGENT_COLORS = {
   'Codex': { main: '#10B981', bright: '#34D399', class: 'agent-codex' },
   'Cursor': { main: '#06B6D4', bright: '#22D3EE', class: 'agent-cursor' },
   'Antigravity': { main: '#4285F4', bright: '#669DF6', class: 'agent-antigravity' },
-  'Grok': { main: '#EF4444', bright: '#F87171', class: 'agent-grok' }
+  'Grok': { main: '#EF4444', bright: '#F87171', class: 'agent-grok' },
+  'OpenCode': { main: '#8B5CF6', bright: '#A78BFA', class: 'agent-opencode' }
 };
 
 function getStatusInfo(session) {
@@ -116,9 +117,93 @@ function getPixelPet(status, agentName) {
 
 function escapeHtml(text) {
   if (text === undefined || text === null) return '';
-  const div = document.createElement('div');
-  div.textContent = String(text);
-  return div.innerHTML;
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Lightweight, safe markdown for agent thinking / replies in the live feed.
+ * Escapes HTML first, then applies a small subset agents commonly emit.
+ * Supports: fenced code, inline code, headings, bold/italic, lists, paragraphs.
+ */
+function renderMarkdownLite(src) {
+  let text = String(src || '').replace(/\r\n/g, '\n').trim();
+  if (!text) return '';
+
+  /** @type {Array<{lang:string, code:string}>} */
+  const fences = [];
+  text = text.replace(/```([^\n`]*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const i = fences.length;
+    fences.push({
+      lang: String(lang || '').trim().slice(0, 24),
+      code: String(code || '').replace(/\n$/, '')
+    });
+    return `\n\n\u0000FENCE${i}\u0000\n\n`;
+  });
+
+  text = escapeHtml(text);
+
+  // Headings (after escape so content is safe)
+  text = text.replace(/^#{6}\s+(.+)$/gm, '<div class="md-h md-h6">$1</div>');
+  text = text.replace(/^#{5}\s+(.+)$/gm, '<div class="md-h md-h5">$1</div>');
+  text = text.replace(/^#{4}\s+(.+)$/gm, '<div class="md-h md-h4">$1</div>');
+  text = text.replace(/^#{3}\s+(.+)$/gm, '<div class="md-h md-h3">$1</div>');
+  text = text.replace(/^#{2}\s+(.+)$/gm, '<div class="md-h md-h2">$1</div>');
+  text = text.replace(/^#\s+(.+)$/gm, '<div class="md-h md-h1">$1</div>');
+
+  // Horizontal rules
+  text = text.replace(/^(-{3,}|\*{3,}|_{3,})$/gm, '<hr class="md-hr" />');
+
+  // Unordered / ordered list items
+  text = text.replace(/^[\t ]*[-*•]\s+(.+)$/gm, '<div class="md-li">$1</div>');
+  text = text.replace(/^[\t ]*\d+\.\s+(.+)$/gm, '<div class="md-li md-ol">$1</div>');
+
+  // Bold then italic (escaped asterisks stay as * in source → we match \*)
+  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  text = text.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  text = text.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+
+  // Inline code
+  text = text.replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>');
+
+  // Restore fenced code blocks
+  text = text.replace(/\u0000FENCE(\d+)\u0000/g, (_, idx) => {
+    const block = fences[Number(idx)];
+    if (!block) return '';
+    const langAttr = block.lang ? ` data-lang="${escapeHtml(block.lang)}"` : '';
+    return `<pre class="md-code"${langAttr}><code>${escapeHtml(block.code)}</code></pre>`;
+  });
+
+  // Split into blocks on blank lines; keep structural HTML intact
+  const parts = text.split(/\n{2,}/).map((part) => {
+    const p = part.trim();
+    if (!p) return '';
+    if (
+      p.startsWith('<pre') ||
+      p.startsWith('<div class="md-h') ||
+      p.startsWith('<div class="md-li') ||
+      p.startsWith('<hr')
+    ) {
+      // Multi-li groups: join consecutive list items already split? keep as-is
+      return p.replace(/\n(?!<)/g, '\n');
+    }
+    // Single newlines inside a paragraph → <br>
+    return `<p class="md-p">${p.replace(/\n/g, '<br>')}</p>`;
+  });
+
+  // Collapse adjacent list items into a list wrapper for spacing
+  let html = parts.filter(Boolean).join('\n');
+  html = html.replace(
+    /((?:<div class="md-li[^"]*">[\s\S]*?<\/div>\n?)+)/g,
+    (block) => `<div class="md-list">${block}</div>`
+  );
+
+  return html;
 }
 
 function formatClock(timestamp) {
@@ -179,6 +264,7 @@ function renderPlan(plan) {
 function activityKindLabel(kind, tool) {
   const k = (kind || '').toLowerCase();
   const t = String(tool || '').toLowerCase();
+  if (k === 'thinking') return 'think';
   if (k === 'message') return 'msg';
   if (k === 'terminal' || t.includes('terminal') || t.includes('bash')) return 'term';
   if (k === 'file') {
@@ -222,8 +308,12 @@ function formatActivityText(update) {
     }
   }
 
-  // Cap very long rows; messages get more room than tool lines
-  const max = kind === 'message' ? 900 : kind === 'terminal' ? 500 : 220;
+  // Cap very long rows — thinking + messages get room for full agent prose
+  const max =
+    kind === 'thinking' ? 2200 :
+    kind === 'message' ? 2200 :
+    kind === 'terminal' ? 500 :
+    220;
   if (text.length > max) {
     text = `${text.slice(0, max - 1)}…`;
   }
@@ -253,14 +343,18 @@ function renderActivity(session) {
     });
   }
 
-  const stream = (updates.length ? updates : fallback).slice(-48);
+  const stream = (updates.length ? updates : fallback).slice(-56);
   if (!stream.length) return '';
 
-  // Chronological (oldest → newest) so it feels like a live terminal log
+  // Chronological (oldest → newest) so it feels like a live agent transcript
   const sorted = [...stream].sort((a, b) => {
     const ta = (typeof a === 'object' && a.at) || 0;
     const tb = (typeof b === 'object' && b.at) || 0;
-    return ta - tb;
+    if (ta !== tb) return ta - tb;
+    const rank = { phase: 0, thinking: 1, tool: 2, file: 2, search: 2, terminal: 3, message: 4 };
+    const ka = typeof a === 'object' ? a.kind : 'tool';
+    const kb = typeof b === 'object' ? b.kind : 'tool';
+    return (rank[ka] || 2) - (rank[kb] || 2);
   });
 
   const rows = sorted.map((update, i) => {
@@ -269,19 +363,24 @@ function renderActivity(session) {
     const tool = typeof update === 'object' ? (update.tool || '') : '';
     const text = formatActivityText(update);
     const at = typeof update === 'string' ? session.lastActivityAt : update.at;
+    const isProse = kind === 'thinking' || kind === 'message';
     const kindClass = kind ? ` activity-${kind}` : '';
+    const proseClass = isProse ? ' activity-prose' : '';
     const liveClass = isLast && session.status === 'working' ? ' activity-live' : '';
     const badge = activityKindLabel(kind, tool);
     const title = typeof update === 'object' && update.filePath
       ? escapeHtml(update.filePath)
-      : escapeHtml(String(typeof update === 'object' ? (update.tool || text) : text).slice(0, 200));
+      : escapeHtml(String(typeof update === 'object' ? (update.tool || text) : text).slice(0, 280));
 
-    // Preserve newlines for multi-line terminal / message blocks
-    const htmlText = escapeHtml(text).replace(/\n/g, '<br>');
+    // Thinking + agent replies: render markdown (headers, code, lists, bold)
+    // Tools / terminal: plain escaped mono lines
+    const htmlText = isProse
+      ? renderMarkdownLite(text)
+      : escapeHtml(text).replace(/\n/g, '<br>');
 
-    return `<div class="activity-row${kindClass}${liveClass}" title="${title}">
+    return `<div class="activity-row${kindClass}${proseClass}${liveClass}" title="${title}">
       <span class="activity-badge" aria-hidden="true">${escapeHtml(badge)}</span>
-      <span class="activity-text">${htmlText}</span>
+      <div class="activity-text${isProse ? ' activity-md' : ''}">${htmlText}</div>
       <time class="activity-time" title="${escapeHtml(formatClock(at))}">${escapeHtml(formatRelativeTime(at))}</time>
     </div>`;
   }).join('');
@@ -384,7 +483,7 @@ export function renderSessionCard(session, index = 0) {
   // Actions
   detailContent += `
     <div class="session-actions">
-      <button class="btn-jump" data-session-id="${session.id}">
+      <button class="btn-jump" data-session-id="${escapeHtml(session.id)}">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Jump to ${escapeHtml(session.terminal || 'Terminal')}
       </button>
@@ -407,8 +506,8 @@ export function renderSessionCard(session, index = 0) {
 
   return `
     <div class="session-card ${needsAttention ? 'attention' : ''}"
-         data-session-id="${session.id}"
-         data-status="${session.status}"
+         data-session-id="${escapeHtml(session.id)}"
+         data-status="${escapeHtml(session.status)}"
          role="button"
          tabindex="0"
          aria-expanded="false"
@@ -485,8 +584,8 @@ function renderInlineApproval(session, pr) {
       </div>
       ${diffHtml}
       <div class="approval-btns">
-        <button class="btn-deny" data-session-id="${session.id}" title="${denyTitle}">Deny <kbd>Ctrl+N</kbd></button>
-        <button class="btn-allow" data-session-id="${session.id}" title="${allowTitle}">Allow <kbd>Ctrl+Y</kbd></button>
+        <button class="btn-deny" data-session-id="${escapeHtml(session.id)}" title="${denyTitle}">Deny <kbd>Ctrl+N</kbd></button>
+        <button class="btn-allow" data-session-id="${escapeHtml(session.id)}" title="${allowTitle}">Allow <kbd>Ctrl+Y</kbd></button>
       </div>
       <p class="approval-hint">${hint}</p>
     </div>`;
@@ -502,7 +601,7 @@ function renderInlineQuestion(session) {
     const value = typeof opt === 'string' ? opt : (opt.value || opt.label || String(i));
     return `
       <button class="ask-option"
-              data-session-id="${session.id}"
+              data-session-id="${escapeHtml(session.id)}"
               data-answer="${escapeHtml(value)}">
         ${shortcut ? `<span class="ask-option-num">${shortcut}</span>` : ''}
         <span>${escapeHtml(label)}</span>
