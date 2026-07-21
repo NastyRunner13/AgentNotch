@@ -27,7 +27,7 @@
         </div>
       </div>
       <div class="notch-bar-center">
-        <span id="notch-status-text" class="notch-status-text"></span>
+        <span id="notch-status-text" class="notch-status-text">AgentNotch</span>
       </div>
       <div class="notch-bar-right">
         <div id="notch-stats" class="notch-stats">
@@ -194,16 +194,10 @@
         </section>
       </div>
 
-      <!-- Task Dispatch Input -->
+      <!-- Task Dispatch Input — targets a live session; the message resumes that chat -->
       <div class="dispatch-bar">
-        <select id="dispatch-agent" class="dispatch-agent">
-          <option value="Claude Code">Claude</option>
-          <option value="Codex">Codex</option>
-          <option value="Antigravity">Gemini</option>
-          <option value="Grok">Grok</option>
-          <option value="OpenCode">OpenCode</option>
-        </select>
-        <input type="text" id="dispatch-input" class="dispatch-input" placeholder="Dispatch a task…" autocomplete="off">
+        <select id="dispatch-agent" class="dispatch-agent"></select>
+        <input type="text" id="dispatch-input" class="dispatch-input" placeholder="Message this session…" autocomplete="off">
         <button id="dispatch-btn" class="dispatch-btn" title="Send">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <line x1="22" y1="2" x2="11" y2="13"/>

@@ -2,6 +2,18 @@ import { renderSessionCard, getAgentBarIcon } from './components/session-card.js
 import { renderHistoryView } from './components/history-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
+/** Agents whose sessions can receive dispatched messages (mirror of main process). */
+const DISPATCHABLE_AGENTS = new Set(['Claude Code', 'Codex', 'Grok', 'OpenCode']);
+
+/** Compact option label: `Claude · fix auth bug · agent-notch`. */
+function dispatchLabel(session) {
+  const agent = session.agent === 'Claude Code' ? 'Claude' : session.agent;
+  const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
+  const short = task.length > 34 ? `${task.slice(0, 33)}…` : task;
+  const dir = session.cwd ? String(session.cwd).split(/[\\/]/).filter(Boolean).pop() : '';
+  return dir ? `${agent} · ${short} · ${dir}` : `${agent} · ${short}`;
+}
+
 /**
  * AgentNotch — Main Renderer Application
  * Integrates autohide, single-window unified UI, expandable sessions,
@@ -22,10 +34,15 @@ class App {
     this._prevAttentionIds = new Set();
     this._clearHistoryPendingConfirm = false;
     /** Fingerprints to skip full DOM rebuilds that restart animations (flicker) */
-    this._lastBarFp = '';
-    this._lastSessionsFp = '';
+    this._lastBarFp = '\x00init';
+    this._lastSessionsFp = '\x00init';
     this._lastUsageFp = '';
     this._knownSessionIds = new Set();
+    /** Fold keys of long activity rows the user expanded (survives poll rebuilds) */
+    this.expandedActivityKeys = new Set();
+    /** Dispatch target dropdown state */
+    this._dispatchFp = '';
+    this._dispatching = false;
   }
 
   async init() {
@@ -370,19 +387,22 @@ class App {
 
     const handleDispatch = async () => {
       const prompt = input.value.trim();
-      const agent = agentSelect.value;
+      const sessionId = agentSelect.value;
 
-      if (!prompt) return;
+      if (!prompt || !sessionId) return;
 
+      this._dispatching = true;
       input.disabled = true;
+      agentSelect.disabled = true;
       btn.disabled = true;
 
       try {
         if (window.agentNotch) {
-          const res = await window.agentNotch.dispatchTask(agent, prompt);
+          const res = await window.agentNotch.dispatchTask(sessionId, prompt);
           if (res && res.success) {
             input.value = '';
-            // Switch view back to sessions to see the new agent spawn
+            this.showToast(res.message || 'Dispatched', 'ok');
+            // Switch view back to sessions to watch the session work
             this.switchView('sessions');
             const tabs = document.querySelectorAll('.ntab:not(.ntab-icon)');
             tabs.forEach(t => {
@@ -398,8 +418,8 @@ class App {
       } catch (err) {
         this.showToast(`Error: ${err.message}`, 'error');
       } finally {
-        input.disabled = false;
-        btn.disabled = false;
+        this._dispatching = false;
+        this.updateDispatchTargets();
         input.focus();
       }
     };
@@ -424,6 +444,57 @@ class App {
     agentSelect.addEventListener('click', (e) => {
       e.stopPropagation();
     });
+
+    this.updateDispatchTargets();
+  }
+
+  /**
+   * Populate the dispatch dropdown with live sessions (one entry per running
+   * agent chat). Rebuilds only when the session id set changes so polling
+   * never collapses an open dropdown; selection is preserved when possible.
+   */
+  updateDispatchTargets() {
+    const select = document.getElementById('dispatch-agent');
+    const input = document.getElementById('dispatch-input');
+    const btn = document.getElementById('dispatch-btn');
+    if (!select || !input || !btn) return;
+
+    const targets = this.sessions.filter(s => DISPATCHABLE_AGENTS.has(s.agent));
+    const fp = targets.map(s => s.id).join('\x1e');
+
+    if (fp !== this._dispatchFp) {
+      const prev = select.value;
+      this._dispatchFp = fp;
+      select.innerHTML = '';
+
+      if (targets.length === 0) {
+        const opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'No active sessions';
+        select.appendChild(opt);
+      } else {
+        for (const s of targets) {
+          const opt = document.createElement('option');
+          opt.value = s.id;
+          opt.textContent = dispatchLabel(s);
+          opt.title = `${s.agent} — ${s.taskName || 'session'}${s.cwd ? `\n${s.cwd}` : ''}`;
+          select.appendChild(opt);
+        }
+        if (prev && targets.some(s => s.id === prev)) {
+          select.value = prev;
+        }
+      }
+    }
+
+    const disabled = targets.length === 0 || this._dispatching;
+    select.disabled = disabled;
+    input.disabled = disabled;
+    btn.disabled = disabled;
+    if (targets.length === 0) {
+      input.placeholder = 'No active sessions to message';
+    } else {
+      input.placeholder = 'Message this session…';
+    }
   }
 
   /**
@@ -497,6 +568,7 @@ class App {
     }
     this.updateBadges();
     this.updateLaserState();
+    this.updateDispatchTargets();
   }
 
   renderUsageBar() {
@@ -665,6 +737,15 @@ class App {
 
     if (empty) empty.style.display = 'none';
 
+    // Forget fold expansions for sessions that are gone
+    if (this.expandedActivityKeys.size) {
+      const liveIds = new Set(activeSessions.map(s => s.id));
+      for (const k of this.expandedActivityKeys) {
+        const sid = k.slice(0, k.indexOf('|'));
+        if (!liveIds.has(sid)) this.expandedActivityKeys.delete(k);
+      }
+    }
+
     // Preserve activity-feed scroll for the expanded session (live follow)
     let prevFeedScroll = null;
     if (this.expandedSessionId) {
@@ -683,7 +764,10 @@ class App {
     // Render unified cards — only brand-new sessions get entrance animation
     list.innerHTML = activeSessions.map((session, i) => {
       const isNew = !prevIds.has(session.id);
-      return renderSessionCard(session, i, { animateIn: isNew });
+      return renderSessionCard(session, i, {
+        animateIn: isNew,
+        expandedActivity: this.expandedActivityKeys
+      });
     }).join('');
 
     this._knownSessionIds = nextIds;
@@ -761,6 +845,8 @@ class App {
         toggleCard(e.currentTarget);
       });
       card.addEventListener('keydown', (e) => {
+        // Inner controls (fold toggle, allow/deny, options) handle their own keys
+        if (e.target.closest('button, a, input, select, textarea')) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           toggleCard(e.currentTarget);
@@ -769,6 +855,24 @@ class App {
     });
 
     // Attach inline action listeners (stopPropagation is key here so card doesn't toggle)
+    list.querySelectorAll('.activity-toggle').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const row = btn.closest('.activity-row');
+        if (!row) return;
+        const isOpen = row.classList.toggle('activity-fold-open');
+        row.classList.toggle('activity-folded', !isOpen);
+        btn.setAttribute('aria-expanded', String(isOpen));
+        const label = btn.querySelector('.activity-toggle-label');
+        if (label) label.textContent = isOpen ? 'Show less' : 'Show more';
+        const key = btn.dataset.foldKey;
+        if (key) {
+          if (isOpen) this.expandedActivityKeys.add(key);
+          else this.expandedActivityKeys.delete(key);
+        }
+      });
+    });
+
     list.querySelectorAll('.btn-allow').forEach(btn => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();

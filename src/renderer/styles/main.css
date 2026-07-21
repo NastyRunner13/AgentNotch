@@ -727,6 +727,15 @@ html, body {
   cursor: pointer;
   transition: all var(--duration-fast) ease;
   min-width: 65px;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatch-agent:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .dispatch-agent:hover {
