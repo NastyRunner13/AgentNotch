@@ -3,7 +3,8 @@ import { renderHistoryView } from './components/history-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
 /** Agents whose sessions can receive dispatched messages (mirror of main process). */
-const DISPATCHABLE_AGENTS = new Set(['Claude Code', 'Codex', 'Grok', 'OpenCode']);
+const DISPATCHABLE_AGENT_LIST = ['Claude Code', 'Codex', 'Grok', 'OpenCode'];
+const DISPATCHABLE_AGENTS = new Set(DISPATCHABLE_AGENT_LIST);
 
 /** Compact option label: `Claude · fix auth bug · agent-notch`. */
 function dispatchLabel(session) {
@@ -48,9 +49,11 @@ class App {
   async init() {
     if (this.initialized) return;
     this.initialized = true;
+    console.log('[Renderer] App initializing...');
 
-    // Notch bar click — toggle expand/collapse or reveal if autohidden
-    const notchBar = document.getElementById('notch-bar');
+    try {
+      // Notch bar click — toggle expand/collapse or reveal if autohidden
+      const notchBar = document.getElementById('notch-bar');
     if (notchBar) {
       const activateNotchBar = () => {
         if (this.isAutoHidden) {
@@ -181,6 +184,9 @@ class App {
       this.sessions = getMockSessions();
       this.usageLimits = getMockUsageLimits();
       this.render();
+    }
+    } catch (err) {
+      console.error('[Renderer] Init error:', err);
     }
   }
 
@@ -445,13 +451,18 @@ class App {
       e.stopPropagation();
     });
 
+    agentSelect.addEventListener('change', () => {
+      this.updateDispatchPlaceholder();
+    });
+
     this.updateDispatchTargets();
   }
 
   /**
    * Populate the dispatch dropdown with live sessions (one entry per running
-   * agent chat). Rebuilds only when the session id set changes so polling
-   * never collapses an open dropdown; selection is preserved when possible.
+   * agent chat) plus "new session" entries per agent. Rebuilds only when the
+   * option set changes so polling never collapses an open dropdown; the
+   * current selection is preserved when possible.
    */
   updateDispatchTargets() {
     const select = document.getElementById('dispatch-agent');
@@ -460,41 +471,77 @@ class App {
     if (!select || !input || !btn) return;
 
     const targets = this.sessions.filter(s => DISPATCHABLE_AGENTS.has(s.agent));
-    const fp = targets.map(s => s.id).join('\x1e');
+
+    // Best-known working directory per agent (sessions arrive recency-sorted)
+    const dirByAgent = new Map();
+    for (const s of this.sessions) {
+      if (!dirByAgent.has(s.agent) && s.cwd) {
+        const base = String(s.cwd).split(/[\\/]/).filter(Boolean).pop();
+        if (base) dirByAgent.set(s.agent, base);
+      }
+    }
+
+    const fp = targets.map(s => s.id).join('\x1e') + '\x1f' +
+      DISPATCHABLE_AGENT_LIST.map(a => dirByAgent.get(a) || '').join('\x1e');
 
     if (fp !== this._dispatchFp) {
       const prev = select.value;
       this._dispatchFp = fp;
       select.innerHTML = '';
 
+      const liveGroup = document.createElement('optgroup');
+      liveGroup.label = 'Active sessions';
       if (targets.length === 0) {
         const opt = document.createElement('option');
         opt.value = '';
+        opt.disabled = true;
         opt.textContent = 'No active sessions';
-        select.appendChild(opt);
+        liveGroup.appendChild(opt);
       } else {
         for (const s of targets) {
           const opt = document.createElement('option');
           opt.value = s.id;
           opt.textContent = dispatchLabel(s);
           opt.title = `${s.agent} — ${s.taskName || 'session'}${s.cwd ? `\n${s.cwd}` : ''}`;
-          select.appendChild(opt);
+          liveGroup.appendChild(opt);
         }
-        if (prev && targets.some(s => s.id === prev)) {
-          select.value = prev;
-        }
+      }
+      select.appendChild(liveGroup);
+
+      const newGroup = document.createElement('optgroup');
+      newGroup.label = 'Start new session';
+      for (const agent of DISPATCHABLE_AGENT_LIST) {
+        const opt = document.createElement('option');
+        opt.value = `new:${agent}`;
+        const name = agent === 'Claude Code' ? 'Claude' : agent;
+        const dir = dirByAgent.get(agent);
+        opt.textContent = dir ? `+ New ${name} · ${dir}` : `+ New ${name}`;
+        opt.title = `Start a new ${agent} session${dir ? ` in ${dir}` : ''}`;
+        newGroup.appendChild(opt);
+      }
+      select.appendChild(newGroup);
+
+      const stillThere = Array.from(select.options).some(o => o.value === prev && !o.disabled);
+      if (stillThere) {
+        select.value = prev;
+      } else {
+        select.value = targets.length ? targets[0].id : `new:${DISPATCHABLE_AGENT_LIST[0]}`;
       }
     }
 
-    const disabled = targets.length === 0 || this._dispatching;
+    const disabled = this._dispatching;
     select.disabled = disabled;
     input.disabled = disabled;
     btn.disabled = disabled;
-    if (targets.length === 0) {
-      input.placeholder = 'No active sessions to message';
-    } else {
-      input.placeholder = 'Message this session…';
-    }
+    this.updateDispatchPlaceholder();
+  }
+
+  updateDispatchPlaceholder() {
+    const select = document.getElementById('dispatch-agent');
+    const input = document.getElementById('dispatch-input');
+    if (!select || !input) return;
+    const isNew = (select.value || '').startsWith('new:');
+    input.placeholder = isNew ? 'Prompt for the new session…' : 'Message this session…';
   }
 
   /**
@@ -635,6 +682,7 @@ class App {
   renderNotchBar() {
     const iconsContainer = document.getElementById('notch-agents');
     const statusTextEl = document.getElementById('notch-status-text');
+    const brandEl = document.getElementById('notch-brand');
     const statRunningEl = document.getElementById('stat-running');
     const statDoneEl = document.getElementById('stat-done');
 
@@ -651,6 +699,7 @@ class App {
 
       if (activeSessions.length === 0) {
         iconsContainer.innerHTML = '';
+        if (brandEl) brandEl.hidden = false;
         if (statusTextEl) {
           statusClass(statusTextEl, '');
           statusTextEl.textContent = 'AgentNotch';
@@ -658,6 +707,7 @@ class App {
         }
       } else {
         iconsContainer.innerHTML = activeSessions.map(s => getAgentBarIcon(s)).join('');
+        if (brandEl) brandEl.hidden = true;
 
         if (statusTextEl) {
           const needsAttention = activeSessions.find(s =>
@@ -905,6 +955,25 @@ class App {
         if (sid && window.agentNotch) {
           Promise.resolve(window.agentNotch.jumpToTerminal(sid))
             .catch((err) => this.showToast(`Jump failed: ${err.message || 'main process error'}`, 'error'));
+        }
+      });
+    });
+
+    list.querySelectorAll('.btn-dismiss').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        if (!sid || !window.agentNotch || !window.agentNotch.dismissSession) return;
+        try {
+          const res = await window.agentNotch.dismissSession(sid);
+          if (res && res.success) {
+            if (this.expandedSessionId === sid) this.expandedSessionId = null;
+            this.showToast(res.message || 'Moved to history', 'ok');
+          } else {
+            this.showToast((res && res.message) || 'Could not remove session', 'error');
+          }
+        } catch (err) {
+          this.showToast(`Remove failed: ${err.message || 'main process error'}`, 'error');
         }
       });
     });

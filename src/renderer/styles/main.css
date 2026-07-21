@@ -403,6 +403,16 @@ html, body {
   letter-spacing: -0.01em;
 }
 
+/* Brand mark — idle lockup only; hidden while agents report status */
+.notch-brand {
+  height: 15px;
+  width: auto;
+  opacity: 0.8;
+  margin-right: 7px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 /* Right — Stats + Chevron */
 .notch-bar-right {
   display: flex;
@@ -663,6 +673,15 @@ html, body {
 .empty-icon {
   margin-bottom: var(--space-md);
   animation: emptyFloat 3s ease-in-out infinite;
+}
+
+/* Quiet brand watermark in the empty state */
+.empty-brand {
+  width: 44px;
+  height: auto;
+  opacity: 0.25;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 @keyframes emptyFloat {

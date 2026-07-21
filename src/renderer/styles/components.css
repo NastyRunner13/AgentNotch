@@ -326,6 +326,47 @@
   white-space: nowrap;
 }
 
+/* Dismiss (×) — remove completed/stuck sessions; quiet until hovered */
+.btn-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease,
+              background var(--duration-fast) ease,
+              color var(--duration-fast) ease;
+}
+
+.session-card:hover .btn-dismiss,
+.session-card.expanded .btn-dismiss,
+.btn-dismiss:focus-visible {
+  opacity: 1;
+}
+
+.btn-dismiss:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.btn-dismiss:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.35);
+  color: var(--text-primary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn-dismiss { transition: none; }
+}
+
 /* Status line below name */
 .session-status-line {
   display: flex;
@@ -1535,6 +1576,16 @@
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   font-family: var(--font-mono);
+}
+
+.settings-brand {
+  height: 12px;
+  width: auto;
+  opacity: 0.35;
+  margin-right: 6px;
+  vertical-align: -1px;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 /* ── Reduced motion ───────────────────────────────────── */

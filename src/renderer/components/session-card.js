@@ -606,6 +606,18 @@ export function renderSessionCard(session, index = 0, options = {}) {
        </div>`
     : '';
 
+  // Dismiss (×) — completed sessions go to history; stuck/errored sessions
+  // hide until the watcher reports new activity, then return on their own.
+  const canDismiss = session.status === 'idle' || session.status === 'needs-attention';
+  const dismissTitle = session.status === 'idle'
+    ? 'Remove — move to history'
+    : 'Dismiss — returns if activity resumes';
+  const dismissBtn = canDismiss
+    ? `<button class="btn-dismiss" data-session-id="${escapeHtml(session.id)}" title="${dismissTitle}" aria-label="${dismissTitle}">
+         <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
+       </button>`
+    : '';
+
   const cardClasses = [
     'session-card',
     needsAttention ? 'attention' : '',
@@ -637,6 +649,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
             <span class="session-tag ${agent.class}">${escapeHtml(session.agent)}</span>
             ${session.model ? `<span class="session-model" title="Model">${escapeHtml(formatModelLabel(session.model))}</span>` : ''}
             <span class="session-duration">${escapeHtml(session.durationFormatted)}</span>
+            ${dismissBtn}
           </div>
           <div class="session-status-line">
             <span class="session-status-text ${statusInfo.textClass}">${escapeHtml(statusInfo.text)}</span>
