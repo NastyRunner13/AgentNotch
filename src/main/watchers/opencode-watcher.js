@@ -287,7 +287,7 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
     model,
     tokens,
     cost,
-    cwd: ''
+    cwd: typeof sessionRow.directory === 'string' ? sessionRow.directory : ''
   };
 }
 
@@ -368,7 +368,7 @@ class OpencodeWatcher extends BaseWatcher {
       let sessionRows;
       try {
         sessionRows = db.prepare(
-          'SELECT id, title, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated FROM session WHERE time_updated > ? ORDER BY time_updated DESC LIMIT 50'
+          'SELECT id, title, model, cost, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated, directory FROM session WHERE time_updated > ? ORDER BY time_updated DESC LIMIT 50'
         ).all(cutoff);
       } catch {
         try {

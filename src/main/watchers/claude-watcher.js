@@ -151,8 +151,14 @@ class ClaudeWatcher extends BaseWatcher {
     /** @type {Array<{text:string, at?:number, kind?:string, filePath?:string, tool?:string}>} */
     let timeline = [];
     let model = null;
+    let cwd = null;
 
     for (const entry of entries) {
+      // Claude transcript records carry the session's working directory
+      if (!cwd && typeof entry.cwd === 'string' && entry.cwd) {
+        cwd = entry.cwd;
+      }
+
       const ts = entry.timestamp || entry.created_at;
       let at = null;
       if (ts) {
@@ -319,7 +325,8 @@ class ClaudeWatcher extends BaseWatcher {
       toolCalls: toolCalls.slice(-24),
       activity,
       isActive,
-      model
+      model,
+      cwd
     };
   }
 }

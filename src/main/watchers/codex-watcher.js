@@ -141,9 +141,21 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
   let plan = [];
   let model = null;
   let rateLimit = null;
+  let cwd = null;
+  let sessionMetaId = null;
 
   for (const entry of entries) {
     const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : entry;
+
+    // turn_context records carry the session's working directory;
+    // session_meta carries the native session UUID used by `codex resume`.
+    if (!cwd && typeof payload.cwd === 'string' && payload.cwd) {
+      cwd = payload.cwd;
+    }
+    if (!sessionMetaId && entry.type === 'session_meta' && payload.id) {
+      sessionMetaId = String(payload.id);
+    }
+
     const ts = entry.timestamp || entry.created_at || entry.ts;
     let at = null;
     if (ts) {
@@ -346,7 +358,9 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
     plan,
     isActive,
     model,
-    rateLimit
+    rateLimit,
+    cwd,
+    resumeId: sessionMetaId
   };
 }
 
