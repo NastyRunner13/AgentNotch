@@ -660,9 +660,16 @@ app.whenReady().then(() => {
     return agentManager.clearHistory();
   });
 
-  // Task dispatch
-  ipcMain.handle('dispatch-task', async (_, agent, prompt) => {
-    return agentManager.dispatchTask(agent, prompt);
+  // Task dispatch — targets a live session; the message resumes that session.
+  ipcMain.handle('dispatch-task', async (_, sessionId, prompt) => {
+    validateSessionId(sessionId);
+    if (typeof prompt !== 'string') {
+      throw new Error('Invalid dispatch prompt');
+    }
+    if (prompt.length > 8000) {
+      throw new Error('Dispatch prompt too long (max 8000 chars)');
+    }
+    return agentManager.dispatchTask(sessionId, prompt);
   });
 
   // Re-center on display geometry change

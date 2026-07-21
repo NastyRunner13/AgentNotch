@@ -67,6 +67,6 @@ contextBridge.exposeInMainWorld('agentNotch', {
   getHistory: () => ipcRenderer.invoke('get-history'),
   clearHistory: () => ipcRenderer.invoke('clear-history'),
 
-  // Task dispatch
-  dispatchTask: (agent, prompt) => ipcRenderer.invoke('dispatch-task', agent, prompt)
+  // Task dispatch — sends a message into a live session (continues that chat)
+  dispatchTask: (sessionId, prompt) => ipcRenderer.invoke('dispatch-task', sessionId, prompt)
 });

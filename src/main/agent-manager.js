@@ -2,7 +2,7 @@ const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const chokidar = require('chokidar');
 const { ClaudeWatcher } = require('./watchers/claude-watcher');
 const { CodexWatcher } = require('./watchers/codex-watcher');
@@ -215,13 +215,13 @@ class AgentManager extends EventEmitter {
       const attention = sessions.length
         ? sessions.filter((s) => newly.some((p) => p.notchSessionId === s.id || s.permissionRequest?.requestId === p.id))
         : newly.map((p) => ({
-            id: p.notchSessionId || `claude-pending-${p.id}`,
-            agent: 'Claude Code',
-            taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
-            status: 'permission-request',
-            permissionRequest: permissionBridge.pendingToPermissionRequest(p),
-            remoteApprove: true
-          }));
+          id: p.notchSessionId || `claude-pending-${p.id}`,
+          agent: 'Claude Code',
+          taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
+          status: 'permission-request',
+          permissionRequest: permissionBridge.pendingToPermissionRequest(p),
+          remoteApprove: true
+        }));
       if (attention.length > 0) {
         this.emit('attention', attention);
       }
@@ -632,34 +632,51 @@ class AgentManager extends EventEmitter {
   }
 
   /**
-   * Dispatch a task to an agent CLI without shell interpolation.
+   * Dispatch a message to an already-running session: resume the session's own
+   * native id with its agent CLI in non-interactive mode, so the message lands
+   * in the SAME chat/session (and its transcript) instead of starting a new one.
+   * No terminal window is opened; the watchers pick up the new activity.
+   *
+   * @param {string} sessionId — AgentNotch session id (e.g. `claude-<uuid>`)
+   * @param {string} prompt
    */
-  async dispatchTask(agent, prompt) {
+  async dispatchTask(sessionId, prompt) {
     const text = String(prompt || '').trim();
     if (!text) {
       return { success: false, message: 'Prompt is empty' };
     }
 
-    const cliMap = {
-      'Claude Code': { bin: 'claude', args: [text] },
-      'Codex': { bin: 'codex', args: [text] },
-      'Antigravity': { bin: 'gemini', args: [text] },
-      'Grok': { bin: 'grok', args: [text] },
-      'OpenCode': { bin: 'opencode', args: [text] }
-    };
+    const session = this.getSessions().find(s => s.id === sessionId);
+    if (!session) {
+      return { success: false, message: 'Session not found — it may have already ended.' };
+    }
 
-    const spec = cliMap[agent];
-    if (!spec) {
-      return { success: false, message: `Unknown agent: ${agent}` };
+    const cmd = buildResumeCommand(session, text);
+    if (!cmd) {
+      return {
+        success: false,
+        message: `${session.agent} sessions can't receive dispatched messages.`
+      };
+    }
+    if (!cmd.cwd || !isDirectory(cmd.cwd)) {
+      return {
+        success: false,
+        message: 'Session directory unknown — cannot resume this session yet.'
+      };
     }
 
     try {
-      await spawnInTerminal(spec.bin, spec.args);
-      return { success: true, message: `Dispatched to ${agent}` };
+      await runHeadlessResume(cmd);
+      this._scheduleEmit();
+      return {
+        success: true,
+        message: `Sent to ${session.agent} · ${session.taskName || 'session'}`,
+        sessionId: session.id
+      };
     } catch (err) {
       return {
         success: false,
-        message: err.message || `Failed to launch ${spec.bin}. Is it on PATH?`
+        message: err.message || `Failed to dispatch to ${session.agent}`
       };
     }
   }
@@ -738,71 +755,202 @@ function focusAgentApp(agentName) {
 }
 
 /**
- * Spawn a CLI inside a new terminal window without shell-string interpolation of the prompt.
- * @param {string} bin
- * @param {string[]} args
+ * Agents that support resuming a live session non-interactively.
+ * `prefix` is the AgentNotch session-id prefix; the native resume id is the
+ * remainder (Codex prefers session.resumeId captured from session_meta).
  */
-function spawnInTerminal(bin, args) {
+const DISPATCH_AGENTS = {
+  'Claude Code': {
+    bin: 'claude',
+    prefix: 'claude-',
+    args: (id, text) => ['-p', '--resume', id, text]
+  },
+  'Codex': {
+    bin: 'codex',
+    prefix: 'codex-',
+    args: (id, text) => ['exec', '--skip-git-repo-check', 'resume', id, text]
+  },
+  'Grok': {
+    bin: 'grok',
+    prefix: 'grok-',
+    args: (id, text) => ['-r', id, '-p', text]
+  },
+  'OpenCode': {
+    bin: 'opencode',
+    prefix: 'opencode-',
+    args: (id, text) => ['run', '-s', id, text]
+  }
+};
+
+// Native ids come from on-disk filenames / db ids — keep them argument-safe.
+const NATIVE_ID_RE = /^[a-zA-Z0-9._~%-]{1,220}$/;
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * Build the non-interactive resume command for a live session, or null when
+ * the agent can't receive dispatched messages (Antigravity, Cursor, …).
+ * Pure — exported for tests.
+ *
+ * @param {object} session — live AgentNotch session
+ * @param {string} text    — message to deliver
+ * @returns {{bin:string, args:string[], cwd:string}|null}
+ */
+function buildResumeCommand(session, text) {
+  if (!session || typeof session.id !== 'string') return null;
+  const spec = DISPATCH_AGENTS[session.agent];
+  if (!spec || !session.id.startsWith(spec.prefix)) return null;
+
+  // Codex rollout filenames are `rollout-<ts>-<uuid>`; the resume id is the
+  // UUID — prefer the exact id captured from session_meta when available.
+  let nativeId = session.resumeId || session.id.slice(spec.prefix.length);
+  if (session.agent === 'Codex' && !session.resumeId) {
+    const m = nativeId.match(UUID_RE);
+    if (m) nativeId = m[0];
+  }
+  if (!nativeId || !NATIVE_ID_RE.test(nativeId)) return null;
+
+  const cwd = typeof session.cwd === 'string' ? session.cwd.trim() : '';
+  return { bin: spec.bin, args: spec.args(nativeId, text), cwd };
+}
+
+function isDirectory(p) {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+const DISPATCH_LOG_DIR = path.join(os.tmpdir(), 'agent-notch-dispatch');
+const _resolvedCli = new Map();
+
+/**
+ * Locate a CLI on PATH. On Windows, prefer a real .exe over .cmd shims
+ * (CreateProcess can't exec .cmd directly — those go through cmd.exe).
+ */
+function resolveCli(bin) {
+  if (_resolvedCli.has(bin)) return _resolvedCli.get(bin);
+  let resolved = { file: bin, viaCmd: false };
+
+  if (process.platform === 'win32') {
+    try {
+      const out = execFileSync('where.exe', [bin], {
+        encoding: 'utf8',
+        windowsHide: true,
+        timeout: 5000
+      });
+      const candidates = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      const exe = candidates.find(c => /\.exe$/i.test(c));
+      const cmd = candidates.find(c => /\.(cmd|bat)$/i.test(c));
+      if (exe) {
+        resolved = { file: exe, viaCmd: false };
+      } else if (cmd) {
+        resolved = { file: cmd, viaCmd: true };
+      }
+    } catch {
+      // fall through — spawn will report ENOENT if truly missing
+    }
+  }
+
+  _resolvedCli.set(bin, resolved);
+  return resolved;
+}
+
+function openDispatchLog(bin) {
+  fs.mkdirSync(DISPATCH_LOG_DIR, { recursive: true });
+  pruneDispatchLogs();
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const logPath = path.join(DISPATCH_LOG_DIR, `${stamp}-${bin}.log`);
+  return { logPath, fd: fs.openSync(logPath, 'a') };
+}
+
+function pruneDispatchLogs(keep = 12) {
+  try {
+    const files = fs.readdirSync(DISPATCH_LOG_DIR)
+      .filter(f => f.endsWith('.log'))
+      .sort();
+    for (const f of files.slice(0, Math.max(0, files.length - keep))) {
+      try { fs.unlinkSync(path.join(DISPATCH_LOG_DIR, f)); } catch { /* ignore */ }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function readLogTail(logPath, max = 600) {
+  try {
+    const content = fs.readFileSync(logPath, 'utf8');
+    return content.replace(/\x1b\[[0-9;]*m/g, '').trim().slice(-max);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Spawn the resume command hidden (no terminal window), detached, with output
+ * captured to a log file. Resolves once the process survives a short grace
+ * window; rejects early on spawn failure or a fast non-zero exit (e.g. the
+ * native session id was rejected), including the captured CLI error output.
+ *
+ * @param {{bin:string, args:string[], cwd:string}} cmd
+ */
+function runHeadlessResume(cmd) {
   return new Promise((resolve, reject) => {
-    const platform = process.platform;
+    const cli = resolveCli(cmd.bin);
+    const { logPath, fd } = openDispatchLog(cmd.bin);
 
-    if (platform === 'win32') {
-      // cmd /k keeps window open; pass bin and args as separate argv after /k so
-      // the prompt is not re-parsed as shell metacharacters by our process.
-      // Using `cmd /k` with one argument list: start via spawn of cmd.exe.
-      const quotedArgs = args.map(a => {
-        // Escape for cmd.exe: wrap in quotes, double inner quotes
-        const s = String(a).replace(/"/g, '""');
-        return `"${s}"`;
-      }).join(' ');
-      const line = `${bin} ${quotedArgs}`;
-      const child = spawn('cmd.exe', ['/c', 'start', 'cmd.exe', '/k', line], {
+    const file = cli.viaCmd ? (process.env.ComSpec || 'cmd.exe') : cli.file;
+    const args = cli.viaCmd ? ['/d', '/s', '/c', cli.file, ...cmd.args] : cmd.args;
+
+    let child;
+    let graceTimer = null;
+    try {
+      child = spawn(file, args, {
+        cwd: cmd.cwd,
+        windowsHide: true,
         detached: true,
-        stdio: 'ignore',
-        windowsHide: false
+        stdio: ['ignore', fd, fd]
       });
-      child.on('error', reject);
-      child.unref();
-      // start returns immediately
-      resolve();
+    } catch (err) {
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+      reject(new Error(`Failed to launch ${cmd.bin}: ${err.message}`));
       return;
     }
 
-    if (platform === 'darwin') {
-      // osascript: open Terminal and run command with proper escaping for AppleScript
-      const full = [bin, ...args].map(part => {
-        const s = String(part).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        return `"${s}"`;
-      }).join(' & " " & ');
-      const script = `tell application "Terminal" to do script (${full})`;
-      const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
-      child.on('error', reject);
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`osascript exited ${code}. Is ${bin} installed?`));
-      });
-      child.unref();
-      return;
-    }
+    const settle = (err) => {
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        graceTimer = null;
+      }
+      try { fs.closeSync(fd); } catch { /* ignore */ }
+      if (err) reject(err);
+      else resolve();
+    };
 
-    // Linux: try x-terminal-emulator or gnome-terminal
-    const termArgs = ['-e', bin, ...args];
-    const child = spawn('x-terminal-emulator', termArgs, {
-      detached: true,
-      stdio: 'ignore'
+    child.on('error', (err) => {
+      settle(new Error(`Failed to launch ${cmd.bin} — is it installed and on PATH? (${err.message})`));
     });
-    child.on('error', () => {
-      const g = spawn('gnome-terminal', ['--', bin, ...args], {
-        detached: true,
-        stdio: 'ignore'
-      });
-      g.on('error', reject);
-      g.unref();
-      resolve();
+
+    child.on('exit', (code) => {
+      if (code === 0) {
+        settle();
+      } else {
+        const tail = readLogTail(logPath);
+        settle(new Error(tail || `${cmd.bin} exited with code ${code}`));
+      }
     });
-    child.unref();
-    resolve();
+
+    // Grace window: CLIs reject an unknown session id / auth problem within a
+    // second or two; a still-running process after that means the message was
+    // accepted and the agent is now working on it.
+    graceTimer = setTimeout(() => {
+      graceTimer = null;
+      child.removeAllListeners('exit');
+      child.removeAllListeners('error');
+      child.unref();
+      settle();
+    }, 4000);
   });
 }
 
-module.exports = { AgentManager };
+module.exports = { AgentManager, buildResumeCommand };
