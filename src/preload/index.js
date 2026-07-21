@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('agentNotch', {
   denyPermission: (sessionId) => ipcRenderer.invoke('deny-permission', sessionId),
   answerQuestion: (sessionId, answer) => ipcRenderer.invoke('answer-question', sessionId, answer),
   jumpToTerminal: (sessionId) => ipcRenderer.invoke('jump-to-terminal', sessionId),
+  dismissSession: (sessionId) => ipcRenderer.invoke('dismiss-session', sessionId),
 
   // Claude remote approve (PermissionRequest hook)
   installClaudePermissionHook: () => ipcRenderer.invoke('install-claude-permission-hook'),

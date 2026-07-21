@@ -152,6 +152,11 @@ class ClaudeWatcher extends BaseWatcher {
     let timeline = [];
     let model = null;
     let cwd = null;
+    // Cumulative token usage summed from message.usage (Anthropic per-turn
+    // shape). Deduped by message id — streaming writes repeat the same
+    // message across lines and must not double count.
+    const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
+    const seenUsageIds = new Set();
 
     for (const entry of entries) {
       // Claude transcript records carry the session's working directory
@@ -194,6 +199,17 @@ class ClaudeWatcher extends BaseWatcher {
       if (type === 'assistant' && entry.message) {
         if (typeof entry.message.model === 'string' && entry.message.model) {
           model = entry.message.model;
+        }
+        const usage = entry.message.usage;
+        if (usage && typeof usage === 'object') {
+          const msgId = typeof entry.message.id === 'string' ? entry.message.id : null;
+          if (!msgId || !seenUsageIds.has(msgId)) {
+            if (msgId) seenUsageIds.add(msgId);
+            tokens.input += Number(usage.input_tokens) || 0;
+            tokens.output += Number(usage.output_tokens) || 0;
+            tokens.cacheRead += Number(usage.cache_read_input_tokens) || 0;
+            tokens.cacheWrite += Number(usage.cache_creation_input_tokens) || 0;
+          }
         }
         if (Array.isArray(entry.message.content)) {
           for (const block of entry.message.content) {

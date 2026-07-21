@@ -1,7 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, shell, globalShortcut, Notification } = require('electron');
 const path = require('path');
 const { createTray, updateTrayIcon } = require('./tray');
-const { AgentManager } = require('./agent-manager');
+const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
 const { installConsoleCapture, closeLogger } = require('./logger');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
@@ -155,6 +155,10 @@ function createWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
+    console.log(`[Renderer] [${level}] ${message} (at ${path.basename(sourceId)}:${line})`);
+  });
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -589,6 +593,11 @@ app.whenReady().then(() => {
     return agentManager.jumpToTerminal(sessionId);
   });
 
+  ipcMain.handle('dismiss-session', async (_, sessionId) => {
+    validateSessionId(sessionId);
+    return agentManager.dismissSession(sessionId);
+  });
+
   ipcMain.handle('install-claude-permission-hook', () => {
     return agentManager.installClaudePermissionHook();
   });
@@ -660,9 +669,17 @@ app.whenReady().then(() => {
     return agentManager.clearHistory();
   });
 
-  // Task dispatch — targets a live session; the message resumes that session.
+  // Task dispatch — targets a live session (resumes that chat) or starts a
+  // new session via `new:<Agent>` targets.
   ipcMain.handle('dispatch-task', async (_, sessionId, prompt) => {
-    validateSessionId(sessionId);
+    if (typeof sessionId === 'string' && sessionId.startsWith('new:')) {
+      const agentName = sessionId.slice(4);
+      if (!DISPATCH_AGENT_NAMES.includes(agentName)) {
+        throw new Error(`Invalid dispatch agent: ${agentName.slice(0, 40)}`);
+      }
+    } else {
+      validateSessionId(sessionId);
+    }
     if (typeof prompt !== 'string') {
       throw new Error('Invalid dispatch prompt');
     }

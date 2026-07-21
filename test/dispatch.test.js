@@ -1,6 +1,7 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
-const { buildResumeCommand } = require('../src/main/agent-manager');
+const os = require('os');
+const { buildResumeCommand, buildNewSessionCommand, DISPATCH_AGENT_NAMES } = require('../src/main/agent-manager');
 const { analyzeClaudeEntries } = require('../src/main/watchers/claude-watcher');
 const { analyzeCodexEntries } = require('../src/main/watchers/codex-watcher');
 const { analyzeOpencodeSession } = require('../src/main/watchers/opencode-watcher');
@@ -93,6 +94,35 @@ describe('buildResumeCommand', () => {
   it('returns an empty cwd when the session directory is unknown', () => {
     const cmd = buildResumeCommand({ id: `claude-${UUID}`, agent: 'Claude Code' }, 'hi');
     assert.equal(cmd.cwd, '');
+  });
+});
+
+describe('buildNewSessionCommand', () => {
+  it('builds headless new-session commands for every dispatchable agent', () => {
+    assert.equal(DISPATCH_AGENT_NAMES.length, 4);
+
+    const claude = buildNewSessionCommand('Claude Code', 'hello world', 'C:\\dev\\proj');
+    assert.deepEqual(claude, { bin: 'claude', args: ['-p', 'hello world'], cwd: 'C:\\dev\\proj' });
+
+    const codex = buildNewSessionCommand('Codex', 'hello', '/tmp/proj');
+    assert.deepEqual(codex, { bin: 'codex', args: ['exec', '--skip-git-repo-check', 'hello'], cwd: '/tmp/proj' });
+
+    const grok = buildNewSessionCommand('Grok', 'hello', '/tmp/proj');
+    assert.deepEqual(grok, { bin: 'grok', args: ['-p', 'hello'], cwd: '/tmp/proj' });
+
+    const opencode = buildNewSessionCommand('OpenCode', 'hello', '/tmp/proj');
+    assert.deepEqual(opencode, { bin: 'opencode', args: ['run', 'hello'], cwd: '/tmp/proj' });
+  });
+
+  it('returns null for unknown agents', () => {
+    assert.equal(buildNewSessionCommand('Antigravity', 'hi', '/tmp'), null);
+    assert.equal(buildNewSessionCommand('Cursor', 'hi', '/tmp'), null);
+    assert.equal(buildNewSessionCommand('Nope', 'hi', '/tmp'), null);
+  });
+
+  it('falls back to the home directory when no cwd is given', () => {
+    const cmd = buildNewSessionCommand('Grok', 'hi', '');
+    assert.equal(cmd.cwd, os.homedir());
   });
 });
 

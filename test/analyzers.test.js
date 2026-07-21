@@ -392,6 +392,64 @@ describe('Grok events analyzer', () => {
     });
     assert.equal(fromEvents.status, 'idle');
   });
+
+  it('settles a stuck needs-attention session to idle when files go stale', () => {
+    const merged = mergeGrokStatus({
+      eventState: {
+        status: 'needs-attention',
+        currentTool: null,
+        turnComplete: true
+      },
+      updateState: {
+        status: 'idle',
+        currentTool: null,
+        turnComplete: true,
+        permissionRequest: null
+      },
+      isActive: false
+    });
+    assert.equal(merged.status, 'idle');
+    assert.equal(merged.currentTool, null);
+    assert.equal(merged.permissionRequest, null);
+  });
+
+  it('keeps needs-attention while the session files are still fresh', () => {
+    const merged = mergeGrokStatus({
+      eventState: {
+        status: 'needs-attention',
+        currentTool: null,
+        turnComplete: true
+      },
+      updateState: {
+        status: 'idle',
+        currentTool: null,
+        turnComplete: true,
+        permissionRequest: null
+      },
+      isActive: true
+    });
+    assert.equal(merged.status, 'needs-attention');
+  });
+
+  it('settles a stale waiting-for-model (working) session to idle', () => {
+    const merged = mergeGrokStatus({
+      eventState: {
+        status: 'working',
+        currentTool: 'Waiting for model…',
+        phaseLabel: 'Waiting for model…',
+        turnComplete: false
+      },
+      updateState: {
+        status: 'working',
+        currentTool: null,
+        turnComplete: false,
+        permissionRequest: null
+      },
+      isActive: false
+    });
+    assert.equal(merged.status, 'idle');
+    assert.equal(merged.currentTool, null);
+  });
 });
 
 describe('Antigravity analyzer', () => {

@@ -88,6 +88,8 @@ class AgentManager extends EventEmitter {
     this._historyPath = path.join(os.homedir(), '.agent-notch', 'history.json');
     this._history = [];
     this._archivedIds = new Set();
+    /** @type {Map<string, number>} dismissed non-idle sessions: id → lastTime snapshot at dismiss time */
+    this._dismissed = new Map();
     this._loadHistory();
 
     this._emitTimer = null;
@@ -310,10 +312,38 @@ class AgentManager extends EventEmitter {
 
   getSessions() {
     const all = [];
+    const seenIds = new Set();
     for (const watcher of Object.values(this.watchers)) {
-      all.push(...watcher.getSessions().filter(session =>
-        session.status !== 'idle' || !this._archivedIds.has(session.id)
-      ));
+      for (const session of watcher.getSessions()) {
+        seenIds.add(session.id);
+
+        // Dismissed sessions stay hidden until the watcher reports activity
+        // newer than the dismiss-time snapshot — then the session returns.
+        if (this._dismissed.has(session.id)) {
+          const marker = this._dismissed.get(session.id);
+          const current = session.lastTime || session.lastActivityAt || 0;
+          if (current > marker) {
+            this._reviveSession(session.id);
+            all.push(session);
+          }
+          continue;
+        }
+
+        if (this._archivedIds.has(session.id)) {
+          // Archived sessions are hidden while idle; new work revives them.
+          if (session.status === 'idle') continue;
+          this._archivedIds.delete(session.id);
+        }
+
+        all.push(session);
+      }
+    }
+
+    // Drop dismiss markers for sessions no watcher tracks anymore
+    if (this._dismissed.size) {
+      for (const id of [...this._dismissed.keys()]) {
+        if (!seenIds.has(id)) this._clearDismissMarker(id);
+      }
     }
 
     // Merge Claude PermissionRequest hook pendings (true remote approve)
@@ -430,6 +460,9 @@ class AgentManager extends EventEmitter {
         // Track archived IDs to avoid duplicates
         for (const entry of this._history) {
           this._archivedIds.add(entry.id);
+          if (Number.isFinite(entry.dismissedMarker)) {
+            this._dismissed.set(entry.id, entry.dismissedMarker);
+          }
         }
       }
     } catch (err) {
@@ -471,7 +504,7 @@ class AgentManager extends EventEmitter {
     if (this._archivedIds.has(session.id)) return;
 
     this._archivedIds.add(session.id);
-    this._history.push({
+    const snapshot = {
       id: session.id,
       agent: session.agent,
       taskName: session.taskName,
@@ -488,7 +521,18 @@ class AgentManager extends EventEmitter {
       plan: session.plan || [],
       cwd: session.cwd || null,
       archivedAt: Date.now()
-    });
+    };
+
+    // A session archived before (then revived) updates its entry instead of
+    // duplicating it — history stays unique per session id.
+    const existingIdx = this._history.findIndex(h => h.id === session.id);
+    if (existingIdx !== -1) {
+      const marker = this._history[existingIdx].dismissedMarker;
+      this._history[existingIdx] = snapshot;
+      if (marker !== undefined) this._history[existingIdx].dismissedMarker = marker;
+    } else {
+      this._history.push(snapshot);
+    }
 
     this._saveHistory();
     this._scheduleEmit();
@@ -502,8 +546,62 @@ class AgentManager extends EventEmitter {
   clearHistory() {
     this._history = [];
     this._archivedIds.clear();
+    this._dismissed.clear();
     this._saveHistory();
     return { success: true };
+  }
+
+  // ── Dismiss ────────────────────────────────────────
+
+  /**
+   * Remove a session from the notch: snapshot it into history and hide it.
+   * Idle sessions stay hidden once archived. Stuck / needs-attention sessions
+   * stay hidden until the watcher reports NEW activity (new file writes) —
+   * then the session returns to the window on its own.
+   */
+  dismissSession(sessionId) {
+    const session = this.getSessions().find(s => s.id === sessionId);
+    if (!session) {
+      return { success: false, message: 'Session not found' };
+    }
+
+    const wasIdle = session.status === 'idle';
+    const marker = session.lastTime || session.lastActivityAt || Date.now();
+    this._archiveSession(session);
+
+    if (!wasIdle) {
+      const m = Number.isFinite(marker) ? marker : Date.now();
+      this._dismissed.set(session.id, m);
+      const entry = this._history.find(h => h.id === session.id);
+      if (entry) {
+        entry.dismissedMarker = m;
+        this._saveHistory();
+      }
+    }
+
+    this._scheduleEmit();
+    return {
+      success: true,
+      message: wasIdle
+        ? 'Moved to history'
+        : 'Session hidden — it returns if activity resumes'
+    };
+  }
+
+  /** Bring a dismissed session back: clear its marker and archived flag. */
+  _reviveSession(id) {
+    this._archivedIds.delete(id);
+    this._clearDismissMarker(id);
+  }
+
+  /** Remove the dismiss marker from the map and the persisted history entry. */
+  _clearDismissMarker(id) {
+    this._dismissed.delete(id);
+    const entry = this._history.find(h => h.id === id);
+    if (entry && entry.dismissedMarker !== undefined) {
+      delete entry.dismissedMarker;
+      this._saveHistory();
+    }
   }
 
   // ── Actions ────────────────────────────────────────
@@ -646,6 +744,11 @@ class AgentManager extends EventEmitter {
       return { success: false, message: 'Prompt is empty' };
     }
 
+    // `new:<Agent>` targets start a brand-new session instead of resuming one
+    if (typeof sessionId === 'string' && sessionId.startsWith(NEW_TARGET_PREFIX)) {
+      return this._dispatchNewSession(sessionId.slice(NEW_TARGET_PREFIX.length), text);
+    }
+
     const session = this.getSessions().find(s => s.id === sessionId);
     if (!session) {
       return { success: false, message: 'Session not found — it may have already ended.' };
@@ -679,6 +782,55 @@ class AgentManager extends EventEmitter {
         message: err.message || `Failed to dispatch to ${session.agent}`
       };
     }
+  }
+
+  /**
+   * Start a brand-new headless session for an agent, in the directory that
+   * agent most recently worked in. The new session shows up in the notch via
+   * the watchers, so the chat can be continued from the dispatch bar.
+   */
+  async _dispatchNewSession(agentName, text) {
+    const cmd = buildNewSessionCommand(agentName, text, this._resolveNewSessionCwd(agentName));
+    if (!cmd) {
+      return { success: false, message: `Cannot start new ${agentName} sessions from the notch.` };
+    }
+
+    try {
+      await runHeadlessResume(cmd);
+      this._scheduleEmit();
+      return {
+        success: true,
+        message: `New ${agentName} session started in ${cmd.cwd}`
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: err.message || `Failed to start ${agentName}`
+      };
+    }
+  }
+
+  /**
+   * Best-guess working directory for a new session: the directory the agent
+   * used most recently (live sessions first, then history), else any known
+   * session directory, else the user's home.
+   */
+  _resolveNewSessionCwd(agentName) {
+    const live = this.getSessions();
+    const fromLiveAgent = live.find(s => s.agent === agentName && isDirectory(s.cwd || ''));
+    if (fromLiveAgent) return fromLiveAgent.cwd;
+
+    const history = this.getHistory();
+    const fromHistoryAgent = history.find(h => h.agent === agentName && isDirectory(h.cwd || ''));
+    if (fromHistoryAgent) return fromHistoryAgent.cwd;
+
+    const fromLiveAny = live.find(s => isDirectory(s.cwd || ''));
+    if (fromLiveAny) return fromLiveAny.cwd;
+
+    const fromHistoryAny = history.find(h => isDirectory(h.cwd || ''));
+    if (fromHistoryAny) return fromHistoryAny.cwd;
+
+    return os.homedir();
   }
 }
 
@@ -755,7 +907,8 @@ function focusAgentApp(agentName) {
 }
 
 /**
- * Agents that support resuming a live session non-interactively.
+ * Agents that support headless dispatch: resuming a live session
+ * non-interactively (`args`) or starting a brand-new session (`newArgs`).
  * `prefix` is the AgentNotch session-id prefix; the native resume id is the
  * remainder (Codex prefers session.resumeId captured from session_meta).
  */
@@ -763,24 +916,33 @@ const DISPATCH_AGENTS = {
   'Claude Code': {
     bin: 'claude',
     prefix: 'claude-',
-    args: (id, text) => ['-p', '--resume', id, text]
+    args: (id, text) => ['-p', '--resume', id, text],
+    newArgs: (text) => ['-p', text]
   },
   'Codex': {
     bin: 'codex',
     prefix: 'codex-',
-    args: (id, text) => ['exec', '--skip-git-repo-check', 'resume', id, text]
+    args: (id, text) => ['exec', '--skip-git-repo-check', 'resume', id, text],
+    newArgs: (text) => ['exec', '--skip-git-repo-check', text]
   },
   'Grok': {
     bin: 'grok',
     prefix: 'grok-',
-    args: (id, text) => ['-r', id, '-p', text]
+    args: (id, text) => ['-r', id, '-p', text],
+    newArgs: (text) => ['-p', text]
   },
   'OpenCode': {
     bin: 'opencode',
     prefix: 'opencode-',
-    args: (id, text) => ['run', '-s', id, text]
+    args: (id, text) => ['run', '-s', id, text],
+    newArgs: (text) => ['run', text]
   }
 };
+
+const DISPATCH_AGENT_NAMES = Object.freeze(Object.keys(DISPATCH_AGENTS));
+
+/** Prefix for dispatch targets that mean "start a new session for this agent". */
+const NEW_TARGET_PREFIX = 'new:';
 
 // Native ids come from on-disk filenames / db ids — keep them argument-safe.
 const NATIVE_ID_RE = /^[a-zA-Z0-9._~%-]{1,220}$/;
@@ -811,6 +973,22 @@ function buildResumeCommand(session, text) {
 
   const cwd = typeof session.cwd === 'string' ? session.cwd.trim() : '';
   return { bin: spec.bin, args: spec.args(nativeId, text), cwd };
+}
+
+/**
+ * Build the headless command that starts a brand-new session for an agent.
+ * Pure — exported for tests.
+ *
+ * @param {string} agentName
+ * @param {string} text — first prompt of the new session
+ * @param {string} cwd  — working directory to start in
+ * @returns {{bin:string, args:string[], cwd:string}|null}
+ */
+function buildNewSessionCommand(agentName, text, cwd) {
+  const spec = DISPATCH_AGENTS[agentName];
+  if (!spec) return null;
+  const dir = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : os.homedir();
+  return { bin: spec.bin, args: spec.newArgs(text), cwd: dir };
 }
 
 function isDirectory(p) {
@@ -953,4 +1131,4 @@ function runHeadlessResume(cmd) {
   });
 }
 
-module.exports = { AgentManager, buildResumeCommand };
+module.exports = { AgentManager, buildResumeCommand, buildNewSessionCommand, DISPATCH_AGENT_NAMES };
