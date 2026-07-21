@@ -45,7 +45,7 @@ One strip. Every agent. No tab-switching.
 
 **Usage Limits** — Real-time, local-only metric strips for resource usage (Grok weekly credits, Codex usage %) displayed inline.
 
-**CLI Task Dispatch** — Submit tasks to agent CLIs directly from the expanded notch input field.
+**Session Dispatch** — Message any running agent session directly from the expanded notch: pick a live session and the prompt resumes that exact chat headlessly (no new windows), or start a new headless session for an agent in its most recent project directory. Watch progress live on the session card.
 
 **Settings & History** — Per-agent watcher toggles, notification sounds, desktop banners, autostart, and locally-archived session history under `~/.agent-notch/history.json`.
 
