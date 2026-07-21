@@ -112,17 +112,16 @@
   animation: sessionLaserHue 3.2s linear infinite;
 }
 
-/* Second pass along the bottom edge, slightly delayed / reverse feel */
-.session-card.is-working::after {
-  content: '';
+/* Second pass along the bottom edge, slightly delayed / reverse feel.
+   Real element (not ::after) so renderSessionCard can set a phase-synced
+   inline animation-delay that survives poll-driven list rebuilds. */
+.session-laser-edge {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
   height: 2px;
   pointer-events: none;
-  z-index: 1;
-  border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: linear-gradient(
     90deg,
     transparent 0%,
@@ -727,6 +726,63 @@
 .activity-row.activity-thinking .activity-md .md-li {
   font-style: italic;
   color: var(--text-secondary);
+}
+
+/* ── Foldable long rows: collapsed shows ~3 lines with a quiet fade ── */
+.activity-row.activity-folded .activity-text {
+  max-height: 4.5em; /* ~3 lines of prose (line-height 1.5) */
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 50%, transparent 96%);
+  mask-image: linear-gradient(to bottom, #000 50%, transparent 96%);
+}
+
+.activity-row.activity-folded:not(.activity-prose) .activity-text {
+  max-height: 4.05em; /* ~3 lines of mono (line-height 1.35) */
+}
+
+/* Open fold: full text — the feed's own scrollbar handles the length */
+.activity-row.activity-fold-open .activity-text {
+  max-height: none;
+  overflow: visible;
+}
+
+/* Show more / less — quiet mono toggle pinned under the text column */
+.activity-toggle {
+  grid-column: 2;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 1px;
+  padding: 2px 6px 2px 3px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  user-select: none;
+  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.activity-toggle:hover {
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.activity-toggle:focus-visible {
+  outline: 1px solid var(--color-working);
+  outline-offset: 1px;
+}
+
+.activity-toggle svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.activity-row.activity-fold-open .activity-toggle svg {
+  transform: rotate(180deg);
 }
 
 /* Timestamps stay out of the way: visible on row hover, always on the last row */
@@ -1486,7 +1542,9 @@
   .session-card,
   .session-detail,
   .history-detail,
-  .history-entry {
+  .history-entry,
+  .activity-toggle,
+  .activity-toggle svg {
     animation: none !important;
     transition-duration: 0.01ms !important;
   }
@@ -1495,7 +1553,7 @@
   .activity-phase-dot,
   .session-laser-beam,
   .session-laser-glow,
-  .session-card.is-working::after {
+  .session-laser-edge {
     animation: none !important;
   }
 
@@ -1523,7 +1581,7 @@
     box-shadow: none;
   }
 
-  .session-card.is-working::after {
+  .session-card.is-working .session-laser-edge {
     background-size: 100% 100%;
     opacity: 0.55;
     filter: none;

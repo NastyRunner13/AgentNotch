@@ -333,7 +333,20 @@ function formatActivityText(update) {
   return text;
 }
 
-function renderActivity(session) {
+/** Rows longer than this collapse behind a "Show more" fold by default. */
+const FOLD_MIN_CHARS = 260;
+
+/**
+ * Stable identity for an activity event across poll-driven re-renders.
+ * Watchers grow a streaming event by appending text, so the first chars
+ * (not the tail or timestamp) are the stable part of a long entry.
+ */
+function activityFoldKey(sessionId, kind, text) {
+  const head = String(text).replace(/\s+/g, ' ').trim().slice(0, 40);
+  return `${sessionId}|${kind}|${head}`;
+}
+
+function renderActivity(session, expandedKeys) {
   const updates = Array.isArray(session.activity) ? session.activity : [];
   const fallback = [];
 
@@ -422,10 +435,27 @@ function renderActivity(session) {
       ? renderMarkdownLite(text)
       : escapeHtml(text).replace(/\n/g, '<br>');
 
-    return `<div class="activity-row${kindClass}${proseClass}${liveClass}" title="${title}">
+    // Long harness output (thinking / replies / terminal dumps) folds by
+    // default: first ~3 lines visible, "Show more" reveals the full text.
+    const newlineCount = (text.match(/\n/g) || []).length;
+    const needsFold = text.length > FOLD_MIN_CHARS || newlineCount >= 4;
+    let foldClass = '';
+    let foldToggle = '';
+    if (needsFold) {
+      const foldKey = activityFoldKey(session.id, kind, text);
+      const isOpen = Boolean(expandedKeys && expandedKeys.has(foldKey));
+      foldClass = isOpen ? ' activity-fold-open' : ' activity-folded';
+      foldToggle = `<button class="activity-toggle" type="button" data-fold-key="${escapeHtml(foldKey)}" aria-expanded="${isOpen}">
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
+        <span class="activity-toggle-label">${isOpen ? 'Show less' : 'Show more'}</span>
+      </button>`;
+    }
+
+    return `<div class="activity-row${kindClass}${proseClass}${liveClass}${foldClass}" title="${title}">
       ${marker}
       <div class="activity-text${isProse ? ' activity-md' : ''}">${htmlText}</div>
       <time class="activity-time" title="${escapeHtml(formatClock(at))}">${escapeHtml(formatRelativeTime(at))}</time>
+      ${foldToggle}
     </div>`;
   }).join('');
 
@@ -487,7 +517,9 @@ export function getAgentBarIcon(session) {
 /**
  * @param {object} session
  * @param {number} [index]
- * @param {{ animateIn?: boolean }} [options] animateIn only for brand-new cards (avoids poll flicker)
+ * @param {{ animateIn?: boolean, expandedActivity?: Set<string> }} [options]
+ *   animateIn only for brand-new cards (avoids poll flicker);
+ *   expandedActivity holds fold keys of long activity rows the user opened.
  */
 export function renderSessionCard(session, index = 0, options = {}) {
   const agent = AGENT_COLORS[session.agent] || { main: '#60A5FA', class: 'agent-claude' };
@@ -514,7 +546,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
     }
   }
 
-  detailContent += renderActivity(session);
+  detailContent += renderActivity(session, options.expandedActivity);
   detailContent += renderPlan(session.plan);
 
   // Recent tools only when the live feed is empty (feed already shows tools)
@@ -561,11 +593,16 @@ export function renderSessionCard(session, index = 0, options = {}) {
          </span>`
       : '';
 
-  // Multicolor laser that sweeps active (working) session windows
+  // Multicolor laser that sweeps active (working) session windows.
+  // Poll-driven list rebuilds recreate these nodes, which would restart the
+  // CSS animations from 0% and freeze the sweep at the left edge. Negative
+  // animation-delay keyed to wall-clock time keeps the phase continuous.
+  const now = Date.now();
   const sessionLaser = isWorking
     ? `<div class="session-laser" aria-hidden="true">
-         <span class="session-laser-beam"></span>
-         <span class="session-laser-glow"></span>
+         <span class="session-laser-beam" style="animation-delay: -${now % 2400}ms"></span>
+         <span class="session-laser-glow" style="animation-delay: -${now % 3200}ms"></span>
+         <span class="session-laser-edge" style="animation-delay: -${now % 2800}ms"></span>
        </div>`
     : '';
 
