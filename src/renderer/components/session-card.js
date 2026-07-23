@@ -135,12 +135,35 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;');
 }
 
+function splitTableRow(line) {
+  let trimmed = String(line || '').trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
+  return trimmed.split('|').map(c => c.trim());
+}
+
+function formatCellMarkdown(cell) {
+  if (!cell) return '';
+  let s = cell;
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/__([^_\n]+)__/g, '<strong>$1</strong>');
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  s = s.replace(/(^|[^_])_([^_\n]+)_(?!_)/g, '$1<em>$2</em>');
+  s = s.replace(/`([^`\n]+)`/g, '<code class="md-inline">$1</code>');
+  return s;
+}
+
+function isTableSeparator(line) {
+  const trimmed = String(line || '').trim();
+  return /^\|?\s*:?-{1,}:?\s*(?:\|\s*:?-{1,}:?\s*)+\|?\s*$/.test(trimmed);
+}
+
 /**
  * Lightweight, safe markdown for agent thinking / replies in the live feed.
  * Escapes HTML first, then applies a small subset agents commonly emit.
- * Supports: fenced code, inline code, headings, bold/italic, lists, paragraphs.
+ * Supports: fenced code, tables, inline code, headings, bold/italic, lists, paragraphs.
  */
-function renderMarkdownLite(src) {
+export function renderMarkdownLite(src) {
   let text = String(src || '').replace(/\r\n/g, '\n').trim();
   if (!text) return '';
 
@@ -156,6 +179,65 @@ function renderMarkdownLite(src) {
   });
 
   text = escapeHtml(text);
+
+  // Extract Markdown tables (after escape so content structure is safe)
+  /** @type {Array<string>} */
+  const tables = [];
+  const lines = text.split('\n');
+  const processedLines = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const currentLine = lines[i];
+    const nextLine = lines[i + 1];
+
+    if (
+      currentLine &&
+      currentLine.includes('|') &&
+      nextLine &&
+      isTableSeparator(nextLine)
+    ) {
+      const headerCells = splitTableRow(currentLine);
+      const sepCells = splitTableRow(nextLine);
+      const alignments = sepCells.map(c => {
+        if (c.startsWith(':') && c.endsWith(':')) return 'center';
+        if (c.endsWith(':')) return 'right';
+        if (c.startsWith(':')) return 'left';
+        return '';
+      });
+
+      const bodyRows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|') && lines[j].trim() !== '') {
+        bodyRows.push(splitTableRow(lines[j]));
+        j++;
+      }
+      i = j - 1;
+
+      let tableHtml = '<div class="md-table-wrapper"><table class="md-table"><thead><tr>';
+      headerCells.forEach((cell, idx) => {
+        const align = alignments[idx] ? ` style="text-align:${alignments[idx]}"` : '';
+        tableHtml += `<th${align}>${formatCellMarkdown(cell)}</th>`;
+      });
+      tableHtml += '</tr></thead><tbody>';
+      bodyRows.forEach(row => {
+        tableHtml += '<tr>';
+        for (let colIdx = 0; colIdx < headerCells.length; colIdx++) {
+          const cell = row[colIdx] !== undefined ? row[colIdx] : '';
+          const align = alignments[colIdx] ? ` style="text-align:${alignments[colIdx]}"` : '';
+          tableHtml += `<td${align}>${formatCellMarkdown(cell)}</td>`;
+        }
+        tableHtml += '</tr>';
+      });
+      tableHtml += '</tbody></table></div>';
+
+      const tableIdx = tables.length;
+      tables.push(tableHtml);
+      processedLines.push(`\n\n\u0000TABLE${tableIdx}\u0000\n\n`);
+    } else {
+      processedLines.push(currentLine);
+    }
+  }
+  text = processedLines.join('\n');
 
   // Headings (after escape so content is safe)
   text = text.replace(/^#{6}\s+(.+)$/gm, '<div class="md-h md-h6">$1</div>');
@@ -197,7 +279,8 @@ function renderMarkdownLite(src) {
       p.startsWith('<pre') ||
       p.startsWith('<div class="md-h') ||
       p.startsWith('<div class="md-li') ||
-      p.startsWith('<hr')
+      p.startsWith('<hr') ||
+      p.startsWith('\u0000TABLE')
     ) {
       // Multi-li groups: join consecutive list items already split? keep as-is
       return p.replace(/\n(?!<)/g, '\n');
@@ -212,6 +295,11 @@ function renderMarkdownLite(src) {
     /((?:<div class="md-li[^"]*">[\s\S]*?<\/div>\n?)+)/g,
     (block) => `<div class="md-list">${block}</div>`
   );
+
+  // Restore Markdown tables
+  html = html.replace(/\u0000TABLE(\d+)\u0000/g, (_, idx) => {
+    return tables[Number(idx)] || '';
+  });
 
   return html;
 }

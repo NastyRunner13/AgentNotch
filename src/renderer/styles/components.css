@@ -719,6 +719,59 @@
   color: var(--text-secondary);
 }
 
+.activity-md .md-table-wrapper {
+  margin: 6px 0;
+  width: 100%;
+  overflow-x: auto;
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-card, #151515);
+}
+
+.activity-md .md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  line-height: 1.4;
+  text-align: left;
+}
+
+.activity-md .md-table th,
+.activity-md .md-table td {
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--border-subtle);
+  border-right: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  word-break: normal;
+}
+
+.activity-md .md-table th:last-child,
+.activity-md .md-table td:last-child {
+  border-right: none;
+}
+
+.activity-md .md-table th {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+
+.activity-md .md-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.activity-md .md-table tbody tr:nth-child(even) {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.activity-md .md-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .activity-md .md-inline {
   font-family: var(--font-mono);
   font-size: 10.5px;
