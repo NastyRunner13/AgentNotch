@@ -1,5 +1,6 @@
 import { renderSessionCard, getAgentBarIcon } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
+import { renderUsageView, usageFingerprint } from './components/usage-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
 /** Agents whose sessions can receive dispatched messages (mirror of main process). */
@@ -25,6 +26,12 @@ class App {
     this.sessions = [];
     this.history = [];
     this.usageLimits = [];
+    /** Usage dashboard data + selected range (days) + burn chart metric */
+    this.usageStats = null;
+    this.usageRange = 7;
+    this.usageChartMode = 'tokens';
+    this._usageStatsFetchedAt = 0;
+    this._lastUsageViewFp = '\x00init';
     this.currentView = 'sessions';
     this.isExpanded = false;
     this.isAutoHidden = false;
@@ -129,6 +136,7 @@ class App {
           sessions.filter(s => ATTENTION.includes(s.status)).map(s => s.id)
         );
         this._prevAttentionIds = currentAttentionIds;
+        this._maybeRefreshUsageStats();
         this.render();
       });
 
@@ -365,6 +373,8 @@ class App {
 
     if (viewName === 'history') {
       this.loadHistory();
+    } else if (viewName === 'usage') {
+      this.loadUsageStats();
     } else {
       this.render();
     }
@@ -382,6 +392,67 @@ class App {
       this.history = getMockHistory();
     }
     this.render();
+  }
+
+  async loadUsageStats() {
+    if (window.agentNotch && window.agentNotch.getUsageStats) {
+      try {
+        this.usageStats = await window.agentNotch.getUsageStats();
+        this._usageStatsFetchedAt = Date.now();
+      } catch (err) {
+        this.usageStats = this.usageStats || { updatedAt: Date.now(), buckets: [], sessionTime: [] };
+        this.showToast(`Failed to load usage: ${err.message}`, 'error');
+      }
+    } else {
+      // Dev mode fallback
+      this.usageStats = getMockUsageStats();
+      this._usageStatsFetchedAt = Date.now();
+    }
+    this.render();
+  }
+
+  /**
+   * Throttled refresh while the usage view is open — piggybacks on the
+   * sessions poll so the dashboard tracks live token burn without a
+   * dedicated push channel.
+   */
+  _maybeRefreshUsageStats() {
+    if (this.currentView !== 'usage') return;
+    if (Date.now() - this._usageStatsFetchedAt < 15000) return;
+    this.loadUsageStats();
+  }
+
+  renderUsageDashboard() {
+    const container = document.getElementById('usage-list');
+    if (!container) return;
+
+    const stats = this.usageStats || { updatedAt: 0, buckets: [], sessionTime: [] };
+    const fp = usageFingerprint(stats, this.usageRange, this.usageChartMode);
+    if (fp === this._lastUsageViewFp && container.dataset.bound === '1') return;
+    this._lastUsageViewFp = fp;
+    container.dataset.bound = '1';
+
+    container.innerHTML = renderUsageView(stats, this.usageRange, this.usageChartMode);
+
+    container.querySelectorAll('.usage-range-btn[data-range]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const days = parseInt(btn.dataset.range, 10);
+        if (!Number.isFinite(days) || days === this.usageRange) return;
+        this.usageRange = days;
+        this.renderUsageDashboard();
+      });
+    });
+
+    container.querySelectorAll('.usage-range-btn[data-chart-mode]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const mode = btn.dataset.chartMode;
+        if (!mode || mode === this.usageChartMode) return;
+        this.usageChartMode = mode;
+        this.renderUsageDashboard();
+      });
+    });
   }
 
   initDispatch() {
@@ -612,6 +683,8 @@ class App {
       this.renderSessions();
     } else if (this.currentView === 'history') {
       this.renderHistory();
+    } else if (this.currentView === 'usage') {
+      this.renderUsageDashboard();
     }
     this.updateBadges();
     this.updateLaserState();
@@ -1164,6 +1237,54 @@ function getMockUsageLimits() {
     { id: 'antigravity', short: 'Gemini', name: 'Antigravity', color: '#4285F4', available: false, usedPercent: null },
     { id: 'grok', short: 'Grok', name: 'Grok', color: '#EF4444', available: true, usedPercent: 22, remainingPercent: 78, plan: 'X Premium', model: 'grok-4.5' }
   ];
+}
+
+/** Mock usage dashboard data for local development/preview */
+function getMockUsageStats() {
+  const day = (offset) => {
+    const d = new Date(Date.now() - offset * 86400000);
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${m}-${dd}`;
+  };
+  const bucket = (offset, agent, model, input, output, cacheRead, cacheWrite, sessions, cost, costActual = false) => ({
+    day: day(offset),
+    agent,
+    model,
+    input,
+    output,
+    reasoning: 0,
+    cacheRead,
+    cacheWrite,
+    total: input + output + cacheRead + cacheWrite,
+    sessions,
+    cost,
+    costActual,
+    costKnown: true
+  });
+  return {
+    updatedAt: Date.now(),
+    buckets: [
+      bucket(0, 'Claude Code', 'claude-opus-4', 42000, 118000, 690000, 38000, 2, 3.41),
+      bucket(0, 'Claude Code', 'claude-sonnet-4', 18000, 46000, 210000, 9000, 1, 0.72),
+      bucket(0, 'Codex', 'gpt-5-codex', 96000, 31000, 124000, 0, 1, 0.44),
+      bucket(1, 'Claude Code', 'claude-opus-4', 61000, 204000, 980000, 52000, 3, 5.18),
+      bucket(1, 'OpenCode', 'gemini-2.5-pro', 130000, 48000, 0, 0, 2, 0.64, true),
+      bucket(2, 'Codex', 'gpt-5-codex', 201000, 74000, 312000, 0, 2, 1.06),
+      bucket(4, 'Claude Code', 'claude-sonnet-4', 30000, 88000, 410000, 21000, 2, 1.47),
+      bucket(6, 'OpenCode', 'grok-code-fast', 540000, 96000, 0, 0, 1, 0.25, true)
+    ],
+    sessionTime: [
+      { day: day(0), agent: 'Claude Code', sessions: 3, ms: 7380000 },
+      { day: day(0), agent: 'Codex', sessions: 1, ms: 1740000 },
+      { day: day(1), agent: 'Claude Code', sessions: 3, ms: 10500000 },
+      { day: day(1), agent: 'OpenCode', sessions: 2, ms: 2760000 },
+      { day: day(2), agent: 'Codex', sessions: 2, ms: 4980000 },
+      { day: day(2), agent: 'Grok', sessions: 1, ms: 1500000 },
+      { day: day(4), agent: 'Claude Code', sessions: 2, ms: 6120000 },
+      { day: day(6), agent: 'OpenCode', sessions: 1, ms: 2280000 }
+    ]
+  };
 }
 
 function getMockHistory() {

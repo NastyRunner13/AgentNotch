@@ -65,6 +65,10 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           History
         </button>
+        <button class="ntab" data-tab="usage">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="9"/><line x1="18" y1="20" x2="18" y2="4"/></svg>
+          Usage
+        </button>
         <button id="btn-settings" class="ntab ntab-icon" title="Settings" aria-label="Settings">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
@@ -106,6 +110,11 @@
             <p class="empty-title">No history yet</p>
             <p class="empty-desc">Past sessions will appear here when agents finish working.</p>
           </div>
+        </section>
+
+        <!-- Usage View (dashboard: session time, tokens, cost, agents, models) -->
+        <section id="view-usage" class="view">
+          <div id="usage-list" class="usage-list"></div>
         </section>
 
         <!-- Settings View -->

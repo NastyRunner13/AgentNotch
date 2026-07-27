@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('agentNotch', {
     return () => ipcRenderer.removeListener('usage-update', handler);
   },
 
+  // Usage dashboard (token/cost buckets + session-time aggregates)
+  getUsageStats: () => ipcRenderer.invoke('get-usage-stats'),
+
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
