@@ -45,6 +45,8 @@ One strip. Every agent. No tab-switching.
 
 **Usage Limits** — Real-time, local-only metric strips for resource usage (Grok weekly credits, Codex usage %) displayed inline.
 
+**Usage Dashboard** — A Usage tab with session time, tokens burned, estimated cost, session counts, and per-agent / per-model breakdowns over Today / 7D / 30D / 90D. Includes a stacked daily burn chart (tokens or cost, split by agent), cumulative spend trajectory, token-mix breakdown with cache-read share, and derived stats like cost per session and average session length. History is reconstructed on first run by scanning local agent records (Claude transcripts, Codex rollouts, OpenCode DB), then kept current from live sessions. Daily buckets persist under `~/.agent-notch/usage-stats.json`; costs are list-price estimates unless the agent reports actual cost.
+
 **Session Dispatch** — Message any running agent session directly from the expanded notch: pick a live session and the prompt resumes that exact chat headlessly (no new windows), or start a new headless session for an agent in its most recent project directory. Watch progress live on the session card.
 
 **Settings & History** — Per-agent watcher toggles, notification sounds, desktop banners, autostart, and locally-archived session history under `~/.agent-notch/history.json`.
@@ -104,6 +106,8 @@ src/
 │   ├── logger.js           # Quiet, file-based logging
 │   ├── permission-bridge.js # Claude PermissionRequest hook + decision files
 │   ├── usage-limits.js     # Local resource tracker
+│   ├── usage-stats.js      # Token/cost accumulation into daily buckets
+│   ├── usage-backfill.js   # Full-history scan of agent session files
 │   └── watchers/           # Agent-specific file watchers
 │       ├── base-watcher.js          # Abstract watcher base class
 │       ├── claude-watcher.js        # Claude Code session parser
@@ -123,6 +127,7 @@ src/
 
 test/
 ├── analyzers.test.js              # Agent log parser unit tests
+├── usage-stats.test.js            # UsageTracker bucket/cost accumulation tests
 └── permission-bridge.test.js      # Permission bridge filesystem tests
 ```
 
