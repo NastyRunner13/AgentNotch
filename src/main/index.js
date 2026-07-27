@@ -20,9 +20,13 @@ let isExpanded = false;
 let isAutoHidden = false;
 let autoHideTimer = null;
 let notchAnimationTimer = null;
-/** Auto-collapse after agent finished (so the panel does not stay open forever). */
-let doneCollapseTimer = null;
-const DONE_COLLAPSE_MS = 5500;
+/**
+ * Sessions that finished since the user last opened the panel. Unseen
+ * completions pin the collapsed bar (the "✓ N done" summary) until the user
+ * expands the panel or the sessions go away — results are never auto-opened,
+ * but they are also never silently missed.
+ */
+const unseenCompletions = new Set();
 
 // Notch dimensions
 const NOTCH_WIDTH_COLLAPSED = 420;
@@ -185,20 +189,13 @@ function createWindow() {
 
 }
 
-function cancelDoneCollapse() {
-  if (doneCollapseTimer) {
-    clearTimeout(doneCollapseTimer);
-    doneCollapseTimer = null;
-  }
-}
-
 function expandNotch() {
   if (!mainWindow || isExpanded) return;
   isExpanded = true;
   isAutoHidden = false;
   cancelAutoHide();
-  // User opened the panel — don't auto-collapse a prior "done" surface
-  cancelDoneCollapse();
+  // Opening the panel is the user acknowledging finished results
+  unseenCompletions.clear();
 
   mainWindow.webContents.send('notch-state', 'expanded');
   // Smooth ease-out expand — no overshoot bounce (avoids Windows setBounds jitter)
@@ -212,7 +209,6 @@ function expandNotch() {
 function collapseNotch() {
   if (!mainWindow || !isExpanded) return;
   isExpanded = false;
-  cancelDoneCollapse();
 
   mainWindow.webContents.send('notch-state', 'collapsed');
   animateNotchBounds(
@@ -223,45 +219,6 @@ function collapseNotch() {
 
   // Start autohide timer
   scheduleAutoHide();
-}
-
-/**
- * Surface the notch when an agent finishes, then auto-collapse if nothing
- * still needs attention. Avoids re-running expand animation when already open
- * (that setBounds thrash was a major source of flicker).
- */
-function surfaceDoneResult() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-
-  cancelDoneCollapse();
-
-  if (isAutoHidden) {
-    // Reveal collapsed bar only — full expand restarts on every poll flicker
-    showNotch();
-  }
-
-  // Expand once to show the finished result; skip if already expanded
-  if (!isExpanded) {
-    isExpanded = true;
-    isAutoHidden = false;
-    cancelAutoHide();
-    mainWindow.webContents.send('notch-state', 'expanded');
-    animateNotchBounds(
-      { width: NOTCH_WIDTH_EXPANDED, height: NOTCH_HEIGHT_EXPANDED, y: 0 },
-      NOTCH_EXPAND_DURATION,
-      easeOutQuint
-    );
-  }
-
-  doneCollapseTimer = setTimeout(() => {
-    doneCollapseTimer = null;
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (!isExpanded) return;
-    const sessions = agentManager ? agentManager.getSessions() : [];
-    // Stay open if something still needs the user
-    if (hasPinnedSessions(sessions)) return;
-    collapseNotch();
-  }, DONE_COLLAPSE_MS);
 }
 
 function toggleNotch() {
@@ -315,15 +272,18 @@ function hideNotch() {
 }
 
 /**
- * True when any live agent session should pin the notch open.
- * Working agents stay visible; idle-only can autohide.
+ * True when the collapsed bar should stay visible on its own.
+ * Working / attention sessions pin it; so do completions the user has not
+ * seen yet (the "✓ N done" summary must survive until it is acknowledged).
+ * Idle-only beyond that can autohide.
  */
 function hasPinnedSessions(sessions) {
   return sessions.some(s =>
     s.status === 'working' ||
     s.status === 'permission-request' ||
     s.status === 'question' ||
-    s.status === 'needs-attention'
+    s.status === 'needs-attention' ||
+    unseenCompletions.has(s.id)
   );
 }
 
@@ -453,6 +413,14 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('sessions-update', sessions);
     }
 
+    // Forget unseen completions whose sessions were dismissed or exited
+    if (unseenCompletions.size > 0) {
+      const liveIds = new Set(sessions.map(s => s.id));
+      for (const id of unseenCompletions) {
+        if (!liveIds.has(id)) unseenCompletions.delete(id);
+      }
+    }
+
     // Update tray icon based on session states
     const hasAttention = sessions.some(s =>
       s.status === 'needs-attention' ||
@@ -473,8 +441,8 @@ app.whenReady().then(() => {
       idleCount
     });
 
-    // While any agent is working or needs attention: stay visible and cancel autohide.
-    // When everything is idle: allow autohide again (collapsed only).
+    // While pinned (working / attention / unseen completions): stay visible.
+    // Otherwise: allow autohide again (collapsed only, never while expanded).
     if (pinned) {
       if (isAutoHidden) showNotch();
       cancelAutoHide();
@@ -484,9 +452,11 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('attention', (sessions) => {
-    // Always pop the notch open so the user can approve / answer
-    cancelDoneCollapse();
-    showAndExpand();
+    // Never pop the panel open — expanding is a user action (bar click, tray,
+    // hotkey, notification click). The collapsed bar shows the amber state;
+    // sound + OS notification carry the interrupt without stealing focus.
+    if (isAutoHidden) showNotch();
+    cancelAutoHide();
     const settings = agentManager.getSettings();
     if (settings.soundAlerts) {
       playAttentionAlert();
@@ -500,8 +470,15 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('done', (sessions) => {
-    // Agent finished — surface result, then auto-collapse (no stuck open panel)
-    surfaceDoneResult();
+    // Agent finished — do NOT open the panel. Mark completions unseen so the
+    // collapsed bar keeps its "✓ N done" summary until the user looks, and
+    // fire an OS notification (clicking it opens the panel — user demand).
+    // If the panel is already expanded, the user is looking right at it.
+    if (!isExpanded) {
+      for (const s of sessions) unseenCompletions.add(s.id);
+    }
+    if (isAutoHidden) showNotch();
+    cancelAutoHide();
     const settings = agentManager.getSettings();
     if (settings.desktopNotifications !== false) {
       const unfocused = !mainWindow || !mainWindow.isFocused();
@@ -648,17 +625,6 @@ app.whenReady().then(() => {
     if (hovering) {
       if (isAutoHidden) showNotch();
       cancelAutoHide();
-      // User is looking at the done panel — give them more time
-      if (doneCollapseTimer) {
-        cancelDoneCollapse();
-        doneCollapseTimer = setTimeout(() => {
-          doneCollapseTimer = null;
-          if (!mainWindow || mainWindow.isDestroyed() || !isExpanded) return;
-          const sessions = agentManager ? agentManager.getSessions() : [];
-          if (hasPinnedSessions(sessions)) return;
-          collapseNotch();
-        }, DONE_COLLAPSE_MS);
-      }
     } else if (!isExpanded) {
       scheduleAutoHide();
     }
