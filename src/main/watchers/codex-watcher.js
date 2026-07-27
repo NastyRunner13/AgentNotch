@@ -143,6 +143,8 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
   let rateLimit = null;
   let cwd = null;
   let sessionMetaId = null;
+  /** Latest cumulative token usage (token_count events replace, not add) */
+  let tokens = null;
 
   for (const entry of entries) {
     const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : entry;
@@ -196,6 +198,24 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
           rateLimit.contextUsed = payload.info.last_token_usage.total_tokens;
         }
       }
+    }
+
+    // Cumulative session tokens for the UsageTracker dashboard. Codex reports
+    // cached_input ⊂ input_tokens and reasoning_output ⊂ output_tokens —
+    // split them so the tracker's categories stay disjoint.
+    if (payload.type === 'token_count' && payload.info && payload.info.total_token_usage) {
+      const u = payload.info.total_token_usage;
+      const input = Number(u.input_tokens) || 0;
+      const cached = Number(u.cached_input_tokens) || 0;
+      const output = Number(u.output_tokens) || 0;
+      const reasoning = Number(u.reasoning_output_tokens) || 0;
+      tokens = {
+        input: Math.max(0, input - cached),
+        output: Math.max(0, output - reasoning),
+        reasoning,
+        cacheRead: cached,
+        cacheWrite: Number(u.cache_write_input_tokens) || 0
+      };
     }
 
     if (payload.type === 'task_complete') {
@@ -360,7 +380,8 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
     model,
     rateLimit,
     cwd,
-    resumeId: sessionMetaId
+    resumeId: sessionMetaId,
+    tokens
   };
 }
 

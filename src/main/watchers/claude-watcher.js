@@ -342,7 +342,11 @@ class ClaudeWatcher extends BaseWatcher {
       activity,
       isActive,
       model,
-      cwd
+      cwd,
+      // Cumulative session tokens (summed above from message.usage) — feeds
+      // the UsageTracker dashboard buckets. Tail-window reads under-report
+      // for very long sessions; the tracker's high-water mark absorbs that.
+      tokens
     };
   }
 }
