@@ -25,6 +25,8 @@ const RETENTION_DAYS = 90;
 /** Snapshots for sessions not seen for this long are dropped. */
 const SNAPSHOT_STALE_MS = 14 * 24 * 60 * 60 * 1000;
 const SAVE_DEBOUNCE_MS = 2000;
+/** Historical per-session time attribution older than this is dropped. */
+const DAYSESS_STALE_DAYS = RETENTION_DAYS;
 
 /**
  * Approximate list prices, USD per 1M tokens. Matched case-insensitively by
@@ -120,10 +122,16 @@ class UsageTracker {
   constructor(opts = {}) {
     this._dataPath = opts.dataPath || path.join(os.homedir(), '.agent-notch', 'usage-stats.json');
     this._now = opts.now || (() => Date.now());
-    /** sessionId → { day, agent, model, totals, cost, seenAt } */
+    /** sessionId → { day, agent, model, totals, cost, seenAt, hist? } */
     this._snapshots = new Map();
     /** `${day}|${agent}|${model}` → { day, agent, model, totals, cost, sess: {} } */
     this._buckets = new Map();
+    /** `${day}|${agent}|${sessionId}` → { day, agent, id, ms } — historical session time */
+    this._daySess = new Map();
+    /** Last full-history backfill scan (ms epoch), 0 = never */
+    this.lastBackfillAt = 0;
+    /** Scanner schema version last applied to persisted history. */
+    this.lastBackfillVersion = 0;
     this._dirty = false;
     this._saveTimer = null;
     this._load();
@@ -141,7 +149,8 @@ class UsageTracker {
             model: snap.model ?? null,
             totals: normalizeTokens(snap.totals),
             cost: num(snap.cost),
-            seenAt: num(snap.seenAt) || this._now()
+            seenAt: num(snap.seenAt) || this._now(),
+            hist: snap.hist && typeof snap.hist === 'object' ? snap.hist : undefined
           });
         }
         for (const [key, b] of Object.entries(data.buckets || {})) {
@@ -154,6 +163,16 @@ class UsageTracker {
             sess: b.sess && typeof b.sess === 'object' ? b.sess : {}
           });
         }
+        for (const [key, e] of Object.entries(data.daySessions || {})) {
+          this._daySess.set(key, {
+            day: e.day,
+            agent: e.agent,
+            id: e.id,
+            ms: num(e.ms)
+          });
+        }
+        this.lastBackfillAt = num(data.lastBackfillAt);
+        this.lastBackfillVersion = num(data.lastBackfillVersion);
       }
     } catch (err) {
       console.warn('[UsageTracker] Failed to load stats:', err.message);
@@ -229,6 +248,137 @@ class UsageTracker {
     return changed;
   }
 
+  /**
+   * Bank historical per-day usage for one session, from a full scan of its
+   * on-disk records (usage-backfill). Idempotent: per-(session, day, model)
+   * high-water marks mean a re-scan only banks newly appended tokens.
+   *
+   * Startup-race safety: if live `ingest` already banked this session's
+   * cumulative snapshot into "today" before the scan ran, that banked amount
+   * is credited against the scanned per-day sums (most recent days first —
+   * the live tail window covers recent activity), so the same tokens are
+   * never counted twice.
+   *
+   * Also raises the live high-water mark to the scanned cumulative total, so
+   * subsequent live ingestion banks only genuinely new tokens.
+   *
+   * @param {{ id: string, agent: string,
+   *   days: Array<{ day: string, model: string|null, tokens: object, cost?: number }>,
+   *   msByDay?: Object<string, number> }} record
+   * @returns {boolean} true when any bucket changed
+   */
+  ingestHistorical(record) {
+    if (!record || !record.id || !record.agent || !Array.isArray(record.days)) return false;
+    const now = this._now();
+    const days = record.days
+      .filter(d => d && typeof d.day === 'string')
+      .map(d => ({ day: d.day, model: d.model ?? null, tokens: normalizeTokens(d.tokens), cost: num(d.cost) }))
+      .filter(d => totalsPositive(d.tokens) || d.cost > 0)
+      .sort((a, b) => (a.day < b.day ? 1 : -1)); // most recent first for crediting
+    if (days.length === 0 && !record.msByDay) return false;
+
+    let snap = this._snapshots.get(record.id);
+
+    // Credit what live ingest already banked (only on first historical sighting)
+    const credit = snap && !snap.hist
+      ? { ...snap.totals, cost: snap.cost }
+      : null;
+
+    const hist = snap?.hist ? { ...snap.hist } : {};
+    let changed = false;
+
+    for (const d of days) {
+      const t = { ...d.tokens };
+      let cost = d.cost;
+      if (credit) {
+        for (const k of Object.keys(t)) {
+          const c = Math.min(t[k], credit[k]);
+          t[k] -= c;
+          credit[k] -= c;
+        }
+        const cc = Math.min(cost, credit.cost);
+        cost -= cc;
+        credit.cost -= cc;
+      }
+
+      const hk = `${d.day}|${d.model || ''}`;
+      const banked = hist[hk] || { totals: emptyTotals(), cost: 0 };
+      const delta = emptyTotals();
+      let any = false;
+      for (const k of Object.keys(delta)) {
+        const dv = t[k] - banked.totals[k];
+        if (dv > 0) { delta[k] = dv; any = true; }
+      }
+      const costDelta = cost - banked.cost;
+      if (costDelta > 0) any = true;
+
+      if (any) {
+        hist[hk] = {
+          totals: {
+            input: Math.max(banked.totals.input, t.input),
+            output: Math.max(banked.totals.output, t.output),
+            reasoning: Math.max(banked.totals.reasoning, t.reasoning),
+            cacheRead: Math.max(banked.totals.cacheRead, t.cacheRead),
+            cacheWrite: Math.max(banked.totals.cacheWrite, t.cacheWrite)
+          },
+          cost: Math.max(banked.cost, cost)
+        };
+        this._bank(d.day, record.agent, d.model, delta, Math.max(0, costDelta), record.id);
+        changed = true;
+      } else if (!hist[hk]) {
+        hist[hk] = { totals: { ...t }, cost };
+      }
+    }
+
+    // Raise (or create) the live high-water mark to the scanned cumulative sum
+    const scanned = emptyTotals();
+    let scannedCost = 0;
+    for (const d of days) {
+      for (const k of Object.keys(scanned)) scanned[k] += d.tokens[k];
+      scannedCost += d.cost;
+    }
+    if (!snap) {
+      snap = {
+        day: dayKey(now),
+        agent: record.agent,
+        model: days[0]?.model ?? null,
+        totals: scanned,
+        cost: scannedCost,
+        seenAt: now,
+        hist
+      };
+      this._snapshots.set(record.id, snap);
+      if (totalsPositive(scanned) || scannedCost > 0) changed = true;
+    } else {
+      for (const k of Object.keys(snap.totals)) {
+        snap.totals[k] = Math.max(snap.totals[k], scanned[k]);
+      }
+      snap.cost = Math.max(snap.cost, scannedCost);
+      snap.seenAt = now;
+      snap.hist = hist;
+    }
+
+    // Session time per day (max wins — re-scans stay idempotent)
+    if (record.msByDay && typeof record.msByDay === 'object') {
+      for (const [day, ms] of Object.entries(record.msByDay)) {
+        const v = num(ms);
+        if (!v) continue;
+        const key = `${day}|${record.agent}|${record.id}`;
+        const prev = this._daySess.get(key);
+        if (!prev || v > prev.ms) {
+          this._daySess.set(key, { day, agent: record.agent, id: record.id, ms: v });
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      this._dirty = true;
+      this._scheduleSave();
+    }
+    return changed;
+  }
+
   _bank(day, agent, model, delta, costDelta, sessionId) {
     const key = `${day}|${agent}|${model || ''}`;
     let b = this._buckets.get(key);
@@ -249,7 +399,13 @@ class UsageTracker {
       if (b.day < cutoff) this._buckets.delete(key);
     }
     for (const [id, snap] of this._snapshots) {
+      // Snapshots carrying historical high-water marks must survive — dropping
+      // one would make the next backfill re-bank that session's whole history.
+      if (snap.hist) continue;
       if (now - snap.seenAt > SNAPSHOT_STALE_MS) this._snapshots.delete(id);
+    }
+    for (const [key, e] of this._daySess) {
+      if (e.day < cutoff) this._daySess.delete(key);
     }
   }
 
@@ -276,11 +432,16 @@ class UsageTracker {
       for (const [id, snap] of this._snapshots) sessions[id] = snap;
       const buckets = {};
       for (const [key, b] of this._buckets) buckets[key] = b;
+      const daySessions = {};
+      for (const [key, e] of this._daySess) daySessions[key] = e;
       fs.writeFileSync(this._dataPath, JSON.stringify({
         version: 1,
         updatedAt: this._now(),
+        lastBackfillAt: this.lastBackfillAt || 0,
+        lastBackfillVersion: this.lastBackfillVersion || 0,
         sessions,
-        buckets
+        buckets,
+        daySessions
       }));
       this._dirty = false;
     } catch (err) {
@@ -294,9 +455,13 @@ class UsageTracker {
    *   cost        — USD (0 when neither actual nor estimable)
    *   costKnown   — true when cost reflects a real price (actual or priced)
    *   costActual  — true when reported by the harness (not estimated)
-   * @returns {{ updatedAt: number, buckets: Array<object> }}
+   * @param {{ excludeIds?: Set<string> }} [opts]
+   *   excludeIds — session ids to skip in sessionDays (the caller already
+   *   accounts for them via live sessions / history; avoids double counting)
+   * @returns {{ updatedAt: number, buckets: Array<object>,
+   *   sessionDays: Array<{day:string, agent:string, sessions:number, ms:number}> }}
    */
-  getStats() {
+  getStats(opts = {}) {
     const buckets = [];
     for (const b of this._buckets.values()) {
       const total = b.totals.input + b.totals.output + b.totals.reasoning
@@ -321,7 +486,25 @@ class UsageTracker {
     }
     // Most recent first, then biggest bucket first within a day
     buckets.sort((a, b) => (a.day === b.day ? b.total - a.total : (a.day < b.day ? 1 : -1)));
-    return { updatedAt: this._now(), buckets };
+
+    // Historical session time, grouped per day+agent
+    const exclude = opts.excludeIds instanceof Set ? opts.excludeIds : null;
+    const dayAgentMap = new Map();
+    for (const e of this._daySess.values()) {
+      if (exclude && exclude.has(e.id)) continue;
+      const key = `${e.day}|${e.agent}`;
+      let g = dayAgentMap.get(key);
+      if (!g) {
+        g = { day: e.day, agent: e.agent, sessions: 0, ms: 0 };
+        dayAgentMap.set(key, g);
+      }
+      g.sessions += 1;
+      g.ms += e.ms;
+    }
+    const sessionDays = [...dayAgentMap.values()]
+      .sort((a, b) => (a.day < b.day ? 1 : -1));
+
+    return { updatedAt: this._now(), buckets, sessionDays };
     }
 }
 

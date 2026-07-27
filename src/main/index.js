@@ -551,6 +551,10 @@ app.whenReady().then(() => {
     return agentManager.getUsageLimits();
   });
 
+  ipcMain.handle('get-usage-stats', () => {
+    return agentManager.getUsageStats();
+  });
+
   ipcMain.handle('get-settings', () => {
     return agentManager.getSettings();
   });

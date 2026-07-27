@@ -12,7 +12,11 @@ const { GrokWatcher } = require('./watchers/grok-watcher');
 const { OpencodeWatcher } = require('./watchers/opencode-watcher');
 const { createSettingsStore } = require('./store');
 const { collectUsageLimits } = require('./usage-limits');
+const { UsageTracker, dayKey } = require('./usage-stats');
+const { scanUsageHistory } = require('./usage-backfill');
 const permissionBridge = require('./permission-bridge');
+
+const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
 
 /**
  * @typedef {Object} AgentSession
@@ -100,6 +104,10 @@ class AgentManager extends EventEmitter {
     /** @type {Array|null} last usage snapshot */
     this._usageLimits = null;
     this._usageTimer = null;
+    /** Token/cost accumulation into persisted daily buckets (dashboard data) */
+    this._usageTracker = new UsageTracker();
+    /** Delayed one-shot history backfill timer */
+    this._backfillTimer = null;
     /** @type {import('chokidar').FSWatcher|null} */
     this._permissionWatcher = null;
     /** @type {Set<string>} pending request ids already used for attention emit */
@@ -140,6 +148,47 @@ class AgentManager extends EventEmitter {
     this._archiveTimer = setInterval(() => this._archiveStale(), 30000);
     // Usage limits refresh (local file reads)
     this._usageTimer = setInterval(() => this._refreshUsageLimits(), 15000);
+    // One-shot usage backfill from on-disk session files (dashboard history)
+    this._backfillTimer = setTimeout(() => {
+      this._backfillTimer = null;
+      this._backfillUsage();
+    }, 2500);
+  }
+
+  /**
+   * Reconstruct per-day token/cost/session-time history from on-disk agent
+   * records (Claude transcripts, Codex rollouts, OpenCode DB) so the usage
+   * dashboard shows past dates. Idempotent — the tracker banks only deltas
+   * over its high-water marks. Throttled: at most once per 6h of app runtime.
+   */
+  _backfillUsage() {
+    const THROTTLE_MS = 6 * 60 * 60 * 1000;
+    if (
+      this._usageTracker.lastBackfillVersion === USAGE_BACKFILL_VERSION &&
+      Date.now() - (this._usageTracker.lastBackfillAt || 0) < THROTTLE_MS
+    ) return;
+
+    const started = Date.now();
+    try {
+      const { records, files, errors } = scanUsageHistory();
+      let banked = 0;
+      for (const rec of records) {
+        try {
+          if (this._usageTracker.ingestHistorical(rec)) banked++;
+        } catch (err) {
+          console.warn(`[UsageBackfill] ingest failed for ${rec.id}:`, err.message);
+        }
+      }
+      this._usageTracker.lastBackfillAt = Date.now();
+      this._usageTracker.lastBackfillVersion = USAGE_BACKFILL_VERSION;
+      this._usageTracker.flush();
+      console.log(
+        `[UsageBackfill] Scanned ${files} files → ${records.length} sessions ` +
+        `(${banked} with new data, ${errors} errors) in ${Date.now() - started}ms`
+      );
+    } catch (err) {
+      console.warn('[UsageBackfill] scan failed:', err.message);
+    }
   }
 
   stop() {
@@ -158,6 +207,15 @@ class AgentManager extends EventEmitter {
     if (this._usageTimer) {
       clearInterval(this._usageTimer);
       this._usageTimer = null;
+    }
+    if (this._backfillTimer) {
+      clearTimeout(this._backfillTimer);
+      this._backfillTimer = null;
+    }
+    try {
+      this._usageTracker.flush();
+    } catch {
+      // ignore
     }
     this._saveHistory();
     console.log('[AgentManager] Stopped all watchers');
@@ -237,6 +295,11 @@ class AgentManager extends EventEmitter {
       this._emitTimer = null;
       const sessions = this.getSessions();
       this._detectStatusTransitions(sessions);
+      try {
+        this._usageTracker.ingest(sessions);
+      } catch (err) {
+        console.warn('[AgentManager] usage ingest failed:', err.message);
+      }
       this.emit('sessions-update', sessions);
     }, 200);
   }
@@ -308,6 +371,81 @@ class AgentManager extends EventEmitter {
       this._refreshUsageLimits();
     }
     return this._usageLimits || [];
+  }
+
+  /**
+   * Dashboard data: token/cost buckets (per day+agent+model, from the
+   * tracker) plus session-time aggregates (per day+agent) derived from
+   * history and live sessions. Time is attributed to the day a session
+   * ended (history) or started (still live); durations are estimates —
+   * agents that report no local token data (Grok, Cursor, Antigravity)
+   * still contribute session time and counts here.
+   *
+   * @returns {{ updatedAt: number, buckets: Array<object>, sessionTime: Array<{day:string, agent:string, sessions:number, ms:number}> }}
+   */
+  getUsageStats() {
+    // Live + history session ids own their session-time records; the
+    // tracker's backfilled sessionDays skip them to avoid double counting.
+    const live = this.getSessions();
+    const inHistory = new Set(this._history.map(h => h.id));
+    const excludeIds = new Set(inHistory);
+    for (const s of live) {
+      if (s && s.id) excludeIds.add(s.id);
+    }
+
+    const base = this._usageTracker.getStats({ excludeIds });
+
+    const timeMap = new Map(); // `${day}|${agent}` → { day, agent, sessions, ms }
+    const addTime = (agent, ts, ms) => {
+      if (!agent || !Number.isFinite(ts) || !(ms > 0)) return;
+      const day = dayKey(ts);
+      const key = `${day}|${agent}`;
+      let entry = timeMap.get(key);
+      if (!entry) {
+        entry = { day, agent, sessions: 0, ms: 0 };
+        timeMap.set(key, entry);
+      }
+      entry.sessions += 1;
+      entry.ms += ms;
+    };
+    const durationOf = (s) => {
+      if (Number.isFinite(s.duration) && s.duration > 0) return s.duration;
+      if (Number.isFinite(s.startTime) && Number.isFinite(s.lastTime) && s.lastTime > s.startTime) {
+        return s.lastTime - s.startTime;
+      }
+      return 0;
+    };
+
+    for (const h of this._history) {
+      addTime(h.agent, h.lastTime || h.archivedAt, durationOf(h));
+    }
+
+    // Live sessions not yet archived count toward today; skip ids already in
+    // history so a revived session is not double-counted while it keeps working.
+    const now = Date.now();
+    for (const s of live) {
+      if (!s || s.status === 'stopped' || inHistory.has(s.id)) continue;
+      const ms = Number.isFinite(s.duration) && s.duration > 0
+        ? s.duration
+        : (Number.isFinite(s.startTime) ? Math.max(0, now - s.startTime) : 0);
+      addTime(s.agent, s.startTime || now, ms);
+    }
+
+    // Backfilled historical session time (per day+agent, ids already excluded)
+    for (const sd of base.sessionDays || []) {
+      const key = `${sd.day}|${sd.agent}`;
+      let entry = timeMap.get(key);
+      if (!entry) {
+        entry = { day: sd.day, agent: sd.agent, sessions: 0, ms: 0 };
+        timeMap.set(key, entry);
+      }
+      entry.sessions += sd.sessions;
+      entry.ms += sd.ms;
+    }
+
+    const sessionTime = [...timeMap.values()]
+      .sort((a, b) => (a.day < b.day ? 1 : -1));
+    return { updatedAt: base.updatedAt, buckets: base.buckets, sessionTime };
   }
 
   getSessions() {
