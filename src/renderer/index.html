@@ -32,13 +32,15 @@
       </div>
       <div class="notch-bar-right">
         <div id="notch-stats" class="notch-stats">
-          <span id="stat-running" class="stat stat-running" style="display:none">
-            <span class="stat-dot stat-dot-running"></span>
+          <span id="stat-running" class="stat stat-running" style="display:none" title="Agents still running">
+            <span class="stat-dot stat-dot-running" aria-hidden="true"></span>
             <span class="stat-num">0</span>
-            <span class="stat-label">active</span>
+            <span class="stat-label">running</span>
           </span>
-          <span id="stat-done" class="stat stat-done" style="display:none">
-            <span class="stat-dot stat-dot-done"></span>
+          <span id="stat-done" class="stat stat-done" style="display:none" title="Agents complete — click to review">
+            <svg class="stat-check" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="20 6 9 17 4 12"/>
+            </svg>
             <span class="stat-num">0</span>
             <span class="stat-label">done</span>
           </span>

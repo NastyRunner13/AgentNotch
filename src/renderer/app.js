@@ -763,7 +763,11 @@ class App {
 
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
     const runningCount = activeSessions.filter(s => s.status === 'working').length;
-    const doneCount = activeSessions.filter(s => s.status === 'idle').length;
+    // "Done" = a real completed agent run. Bare process placeholders
+    // (e.g. "Cursor IDE is open") have no prompt/tools and don't count.
+    const isCompletedRun = (s) =>
+      s.status === 'idle' && (s.userPrompt || (s.toolCalls && s.toolCalls.length > 0));
+    const doneCount = activeSessions.filter(isCompletedRun).length;
     const barFp = this._barFingerprint(activeSessions);
 
     // Skip full icon rebuild when nothing visible changed
@@ -807,13 +811,17 @@ class App {
             statusTextEl.title = line;
           } else {
             statusClass(statusTextEl, 'idle');
-            const finished = activeSessions.find(s => s.status === 'idle' && s.lastMessage);
-            if (finished && activeSessions.length === 1) {
+            // Counts live on the right pills — center carries the latest result
+            const finished = activeSessions.find(s => isCompletedRun(s) && s.lastMessage)
+              || activeSessions.find(s => s.status === 'idle' && s.lastMessage);
+            if (finished) {
               const line = String(finished.lastMessage).replace(/\s+/g, ' ').trim();
               statusTextEl.textContent = line.length > 52 ? `${line.slice(0, 51)}…` : line;
               statusTextEl.title = line;
             } else {
-              statusTextEl.textContent = `${activeSessions.length} agent${activeSessions.length > 1 ? 's' : ''} finished`;
+              statusTextEl.textContent = doneCount > 1
+                ? `${doneCount} agents complete`
+                : 'Agent complete';
               statusTextEl.removeAttribute('title');
             }
           }
@@ -1212,6 +1220,20 @@ function getMockSessions() {
         text: 'Should we target Production, Staging, or Local Database config?',
         options: ['Production', 'Staging', 'Local only']
       }
+    },
+    {
+      id: 'codex-done-1',
+      agent: 'Codex',
+      taskName: 'add signup validation',
+      status: 'idle',
+      currentTool: null,
+      lastMessage: 'Added email and password validation to the register router.',
+      userPrompt: 'add email and password validation to register router',
+      duration: 1500000,
+      durationFormatted: '25m',
+      terminal: 'Terminal',
+      model: 'gpt-5-codex',
+      toolCalls: ['search(routes/)', 'write(routes/auth.js)']
     },
     {
       id: 'cursor-main',

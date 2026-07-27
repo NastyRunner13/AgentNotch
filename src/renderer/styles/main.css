@@ -420,13 +420,60 @@ html, body {
   gap: 8px;
 }
 
-/* Keyword stats (active/done) replaced by logo motion on agent icons */
+/* Status pills — "● N running" / "✓ N done". Counts are mono (data);
+   status color is earned by real agent state, labels stay quiet. */
 .notch-stats {
-  display: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .stat {
-  display: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+
+.stat-num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.stat-label {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  line-height: 1.2;
+}
+
+/* Running — working blue, dot breathes while agents work */
+.stat-running .stat-num {
+  color: var(--color-working-bright);
+}
+
+.stat-dot-running {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-working);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Done — idle green check; static, calm, no celebration chrome */
+.stat-done .stat-num {
+  color: var(--color-idle-bright);
+}
+
+.stat-check {
+  color: var(--color-idle);
+  flex-shrink: 0;
 }
 
 .notch-chevron {
@@ -862,7 +909,8 @@ html, body {
 
   .empty-icon,
   .notch-laser-beam,
-  .notch-laser-trail {
+  .notch-laser-trail,
+  .stat-dot-running {
     animation: none !important;
   }
 
