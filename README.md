@@ -16,7 +16,7 @@
 
 ---
 
-AgentNotch is a cross-platform system-tray application that surfaces a Mac-style notch at the top of your primary display. It watches local session files and process presence for your AI coding agents, distills them into glanceable status states — **idle**, **working**, **attention**, **error**, **question** — and expands only when something actually needs a human.
+AgentNotch is a cross-platform system-tray application that surfaces a Mac-style notch at the top of your primary display. It watches local session files and process presence for your AI coding agents, distills them into glanceable status states — **idle**, **working**, **attention**, **error**, **question** — and keeps the full panel on-demand: it never pops open on its own.
 
 One strip. Every agent. No tab-switching.
 
@@ -37,7 +37,9 @@ One strip. Every agent. No tab-switching.
 
 **Ambient Notch UI** — A thin status bar at the top center of your screen. Visible while any agent is working or needs attention; autohides when everything is idle.
 
-**Auto-Expand on Attention** — The notch expands automatically whenever an agent requests permission, asks a question, or completes a turn. You never miss a blocker.
+**On-Demand Panel** — The expanded panel opens only when you ask: click the bar, the tray icon, the global hotkey (`Ctrl+Shift+A` / `⌘⇧A`), or a desktop notification. Agent events never pop it open or steal focus.
+
+**Glanceable Counts** — The collapsed bar carries the whole story: `● N running` while agents work, `✓ N done` when runs complete, and an amber status line when someone needs you. Unseen completions keep the strip visible until you take a look; sound and desktop notifications (both optional) carry the interrupt.
 
 **Claude Remote Approve** — Allow or Deny Claude Code permission requests directly from the notch via a `PermissionRequest` hook. Other agents focus their native app for approval.
 
@@ -56,7 +58,7 @@ One strip. Every agent. No tab-switching.
 1. Open AgentNotch → **Settings**.
 2. Under **Claude remote approve**, click **Install hook**.
 3. Restart any open Claude Code sessions (hooks load at session start).
-4. When Claude needs permission, the notch expands — press **Allow** (`Ctrl+Y`) or **Deny** (`Ctrl+N`).
+4. When Claude needs permission, the bar turns amber and a notification fires — click the bar (or the notification) to open the panel, then press **Allow** (`Ctrl+Y`) or **Deny** (`Ctrl+N`).
 
 <details>
 <summary>What install does</summary>
