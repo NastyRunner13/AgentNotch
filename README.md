@@ -35,11 +35,11 @@ One strip. Every agent. No tab-switching.
 
 ## Features
 
-**Ambient Notch UI** — A thin status bar at the top center of your screen. Visible while any agent is working or needs attention; autohides when everything is idle.
+**Ambient Notch UI** — A thin status bar at the top center of your screen that stays out of your way. It tucks itself into a slim peek strip 4 seconds after you stop touching it — even while agents are running — and slides back down when an agent finishes or needs you. Hover or click the peek strip to bring it back, hit the **↑** button on the bar to tuck it away instantly, or **pin** it (📌 button) to keep it on screen permanently.
 
 **On-Demand Panel** — The expanded panel opens only when you ask: click the bar, the tray icon, the global hotkey (`Ctrl+Shift+A` / `⌘⇧A`), or a desktop notification. Agent events never pop it open or steal focus.
 
-**Glanceable Counts** — The collapsed bar carries the whole story: `● N running` while agents work, `✓ N done` when runs complete, and an amber status line when someone needs you. Unseen completions keep the strip visible until you take a look; sound and desktop notifications (both optional) carry the interrupt.
+**Glanceable Counts** — The collapsed bar carries the whole story: `● N running` while agents work, `✓ N done` when runs complete, and an amber status line when someone needs you. Completions and attention states slide the strip down briefly; sound and desktop notifications (both optional) carry the interrupt.
 
 **Claude Remote Approve** — Allow or Deny Claude Code permission requests directly from the notch via a `PermissionRequest` hook. Other agents focus their native app for approval.
 

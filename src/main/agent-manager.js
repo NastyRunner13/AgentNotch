@@ -14,6 +14,7 @@ const { createSettingsStore } = require('./store');
 const { collectUsageLimits } = require('./usage-limits');
 const { UsageTracker, dayKey } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
+const { buildInsights } = require('./insights');
 const permissionBridge = require('./permission-bridge');
 
 const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
@@ -54,6 +55,7 @@ const DEFAULT_SETTINGS = {
   soundAlerts: true,
   launchAtStartup: false,
   desktopNotifications: true,
+  notchPinned: false,
   pollInterval: 3000
 };
 
@@ -446,6 +448,25 @@ class AgentManager extends EventEmitter {
     const sessionTime = [...timeMap.values()]
       .sort((a, b) => (a.day < b.day ? 1 : -1));
     return { updatedAt: base.updatedAt, buckets: base.buckets, sessionTime };
+  }
+
+  /**
+   * Conversation insights: per-session intent / work-type / complexity /
+   * specificity records built from history + live prompted sessions. Live
+   * sessions win over their archived snapshot (a revived session keeps
+   * accumulating tools and time). Sessions without a real prompt contribute
+   * no record. All classification is local heuristics (insights.js).
+   *
+   * @returns {{ updatedAt: number, records: Array<object> }}
+   */
+  getInsights() {
+    const live = this.getSessions().filter(s => s && s.status !== 'stopped');
+    const liveIds = new Set(live.map(s => s.id));
+    const merged = [
+      ...live,
+      ...this._history.filter(h => !liveIds.has(h.id))
+    ];
+    return buildInsights(merged);
   }
 
   getSessions() {
