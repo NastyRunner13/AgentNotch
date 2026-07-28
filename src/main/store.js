@@ -23,6 +23,7 @@ function createSettingsStore() {
       soundAlerts: true,
       launchAtStartup: false,
       desktopNotifications: true,
+      notchPinned: false,
       pollInterval: 3000
     }
   });

@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld('agentNotch', {
   // Usage dashboard (token/cost buckets + session-time aggregates)
   getUsageStats: () => ipcRenderer.invoke('get-usage-stats'),
 
+  // Conversation insights (intent / work type / complexity / specificity)
+  getInsights: () => ipcRenderer.invoke('get-insights'),
+
   // Settings
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
@@ -48,6 +51,8 @@ contextBridge.exposeInMainWorld('agentNotch', {
   // Notch control
   toggleNotch: () => ipcRenderer.invoke('toggle-notch'),
   showNotch: () => ipcRenderer.invoke('show-notch'),
+  hideNotch: () => ipcRenderer.invoke('hide-notch'),
+  setNotchPinned: (pinned) => ipcRenderer.invoke('set-notch-pinned', Boolean(pinned)),
   openSettings: () => ipcRenderer.invoke('open-settings'),
   getNotchState: () => ipcRenderer.invoke('get-notch-state'),
   onNotchState: (callback) => {

@@ -45,6 +45,17 @@
             <span class="stat-label">done</span>
           </span>
         </div>
+        <button type="button" id="btn-pin" class="bar-btn" title="Pin — keep the notch on screen" aria-label="Pin notch on screen" aria-pressed="false">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 17v5"/>
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+          </svg>
+        </button>
+        <button type="button" id="btn-hide" class="bar-btn" title="Tuck away — hover the top edge to bring it back" aria-label="Hide notch">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="18 15 12 9 6 15"/>
+          </svg>
+        </button>
         <div class="notch-chevron">
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"/>
@@ -70,6 +81,10 @@
         <button class="ntab" data-tab="usage">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="9"/><line x1="18" y1="20" x2="18" y2="4"/></svg>
           Usage
+        </button>
+        <button class="ntab" data-tab="insights">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
+          Insights
         </button>
         <button id="btn-settings" class="ntab ntab-icon" title="Settings" aria-label="Settings">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -117,6 +132,11 @@
         <!-- Usage View (dashboard: session time, tokens, cost, agents, models) -->
         <section id="view-usage" class="view">
           <div id="usage-list" class="usage-list"></div>
+        </section>
+
+        <!-- Insights View (intent, work type, complexity, prompt specificity) -->
+        <section id="view-insights" class="view">
+          <div id="insights-list" class="usage-list"></div>
         </section>
 
         <!-- Settings View -->

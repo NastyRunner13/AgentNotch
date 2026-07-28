@@ -20,13 +20,6 @@ let isExpanded = false;
 let isAutoHidden = false;
 let autoHideTimer = null;
 let notchAnimationTimer = null;
-/**
- * Sessions that finished since the user last opened the panel. Unseen
- * completions pin the collapsed bar (the "✓ N done" summary) until the user
- * expands the panel or the sessions go away — results are never auto-opened,
- * but they are also never silently missed.
- */
-const unseenCompletions = new Set();
 
 // Notch dimensions
 const NOTCH_WIDTH_COLLAPSED = 420;
@@ -194,8 +187,6 @@ function expandNotch() {
   isExpanded = true;
   isAutoHidden = false;
   cancelAutoHide();
-  // Opening the panel is the user acknowledging finished results
-  unseenCompletions.clear();
 
   mainWindow.webContents.send('notch-state', 'expanded');
   // Smooth ease-out expand — no overshoot bounce (avoids Windows setBounds jitter)
@@ -249,7 +240,7 @@ function showNotch() {
 }
 
 function hideNotch() {
-  if (!mainWindow || isExpanded) return;
+  if (!mainWindow || isExpanded || isAutoHidden) return;
   isAutoHidden = true;
   mainWindow.webContents.send('notch-state', 'hidden');
   mainWindow.webContents.send('autohide-state', true);
@@ -272,28 +263,21 @@ function hideNotch() {
 }
 
 /**
- * True when the collapsed bar should stay visible on its own.
- * Working / attention sessions pin it; so do completions the user has not
- * seen yet (the "✓ N done" summary must survive until it is acknowledged).
- * Idle-only beyond that can autohide.
+ * Pinned notches never auto-hide — the user asked for a persistent strip.
  */
-function hasPinnedSessions(sessions) {
-  return sessions.some(s =>
-    s.status === 'working' ||
-    s.status === 'permission-request' ||
-    s.status === 'question' ||
-    s.status === 'needs-attention' ||
-    unseenCompletions.has(s.id)
-  );
+function isNotchPinned() {
+  return agentManager ? Boolean(agentManager.getSettings().notchPinned) : false;
 }
 
+/**
+ * Arm the 4s idle timer. Visibility is interaction-driven only: agent
+ * activity never holds the bar down. The bar tucks away unless the panel
+ * is expanded or the user pinned it.
+ */
 function scheduleAutoHide() {
   cancelAutoHide();
   autoHideTimer = setTimeout(() => {
-    // Don't autohide if expanded or if agents are still running / need you
-    if (isExpanded) return;
-    const sessions = agentManager ? agentManager.getSessions() : [];
-    if (hasPinnedSessions(sessions)) return;
+    if (isExpanded || isNotchPinned()) return;
     hideNotch();
   }, 4000); // 4 second idle
 }
@@ -413,13 +397,9 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('sessions-update', sessions);
     }
 
-    // Forget unseen completions whose sessions were dismissed or exited
-    if (unseenCompletions.size > 0) {
-      const liveIds = new Set(sessions.map(s => s.id));
-      for (const id of unseenCompletions) {
-        if (!liveIds.has(id)) unseenCompletions.delete(id);
-      }
-    }
+    // Session activity never reveals or holds the bar — visibility is
+    // driven by user interaction (hover/click/hotkey) and by done/attention
+    // events below. The idle timer owns hiding.
 
     // Update tray icon based on session states
     const hasAttention = sessions.some(s =>
@@ -428,7 +408,6 @@ app.whenReady().then(() => {
       s.status === 'question'
     );
     const hasWorking = sessions.some(s => s.status === 'working');
-    const pinned = hasPinnedSessions(sessions);
     const activeCount = sessions.filter(s => s.status !== 'stopped').length;
     const workingCount = sessions.filter(s => s.status === 'working').length;
     const idleCount = sessions.filter(s => s.status === 'idle').length;
@@ -440,23 +419,15 @@ app.whenReady().then(() => {
       workingCount,
       idleCount
     });
-
-    // While pinned (working / attention / unseen completions): stay visible.
-    // Otherwise: allow autohide again (collapsed only, never while expanded).
-    if (pinned) {
-      if (isAutoHidden) showNotch();
-      cancelAutoHide();
-    } else if (!isExpanded && !isAutoHidden) {
-      scheduleAutoHide();
-    }
   });
 
   agentManager.on('attention', (sessions) => {
     // Never pop the panel open — expanding is a user action (bar click, tray,
-    // hotkey, notification click). The collapsed bar shows the amber state;
-    // sound + OS notification carry the interrupt without stealing focus.
+    // hotkey, notification click). The collapsed bar slides down to show the
+    // amber state, then the idle timer tucks it away again; sound + OS
+    // notification carry the interrupt without stealing focus.
     if (isAutoHidden) showNotch();
-    cancelAutoHide();
+    scheduleAutoHide();
     const settings = agentManager.getSettings();
     if (settings.soundAlerts) {
       playAttentionAlert();
@@ -470,15 +441,11 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('done', (sessions) => {
-    // Agent finished — do NOT open the panel. Mark completions unseen so the
-    // collapsed bar keeps its "✓ N done" summary until the user looks, and
-    // fire an OS notification (clicking it opens the panel — user demand).
-    // If the panel is already expanded, the user is looking right at it.
-    if (!isExpanded) {
-      for (const s of sessions) unseenCompletions.add(s.id);
-    }
+    // Agent finished — do NOT open the panel. Slide the collapsed bar down
+    // with the "✓ N done" summary and fire an OS notification (clicking it
+    // opens the panel — user demand). The idle timer hides the bar again.
     if (isAutoHidden) showNotch();
-    cancelAutoHide();
+    scheduleAutoHide();
     const settings = agentManager.getSettings();
     if (settings.desktopNotifications !== false) {
       const unfocused = !mainWindow || !mainWindow.isFocused();
@@ -530,6 +497,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-usage-stats', () => {
     return agentManager.getUsageStats();
+  });
+
+  ipcMain.handle('get-insights', () => {
+    return agentManager.getInsights();
   });
 
   ipcMain.handle('get-settings', () => {
@@ -614,6 +585,30 @@ app.whenReady().then(() => {
   ipcMain.handle('show-notch', () => {
     showNotch();
     return true;
+  });
+
+  // Manual hide from the bar's arrow button — tuck the notch away right now
+  ipcMain.handle('hide-notch', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return false;
+    if (isExpanded) collapseNotch();
+    cancelAutoHide();
+    hideNotch();
+    return true;
+  });
+
+  // Pin toggle from the bar — pinned notches never auto-hide. Pinning while
+  // hidden pulls the bar back down and keeps it; unpinning re-arms the idle
+  // timer.
+  ipcMain.handle('set-notch-pinned', (_, pinned) => {
+    agentManager.updateSettings({ notchPinned: Boolean(pinned) });
+    const isPinned = Boolean(agentManager.getSettings().notchPinned);
+    if (isPinned) {
+      cancelAutoHide();
+      if (isAutoHidden) showNotch();
+    } else if (!isExpanded) {
+      scheduleAutoHide();
+    }
+    return isPinned;
   });
 
   ipcMain.handle('open-settings', () => {

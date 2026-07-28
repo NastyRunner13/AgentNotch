@@ -1,6 +1,7 @@
 import { renderSessionCard, getAgentBarIcon } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
 import { renderUsageView, usageFingerprint } from './components/usage-view.js';
+import { renderInsightsView, insightsFingerprint } from './components/insights-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
 /** Agents whose sessions can receive dispatched messages (mirror of main process). */
@@ -32,9 +33,15 @@ class App {
     this.usageChartMode = 'tokens';
     this._usageStatsFetchedAt = 0;
     this._lastUsageViewFp = '\x00init';
+    /** Conversation insights data + selected range (days; 0 = all) */
+    this.insights = null;
+    this.insightsRange = 30;
+    this._insightsFetchedAt = 0;
+    this._lastInsightsFp = '\x00init';
     this.currentView = 'sessions';
     this.isExpanded = false;
     this.isAutoHidden = false;
+    this.isPinned = false;
     this.initialized = false;
     this.expandedSessionId = null;
     this.expandedHistoryId = null;
@@ -83,6 +90,28 @@ class App {
           window.agentNotch.showNotch();
         }
       });
+    }
+
+    // Bar controls — pin keeps the notch on screen; arrow tucks it away now.
+    // stopPropagation (click AND keydown) so the bar's expand toggle never fires.
+    const pinBtn = document.getElementById('btn-pin');
+    if (pinBtn) {
+      pinBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.setPinned(!this.isPinned);
+      });
+      pinBtn.addEventListener('keydown', (e) => e.stopPropagation());
+    }
+
+    const hideBtn = document.getElementById('btn-hide');
+    if (hideBtn) {
+      hideBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (window.agentNotch && window.agentNotch.hideNotch) {
+          window.agentNotch.hideNotch();
+        }
+      });
+      hideBtn.addEventListener('keydown', (e) => e.stopPropagation());
     }
 
     const appEl = document.getElementById('app');
@@ -170,6 +199,15 @@ class App {
       this.isExpanded = state === 'expanded';
       this.isAutoHidden = state === 'hidden';
       this.updateNotchClass();
+
+      // Reflect the persisted pin setting on the bar
+      try {
+        const s = await window.agentNotch.getSettings();
+        this.isPinned = Boolean(s && s.notchPinned);
+      } catch {
+        this.isPinned = false;
+      }
+      this.updateBarControls();
 
       let sessions;
       try {
@@ -335,6 +373,41 @@ class App {
     }
   }
 
+  /**
+   * Pin toggle — optimistic UI, main process is the source of truth.
+   * Pinned notches never auto-hide; unpinning re-arms the idle timer.
+   */
+  async setPinned(pinned) {
+    this.isPinned = pinned;
+    this.updateBarControls();
+    if (!window.agentNotch || !window.agentNotch.setNotchPinned) return;
+    try {
+      const actual = await window.agentNotch.setNotchPinned(pinned);
+      this.isPinned = Boolean(actual);
+      this.updateBarControls();
+    } catch (err) {
+      this.isPinned = !pinned;
+      this.updateBarControls();
+      this.showToast(`Pin failed: ${err.message}`, 'error');
+    }
+  }
+
+  /** Reflect pin state on the bar: active pin; tuck-away arrow only when unpinned. */
+  updateBarControls() {
+    const pinBtn = document.getElementById('btn-pin');
+    const hideBtn = document.getElementById('btn-hide');
+    if (pinBtn) {
+      pinBtn.classList.toggle('active', this.isPinned);
+      pinBtn.setAttribute('aria-pressed', String(this.isPinned));
+      pinBtn.title = this.isPinned
+        ? 'Pinned — click to let the notch auto-hide'
+        : 'Pin — keep the notch on screen';
+    }
+    if (hideBtn) {
+      hideBtn.hidden = this.isPinned;
+    }
+  }
+
   updateNotchClass() {
     const appEl = document.getElementById('app');
     if (!appEl) return;
@@ -375,6 +448,8 @@ class App {
       this.loadHistory();
     } else if (viewName === 'usage') {
       this.loadUsageStats();
+    } else if (viewName === 'insights') {
+      this.loadInsights();
     } else {
       this.render();
     }
@@ -417,9 +492,53 @@ class App {
    * dedicated push channel.
    */
   _maybeRefreshUsageStats() {
-    if (this.currentView !== 'usage') return;
-    if (Date.now() - this._usageStatsFetchedAt < 15000) return;
-    this.loadUsageStats();
+    if (this.currentView === 'usage') {
+      if (Date.now() - this._usageStatsFetchedAt < 15000) return;
+      this.loadUsageStats();
+    } else if (this.currentView === 'insights') {
+      if (Date.now() - this._insightsFetchedAt < 30000) return;
+      this.loadInsights();
+    }
+  }
+
+  async loadInsights() {
+    if (window.agentNotch && window.agentNotch.getInsights) {
+      try {
+        this.insights = await window.agentNotch.getInsights();
+        this._insightsFetchedAt = Date.now();
+      } catch (err) {
+        this.insights = this.insights || { updatedAt: Date.now(), records: [] };
+        this.showToast(`Failed to load insights: ${err.message}`, 'error');
+      }
+    } else {
+      // Dev mode fallback
+      this.insights = getMockInsights();
+      this._insightsFetchedAt = Date.now();
+    }
+    this.render();
+  }
+
+  renderInsights() {
+    const container = document.getElementById('insights-list');
+    if (!container) return;
+
+    const data = this.insights || { updatedAt: 0, records: [] };
+    const fp = insightsFingerprint(data, this.insightsRange);
+    if (fp === this._lastInsightsFp && container.dataset.bound === '1') return;
+    this._lastInsightsFp = fp;
+    container.dataset.bound = '1';
+
+    container.innerHTML = renderInsightsView(data, this.insightsRange);
+
+    container.querySelectorAll('.usage-range-btn[data-insight-range]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const days = parseInt(btn.dataset.insightRange, 10);
+        if (!Number.isFinite(days) || days === this.insightsRange) return;
+        this.insightsRange = days;
+        this.renderInsights();
+      });
+    });
   }
 
   renderUsageDashboard() {
@@ -685,6 +804,8 @@ class App {
       this.renderHistory();
     } else if (this.currentView === 'usage') {
       this.renderUsageDashboard();
+    } else if (this.currentView === 'insights') {
+      this.renderInsights();
     }
     this.updateBadges();
     this.updateLaserState();
@@ -1305,6 +1426,35 @@ function getMockUsageStats() {
       { day: day(2), agent: 'Grok', sessions: 1, ms: 1500000 },
       { day: day(4), agent: 'Claude Code', sessions: 2, ms: 6120000 },
       { day: day(6), agent: 'OpenCode', sessions: 1, ms: 2280000 }
+    ]
+  };
+}
+
+/** Mock conversation insights for local development/preview */
+function getMockInsights() {
+  const rec = (offset, agent, taskName, category, area, langs, complexity, specificity, words, tools, durationMs) => {
+    const ts = Date.now() - offset * 86400000 - 3600000;
+    const d = new Date(ts);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return { id: `mock-${taskName.slice(0, 12)}-${offset}`, agent, ts, day, taskName, category, area, langs, complexity, specificity, words, tools, durationMs };
+  };
+  return {
+    updatedAt: Date.now(),
+    records: [
+      rec(0, 'Claude Code', 'fix auth bug', 'bugfix', 'backend', ['TypeScript'], 46, 36, 6, 9, 1620000),
+      rec(0, 'Codex', 'add signup validation', 'feature', 'backend', ['JavaScript'], 38, 44, 9, 6, 1500000),
+      rec(1, 'Claude Code', 'notch slide animation', 'styling', 'frontend', ['CSS', 'JavaScript'], 30, 40, 8, 5, 900000),
+      rec(1, 'OpenCode', 'write parser tests', 'testing', 'backend', ['JavaScript'], 42, 52, 11, 8, 1200000),
+      rec(2, 'Claude Code', 'refactor db pool', 'refactor', 'data', ['TypeScript', 'SQL'], 55, 41, 8, 12, 2100000),
+      rec(3, 'Grok', 'add usage bar', 'feature', 'frontend', ['JavaScript', 'CSS'], 35, 30, 6, 7, 420000),
+      rec(4, 'Codex', 'ci deploy pipeline', 'devops', 'devops', ['YAML', 'Shell'], 48, 47, 10, 6, 1500000),
+      rec(5, 'Claude Code', 'plugin architecture design', 'architecture', 'backend', ['TypeScript'], 62, 58, 24, 4, 2700000),
+      rec(6, 'Antigravity', 'explain watcher flow', 'exploration', 'general', [], 18, 24, 5, 2, 300000),
+      rec(8, 'Claude Code', 'optimize burn chart render', 'performance', 'frontend', ['JavaScript'], 44, 50, 9, 7, 1320000),
+      rec(10, 'OpenCode', 'sanitize user input', 'security', 'backend', ['Python'], 33, 46, 7, 5, 780000),
+      rec(12, 'Codex', 'update readme setup', 'docs', 'docs', ['Markdown'], 16, 38, 6, 2, 480000),
+      rec(14, 'Claude Code', 'users table migration', 'data', 'data', ['SQL'], 40, 49, 8, 6, 1080000),
+      rec(20, 'Grok', 'fix toast z-index', 'bugfix', 'frontend', ['CSS'], 22, 33, 5, 3, 360000)
     ]
   };
 }
