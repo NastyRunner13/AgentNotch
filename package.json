@@ -5,7 +5,7 @@
   "main": "src/main/index.js",
   "scripts": {
     "dev": "electron .",
-    "test": "node --test \"test/**/*.test.js\"",
+    "test": "node --test",
     "permission-bridge": "node src/main/permission-bridge.js",
     "build": "electron-builder",
     "build:win": "electron-builder --win",
