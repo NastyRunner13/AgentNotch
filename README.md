@@ -7,11 +7,19 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/NastyRunner13/AgentNotch/actions/workflows/ci.yml"><img src="https://github.com/NastyRunner13/AgentNotch/actions/workflows/ci.yml/badge.svg" alt="CI Status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
+  <a href="CHANGELOG.md"><img src="https://img.shields.io/badge/version-1.0.0-emerald.svg" alt="Version"></a>
+</p>
+
+<p align="center">
   <a href="#supported-agents">Agents</a> ·
   <a href="#features">Features</a> ·
   <a href="#getting-started">Get Started</a> ·
   <a href="#architecture">Architecture</a> ·
-  <a href="DESIGN.md">Design System</a>
+  <a href="DESIGN.md">Design System</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="CHANGELOG.md">Changelog</a>
 </p>
 
 ---
@@ -137,7 +145,7 @@ test/
 
 Dark, dense, interrupt-only. Near-black tonal stack (`#0a0a0a` → `#1c1c1c`), status color earned by real agent state, Inter + JetBrains Mono typography. Full specification in [DESIGN.md](DESIGN.md).
 
-## Privacy
+## Privacy & Security
 
 AgentNotch is **local-first and private by design**.
 
@@ -145,6 +153,15 @@ AgentNotch is **local-first and private by design**.
 - Session logs are parsed directly in the watcher thread.
 - Settings and history never leave your machine (`~/.agent-notch/`).
 
+For security disclosures, see [SECURITY.md](SECURITY.md).
+
+## Contributing & Community
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, development guidelines, and conventional commit rules.
+
+Please adhere to our [Code of Conduct](CODE_OF_CONDUCT.md) in all community interactions.
+
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE) © AgentNotch Maintainers
+
