@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Attention Control**: Per-event interrupt matrix (permission / question / needs-attention / done) for desktop notifications and sound, gated by master Sound and Notifications toggles. Defaults match 1.0 behavior (attention loud; done notify without sound).
+- **Notch placement**: Choose display, left/center/right alignment, and autohide delay (2s / 4s / 8s / 15s).
+- **Custom global hotkey**: Capture a new accelerator in Settings; Reset restores the platform default. Conflicts fall back gracefully with a toast.
+- Shared `settings-defaults` + pure `attention-policy` module with unit tests (policy never auto-opens the panel).
+
+---
+
 ## [1.0.0] - 2026-07-28
 
 ### Added

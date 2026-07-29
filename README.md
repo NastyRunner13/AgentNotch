@@ -106,7 +106,7 @@ Message any running agent session directly from the expanded notch — pick a li
 AI-powered conversation analysis that surfaces session patterns, agent behavior trends, and productivity signals across your agent interactions.
 
 ### Settings & History
-Per-agent watcher toggles, notification sounds, desktop banners, autostart, and locally-archived session history.
+Per-agent watcher toggles, **Attention Control** (when to sound / notify for permission, question, needs-attention, and done), **Notch** placement (display, left/center/right, autohide delay, custom global hotkey), autostart, and locally-archived session history.
 
 ## ⚡️ Quick Start
 
@@ -213,7 +213,7 @@ agent-notch/
 
 | Shortcut | Action |
 | :--- | :--- |
-| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> / <kbd>⌘</kbd><kbd>⇧</kbd><kbd>A</kbd> | Toggle notch panel |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> / <kbd>⌘</kbd><kbd>⇧</kbd><kbd>A</kbd> | Toggle notch panel (customizable in **Settings → Notch**) |
 | <kbd>Ctrl</kbd>+<kbd>Y</kbd> | Allow Claude permission request |
 | <kbd>Ctrl</kbd>+<kbd>N</kbd> | Deny Claude permission request |
 
