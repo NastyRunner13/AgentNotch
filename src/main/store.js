@@ -1,5 +1,6 @@
 const path = require('path');
 const os = require('os');
+const { DEFAULT_SETTINGS } = require('./settings-defaults');
 
 /**
  * Thin wrapper around electron-store for app settings.
@@ -13,19 +14,7 @@ function createSettingsStore() {
   return new ElectronStore({
     name: 'settings',
     cwd: path.join(os.homedir(), '.agent-notch'),
-    defaults: {
-      enableClaude: true,
-      enableCodex: true,
-      enableCursor: true,
-      enableAntigravity: true,
-      enableGrok: true,
-      enableOpencode: true,
-      soundAlerts: true,
-      launchAtStartup: false,
-      desktopNotifications: true,
-      notchPinned: false,
-      pollInterval: 3000
-    }
+    defaults: { ...DEFAULT_SETTINGS }
   });
 }
 
