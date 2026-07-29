@@ -11,11 +11,17 @@ const { AntigravityWatcher } = require('./watchers/antigravity-watcher');
 const { GrokWatcher } = require('./watchers/grok-watcher');
 const { OpencodeWatcher } = require('./watchers/opencode-watcher');
 const { createSettingsStore } = require('./store');
+const {
+  DEFAULT_SETTINGS,
+  ATTENTION_NOTIFY_KEYS,
+  ATTENTION_SOUND_KEYS
+} = require('./settings-defaults');
 const { collectUsageLimits } = require('./usage-limits');
 const { UsageTracker, dayKey } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
 const { buildInsights } = require('./insights');
 const permissionBridge = require('./permission-bridge');
+const { normalizeNotchAlign, clampAutohideDelayMs } = require('./attention-policy');
 
 const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
 
@@ -45,20 +51,6 @@ const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
  * @property {object|null} [rateLimit]
  */
 
-const DEFAULT_SETTINGS = {
-  enableClaude: true,
-  enableCodex: true,
-  enableCursor: true,
-  enableAntigravity: true,
-  enableGrok: true,
-  enableOpencode: true,
-  soundAlerts: true,
-  launchAtStartup: false,
-  desktopNotifications: true,
-  notchPinned: false,
-  pollInterval: 3000
-};
-
 const AGENT_APP_MAP = {
   'Claude Code': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'claude'] },
   'Codex': { win: 'WindowsTerminal.exe', mac: 'Terminal', linux: null, processNames: ['WindowsTerminal', 'wt', 'codex'] },
@@ -79,6 +71,8 @@ class AgentManager extends EventEmitter {
 
     this._store = createSettingsStore();
     this.settings = { ...DEFAULT_SETTINGS, ...this._store.store };
+    this._migrateAttentionSettings();
+    this._normalizeNotchSettings();
 
     const poll = this.settings.pollInterval || 3000;
     this.watchers = {
@@ -531,6 +525,65 @@ class AgentManager extends EventEmitter {
   }
 
   /**
+   * Upgrade path: older installs only had soundAlerts / desktopNotifications.
+   * Seed matrix keys from masters when those keys were never written to disk.
+   */
+  _migrateAttentionSettings() {
+    const store = this._store;
+    const has = (key) => {
+      try {
+        return typeof store.has === 'function' && store.has(key);
+      } catch {
+        return false;
+      }
+    };
+
+    let changed = false;
+    if (!has('notifyOnPermission')) {
+      const n = this.settings.desktopNotifications !== false;
+      for (const key of ATTENTION_NOTIFY_KEYS) {
+        this.settings[key] = n;
+      }
+      changed = true;
+    }
+    if (!has('soundOnPermission')) {
+      const s = this.settings.soundAlerts !== false;
+      for (const key of ATTENTION_SOUND_KEYS) {
+        this.settings[key] = s;
+      }
+      // soundOnDone stays at default (false) unless already present
+      if (!has('soundOnDone')) {
+        this.settings.soundOnDone = false;
+      }
+      changed = true;
+    }
+    if (changed) {
+      this._persistSettings();
+    }
+  }
+
+  _normalizeNotchSettings() {
+    this.settings.autohideDelayMs = clampAutohideDelayMs(this.settings.autohideDelayMs);
+    this.settings.notchAlign = normalizeNotchAlign(this.settings.notchAlign);
+    if (typeof this.settings.notchDisplayId !== 'number' || !Number.isFinite(this.settings.notchDisplayId)) {
+      this.settings.notchDisplayId = 0;
+    }
+    if (typeof this.settings.globalHotkey !== 'string') {
+      this.settings.globalHotkey = '';
+    }
+  }
+
+  _persistSettings() {
+    const toSave = {};
+    for (const key of Object.keys(DEFAULT_SETTINGS)) {
+      if (this.settings[key] !== undefined) {
+        toSave[key] = this.settings[key];
+      }
+    }
+    this._store.set(toSave);
+  }
+
+  /**
    * Which agent data roots exist on disk (for empty-state / settings UI).
    */
   getAgentDetection() {
@@ -554,6 +607,7 @@ class AgentManager extends EventEmitter {
   }
 
   updateSettings(newSettings) {
+    if (!newSettings || typeof newSettings !== 'object') return;
     const prev = { ...this.settings };
     // Whitelist: only accept known keys from DEFAULT_SETTINGS (prevents __proto__
     // pollution), and only when the value type matches the default (prevents
@@ -566,14 +620,31 @@ class AgentManager extends EventEmitter {
     }
     Object.assign(this.settings, safeUpdate);
 
-    // Persist settings (only known keys)
-    const toSave = {};
-    for (const key of Object.keys(DEFAULT_SETTINGS)) {
-      if (this.settings[key] !== undefined) {
-        toSave[key] = this.settings[key];
-      }
+    // Masters gate delivery in attention-policy only — they do not overwrite the
+    // matrix, so turning a master back on restores the user's prior event picks.
+    // When the matrix is edited, re-derive masters so the top toggles stay honest
+    // (any channel on → master on). Explicit master writes always win for that key.
+    const matrixTouched = [...ATTENTION_NOTIFY_KEYS, ...ATTENTION_SOUND_KEYS, 'soundOnDone']
+      .some((k) => Object.prototype.hasOwnProperty.call(safeUpdate, k));
+    if (matrixTouched && !Object.prototype.hasOwnProperty.call(safeUpdate, 'soundAlerts')) {
+      this.settings.soundAlerts = Boolean(
+        this.settings.soundOnPermission ||
+        this.settings.soundOnQuestion ||
+        this.settings.soundOnNeedsAttention ||
+        this.settings.soundOnDone
+      );
     }
-    this._store.set(toSave);
+    if (matrixTouched && !Object.prototype.hasOwnProperty.call(safeUpdate, 'desktopNotifications')) {
+      this.settings.desktopNotifications = Boolean(
+        this.settings.notifyOnPermission ||
+        this.settings.notifyOnQuestion ||
+        this.settings.notifyOnNeedsAttention ||
+        this.settings.notifyOnDone
+      );
+    }
+
+    this._normalizeNotchSettings();
+    this._persistSettings();
 
     // Toggle watchers based on settings
     const watcherMap = {
@@ -601,12 +672,8 @@ class AgentManager extends EventEmitter {
       }
     }
 
-    // Notify main process for login-item / side effects
-    if (prev.launchAtStartup !== this.settings.launchAtStartup) {
-      this.emit('settings-changed', { launchAtStartup: this.settings.launchAtStartup });
-    }
-
-    this.emit('settings-changed', { ...this.settings });
+    // Notify main process for login-item / side effects (full settings payload)
+    this.emit('settings-changed', { ...this.settings, _prev: prev });
   }
 
   // ── History ────────────────────────────────────────
