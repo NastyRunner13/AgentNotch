@@ -3,6 +3,11 @@ const path = require('path');
 const { createTray, updateTrayIcon } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
 const { installConsoleCapture, closeLogger } = require('./logger');
+const {
+  channelsForSessions,
+  clampAutohideDelayMs,
+  normalizeNotchAlign
+} = require('./attention-policy');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
 installConsoleCapture();
@@ -20,6 +25,8 @@ let isExpanded = false;
 let isAutoHidden = false;
 let autoHideTimer = null;
 let notchAnimationTimer = null;
+/** @type {string|null} last successfully registered accelerator */
+let registeredHotkey = null;
 
 // Notch dimensions
 const NOTCH_WIDTH_COLLAPSED = 420;
@@ -27,13 +34,14 @@ const NOTCH_WIDTH_EXPANDED = 600;
 const NOTCH_HEIGHT_COLLAPSED = 40;
 const NOTCH_HEIGHT_EXPANDED = 560;
 const NOTCH_HEIGHT_HIDDEN = 4; // Visible peek strip when auto-hidden
-/** Negative y so only the peek strip remains on-screen (true slide-up hide). */
-const NOTCH_HIDDEN_Y = -(NOTCH_HEIGHT_COLLAPSED - NOTCH_HEIGHT_HIDDEN);
+/** Offset from workArea.y so only the peek strip remains (true slide-up hide). */
+const NOTCH_HIDDEN_Y_OFFSET = -(NOTCH_HEIGHT_COLLAPSED - NOTCH_HEIGHT_HIDDEN);
 const NOTCH_EXPAND_DURATION = 420;   // Smooth ease-out expand (no overshoot bounce)
 const NOTCH_COLLAPSE_DURATION = 300; // Smooth deceleration
 const NOTCH_SHOW_DURATION = 320;     // Slide-down reveal from hidden strip
 const NOTCH_HIDE_DURATION = 340;     // Slide-up into hidden strip
 const FRAME_INTERVAL = 8;            // ~120fps for silky smooth animation
+const NOTCH_EDGE_MARGIN = 24;
 
 function stopNotchAnimation() {
   if (notchAnimationTimer) {
@@ -42,20 +50,127 @@ function stopNotchAnimation() {
   }
 }
 
-function getCenteredX(width) {
-  const { width: screenWidth } = screen.getPrimaryDisplay().workAreaSize;
-  return Math.round((screenWidth - width) / 2);
+function getSettingsSafe() {
+  return agentManager ? agentManager.getSettings() : {};
 }
 
-function setNotchBounds(width, height, y = 0) {
+function resolveTargetDisplay(settings) {
+  const displays = screen.getAllDisplays();
+  const id = settings && settings.notchDisplayId;
+  if (id && displays.some((d) => d.id === id)) {
+    return displays.find((d) => d.id === id);
+  }
+  return screen.getPrimaryDisplay();
+}
+
+function getNotchX(width, settings) {
+  const display = resolveTargetDisplay(settings || getSettingsSafe());
+  const { x, width: areaW } = display.workArea;
+  const align = normalizeNotchAlign(settings?.notchAlign ?? getSettingsSafe().notchAlign);
+  if (align === 'left') return Math.round(x + NOTCH_EDGE_MARGIN);
+  if (align === 'right') return Math.round(x + areaW - width - NOTCH_EDGE_MARGIN);
+  return Math.round(x + (areaW - width) / 2);
+}
+
+/** Visible top of notch (work area top) or tucked peek position. */
+function getNotchY(hidden, settings) {
+  const display = resolveTargetDisplay(settings || getSettingsSafe());
+  const top = display.workArea.y;
+  return hidden ? top + NOTCH_HIDDEN_Y_OFFSET : top;
+}
+
+/** @deprecated name kept for call sites — display-aware horizontal placement */
+function getCenteredX(width) {
+  return getNotchX(width, getSettingsSafe());
+}
+
+function setNotchBounds(width, height, y) {
   if (!mainWindow) return;
   stopNotchAnimation();
+  const settings = getSettingsSafe();
+  const resolvedY = typeof y === 'number' ? y : getNotchY(false, settings);
   mainWindow.setBounds({
-    x: getCenteredX(width),
-    y,
+    x: getNotchX(width, settings),
+    y: resolvedY,
     width,
     height
   });
+}
+
+function defaultHotkeyAccelerator() {
+  return process.platform === 'darwin' ? 'Command+Shift+A' : 'Control+Shift+A';
+}
+
+function resolveHotkeyAccelerator(settings) {
+  const custom = settings && typeof settings.globalHotkey === 'string'
+    ? settings.globalHotkey.trim()
+    : '';
+  return custom || defaultHotkeyAccelerator();
+}
+
+function onGlobalHotkey() {
+  if (!mainWindow) return;
+  if (isAutoHidden) {
+    showNotch();
+    expandNotch();
+  } else {
+    toggleNotch();
+  }
+  if (mainWindow) mainWindow.focus();
+}
+
+/**
+ * Register (or re-register) the notch toggle hotkey.
+ * @returns {{ ok: boolean, accelerator: string, error?: string }}
+ */
+function registerNotchHotkey(settings) {
+  const accelerator = resolveHotkeyAccelerator(settings || getSettingsSafe());
+  try {
+    globalShortcut.unregisterAll();
+    registeredHotkey = null;
+    const ok = globalShortcut.register(accelerator, onGlobalHotkey);
+    if (!ok) {
+      console.warn('[AgentNotch] Global shortcut already in use:', accelerator);
+      // Fall back to default if custom failed
+      if (accelerator !== defaultHotkeyAccelerator()) {
+        const fallback = defaultHotkeyAccelerator();
+        const fbOk = globalShortcut.register(fallback, onGlobalHotkey);
+        if (fbOk) {
+          registeredHotkey = fallback;
+          return { ok: false, accelerator, error: 'Hotkey in use — using default', fallback };
+        }
+      }
+      return { ok: false, accelerator, error: 'Hotkey in use' };
+    }
+    registeredHotkey = accelerator;
+    return { ok: true, accelerator };
+  } catch (err) {
+    console.warn('[AgentNotch] Could not register global shortcut:', err.message);
+    return { ok: false, accelerator, error: err.message };
+  }
+}
+
+function listDisplaysForSettings() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, i) => ({
+    id: d.id,
+    label: d.label || `Display ${i + 1}`,
+    primary: d.id === primaryId,
+    bounds: d.bounds,
+    workArea: d.workArea
+  }));
+}
+
+/** If preferred display disappeared, fall back to primary and persist. */
+function ensureDisplayStillAvailable() {
+  if (!agentManager) return;
+  const settings = agentManager.getSettings();
+  const id = settings.notchDisplayId;
+  if (!id) return;
+  const exists = screen.getAllDisplays().some((d) => d.id === id);
+  if (!exists) {
+    agentManager.updateSettings({ notchDisplayId: 0 });
+  }
 }
 
 /**
@@ -91,7 +206,7 @@ function animateNotchBounds(target, duration, easing, onComplete) {
   const { width: startWidth, height: startHeight, y: startY } = mainWindow.getBounds();
   const targetWidth = target.width;
   const targetHeight = target.height;
-  const targetY = target.y ?? 0;
+  const targetY = typeof target.y === 'number' ? target.y : getNotchY(false);
   const startedAt = Date.now();
 
   const tick = () => {
@@ -108,7 +223,7 @@ function animateNotchBounds(target, duration, easing, onComplete) {
     const y = Math.round(startY + (targetY - startY) * easedProgress);
 
     mainWindow.setBounds({
-      x: getCenteredX(width),
+      x: getNotchX(width),
       y,
       width,
       height
@@ -126,15 +241,15 @@ function animateNotchBounds(target, duration, easing, onComplete) {
 }
 
 function createWindow() {
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width: screenWidth } = primaryDisplay.workAreaSize;
-  const x = Math.round((screenWidth - NOTCH_WIDTH_COLLAPSED) / 2);
+  const settings = getSettingsSafe();
+  const x = getNotchX(NOTCH_WIDTH_COLLAPSED, settings);
+  const y = getNotchY(false, settings);
 
   mainWindow = new BrowserWindow({
     width: NOTCH_WIDTH_COLLAPSED,
     height: NOTCH_HEIGHT_COLLAPSED,
-    x: x,
-    y: 0,
+    x,
+    y,
     show: false,
     frame: false,
     transparent: true,
@@ -191,7 +306,7 @@ function expandNotch() {
   mainWindow.webContents.send('notch-state', 'expanded');
   // Smooth ease-out expand — no overshoot bounce (avoids Windows setBounds jitter)
   animateNotchBounds(
-    { width: NOTCH_WIDTH_EXPANDED, height: NOTCH_HEIGHT_EXPANDED, y: 0 },
+    { width: NOTCH_WIDTH_EXPANDED, height: NOTCH_HEIGHT_EXPANDED, y: getNotchY(false) },
     NOTCH_EXPAND_DURATION,
     easeOutQuint
   );
@@ -203,7 +318,7 @@ function collapseNotch() {
 
   mainWindow.webContents.send('notch-state', 'collapsed');
   animateNotchBounds(
-    { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: 0 },
+    { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: getNotchY(false) },
     NOTCH_COLLAPSE_DURATION,
     easeOutQuint
   );
@@ -233,7 +348,7 @@ function showNotch() {
   mainWindow.webContents.send('autohide-state', false);
   // Slide down from peek strip into collapsed bar
   animateNotchBounds(
-    { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: 0 },
+    { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: getNotchY(false) },
     NOTCH_SHOW_DURATION,
     easeOutExpo
   );
@@ -249,7 +364,7 @@ function hideNotch() {
     {
       width: NOTCH_WIDTH_COLLAPSED,
       height: NOTCH_HEIGHT_COLLAPSED,
-      y: NOTCH_HIDDEN_Y
+      y: getNotchY(true)
     },
     NOTCH_HIDE_DURATION,
     easeInCubic,
@@ -270,16 +385,17 @@ function isNotchPinned() {
 }
 
 /**
- * Arm the 4s idle timer. Visibility is interaction-driven only: agent
+ * Arm the idle timer. Visibility is interaction-driven only: agent
  * activity never holds the bar down. The bar tucks away unless the panel
- * is expanded or the user pinned it.
+ * is expanded or the user pinned it. Delay comes from settings (default 4s).
  */
 function scheduleAutoHide() {
   cancelAutoHide();
+  const delay = clampAutohideDelayMs(getSettingsSafe().autohideDelayMs);
   autoHideTimer = setTimeout(() => {
     if (isExpanded || isNotchPinned()) return;
     hideNotch();
-  }, 4000); // 4 second idle
+  }, delay);
 }
 
 function cancelAutoHide() {
@@ -364,12 +480,21 @@ function showDoneNotification(sessions) {
   n.show();
 }
 
-// Re-center on display changes (preserve expanded / collapsed / hidden y)
+// Re-place on display / settings changes (preserve expanded / collapsed / hidden)
 function repositionNotch() {
-  if (!mainWindow) return;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  ensureDisplayStillAvailable();
+  const settings = getSettingsSafe();
   const width = isExpanded ? NOTCH_WIDTH_EXPANDED : NOTCH_WIDTH_COLLAPSED;
-  const y = isAutoHidden && !isExpanded ? NOTCH_HIDDEN_Y : 0;
-  mainWindow.setPosition(getCenteredX(width), y, false);
+  const height = isExpanded ? NOTCH_HEIGHT_EXPANDED : NOTCH_HEIGHT_COLLAPSED;
+  const y = getNotchY(isAutoHidden && !isExpanded, settings);
+  stopNotchAnimation();
+  mainWindow.setBounds({
+    x: getNotchX(width, settings),
+    y,
+    width,
+    height
+  });
 }
 
 app.whenReady().then(() => {
@@ -386,11 +511,12 @@ app.whenReady().then(() => {
     onSettings: () => openSettings()
   });
 
-  // Initialize agent manager
+  // Initialize agent manager (after window — settings drive placement / hotkey)
   agentManager = new AgentManager();
 
-  // Apply launch-at-startup from persisted settings
+  // Apply launch-at-startup + place notch using persisted display/align
   applyLoginItemSetting(agentManager.getSettings().launchAtStartup);
+  repositionNotch();
 
   agentManager.on('sessions-update', (sessions) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -423,16 +549,17 @@ app.whenReady().then(() => {
 
   agentManager.on('attention', (sessions) => {
     // Never pop the panel open — expanding is a user action (bar click, tray,
-    // hotkey, notification click). The collapsed bar slides down to show the
-    // amber state, then the idle timer tucks it away again; sound + OS
-    // notification carry the interrupt without stealing focus.
-    if (isAutoHidden) showNotch();
-    scheduleAutoHide();
+    // hotkey, notification click). Policy gates reveal / sound / toast only.
     const settings = agentManager.getSettings();
-    if (settings.soundAlerts) {
+    const channels = channelsForSessions(settings, sessions);
+    if (channels.reveal) {
+      if (isAutoHidden) showNotch();
+      scheduleAutoHide();
+    }
+    if (channels.sound) {
       playAttentionAlert();
     }
-    if (settings.desktopNotifications !== false) {
+    if (channels.notify) {
       const unfocused = !mainWindow || !mainWindow.isFocused();
       if (unfocused) {
         showAttentionNotification(sessions);
@@ -441,13 +568,17 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('done', (sessions) => {
-    // Agent finished — do NOT open the panel. Slide the collapsed bar down
-    // with the "✓ N done" summary and fire an OS notification (clicking it
-    // opens the panel — user demand). The idle timer hides the bar again.
-    if (isAutoHidden) showNotch();
-    scheduleAutoHide();
+    // Agent finished — do NOT open the panel. Policy may silence toast/reveal.
     const settings = agentManager.getSettings();
-    if (settings.desktopNotifications !== false) {
+    const channels = channelsForSessions(settings, sessions, 'done');
+    if (channels.reveal) {
+      if (isAutoHidden) showNotch();
+      scheduleAutoHide();
+    }
+    if (channels.sound) {
+      playAttentionAlert();
+    }
+    if (channels.notify) {
       const unfocused = !mainWindow || !mainWindow.isFocused();
       if (unfocused) {
         showDoneNotification(sessions);
@@ -462,29 +593,31 @@ app.whenReady().then(() => {
   });
 
   agentManager.on('settings-changed', (settings) => {
-    if (settings.launchAtStartup !== undefined) {
+    const prev = settings._prev || {};
+    if (settings.launchAtStartup !== prev.launchAtStartup) {
       applyLoginItemSetting(settings.launchAtStartup);
+    }
+    if (settings.globalHotkey !== prev.globalHotkey) {
+      const result = registerNotchHotkey(settings);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('hotkey-register-result', result);
+      }
+    }
+    if (
+      settings.notchDisplayId !== prev.notchDisplayId ||
+      settings.notchAlign !== prev.notchAlign
+    ) {
+      repositionNotch();
+    }
+    if (settings.autohideDelayMs !== prev.autohideDelayMs && !isExpanded && !isNotchPinned()) {
+      scheduleAutoHide();
     }
   });
 
   agentManager.start();
 
-  // Global hotkey to toggle notch
-  try {
-    const accelerator = process.platform === 'darwin' ? 'Command+Shift+A' : 'Control+Shift+A';
-    globalShortcut.register(accelerator, () => {
-      if (!mainWindow) return;
-      if (isAutoHidden) {
-        showNotch();
-        expandNotch();
-      } else {
-        toggleNotch();
-      }
-      if (mainWindow) mainWindow.focus();
-    });
-  } catch (err) {
-    console.warn('[AgentNotch] Could not register global shortcut:', err.message);
-  }
+  // Global hotkey to toggle notch (customizable via settings)
+  registerNotchHotkey(agentManager.getSettings());
 
   // IPC Handlers
   ipcMain.handle('get-sessions', () => {
@@ -513,7 +646,20 @@ app.whenReady().then(() => {
 
   ipcMain.handle('set-settings', (_, settings) => {
     agentManager.updateSettings(settings);
-    return true;
+    return agentManager.getSettings();
+  });
+
+  ipcMain.handle('get-displays', () => {
+    return listDisplaysForSettings();
+  });
+
+  ipcMain.handle('get-hotkey-info', () => {
+    const settings = agentManager.getSettings();
+    return {
+      accelerator: registeredHotkey || resolveHotkeyAccelerator(settings),
+      defaultAccelerator: defaultHotkeyAccelerator(),
+      custom: Boolean(settings.globalHotkey && String(settings.globalHotkey).trim())
+    };
   });
 
   // Session-id format validation — ids are prefixed slugs derived from on-disk filenames.
@@ -654,8 +800,20 @@ app.whenReady().then(() => {
     return agentManager.dispatchTask(sessionId, prompt);
   });
 
-  // Re-center on display geometry change
-  screen.on('display-metrics-changed', repositionNotch);
+  // Re-place on display geometry / add / remove
+  screen.on('display-metrics-changed', () => {
+    ensureDisplayStillAvailable();
+    repositionNotch();
+  });
+  screen.on('display-removed', () => {
+    ensureDisplayStillAvailable();
+    repositionNotch();
+  });
+  screen.on('display-added', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('displays-changed');
+    }
+  });
 });
 
 app.on('window-all-closed', () => {

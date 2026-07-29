@@ -31,6 +31,18 @@ contextBridge.exposeInMainWorld('agentNotch', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
   getAgentDetection: () => ipcRenderer.invoke('get-agent-detection'),
+  getDisplays: () => ipcRenderer.invoke('get-displays'),
+  getHotkeyInfo: () => ipcRenderer.invoke('get-hotkey-info'),
+  onHotkeyRegisterResult: (callback) => {
+    const handler = (_, result) => callback(result);
+    ipcRenderer.on('hotkey-register-result', handler);
+    return () => ipcRenderer.removeListener('hotkey-register-result', handler);
+  },
+  onDisplaysChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('displays-changed', handler);
+    return () => ipcRenderer.removeListener('displays-changed', handler);
+  },
 
   // Actions
   approvePermission: (sessionId) => ipcRenderer.invoke('approve-permission', sessionId),
