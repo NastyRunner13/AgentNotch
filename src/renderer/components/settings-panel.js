@@ -1,7 +1,37 @@
 /**
  * Settings panel initialization.
- * Binds toggle switches to app settings via IPC.
+ * Binds toggles, attention matrix, notch placement, and hotkey capture via IPC.
  */
+
+const MASTER_TOGGLES = {
+  'set-claude': 'enableClaude',
+  'set-codex': 'enableCodex',
+  'set-cursor': 'enableCursor',
+  'set-antigravity': 'enableAntigravity',
+  'set-grok': 'enableGrok',
+  'set-opencode': 'enableOpencode',
+  'set-sound': 'soundAlerts',
+  'set-notifications': 'desktopNotifications',
+  'set-startup': 'launchAtStartup'
+};
+
+const MATRIX_TOGGLES = {
+  'set-notify-permission': 'notifyOnPermission',
+  'set-notify-question': 'notifyOnQuestion',
+  'set-notify-needs': 'notifyOnNeedsAttention',
+  'set-notify-done': 'notifyOnDone',
+  'set-sound-permission': 'soundOnPermission',
+  'set-sound-question': 'soundOnQuestion',
+  'set-sound-needs': 'soundOnNeedsAttention',
+  'set-sound-done': 'soundOnDone'
+};
+
+const AUTOHIDE_PRESETS = [2000, 4000, 8000, 15000];
+
+/** @type {boolean} */
+let capturingHotkey = false;
+/** @type {(e: KeyboardEvent) => void | null} */
+let hotkeyKeyHandler = null;
 
 export function initSettings(app) {
   const settingsBtn = document.getElementById('btn-settings');
@@ -12,13 +42,12 @@ export function initSettings(app) {
     });
   }
 
-  // Load settings and apply to checkboxes
   if (window.agentNotch) {
-    window.agentNotch.getSettings().then(settings => {
+    window.agentNotch.getSettings().then((settings) => {
       applySettings(settings);
     });
 
-    window.agentNotch.getAppVersion().then(version => {
+    window.agentNotch.getAppVersion().then((version) => {
       const el = document.querySelector('.settings-version');
       if (el && version) {
         el.textContent = `AgentNotch v${version}`;
@@ -26,31 +55,83 @@ export function initSettings(app) {
     }).catch(() => {});
 
     refreshClaudeHookStatus();
-  }
+    refreshDisplays();
+    refreshHotkeyInfo();
 
-  // Bind change events
-  const toggles = {
-    'set-claude': 'enableClaude',
-    'set-codex': 'enableCodex',
-    'set-cursor': 'enableCursor',
-    'set-antigravity': 'enableAntigravity',
-    'set-grok': 'enableGrok',
-    'set-opencode': 'enableOpencode',
-    'set-sound': 'soundAlerts',
-    'set-notifications': 'desktopNotifications',
-    'set-startup': 'launchAtStartup'
-  };
-
-  for (const [elId, settingKey] of Object.entries(toggles)) {
-    const el = document.getElementById(elId);
-    if (el) {
-      el.addEventListener('change', () => {
-        const update = { [settingKey]: el.checked };
-        if (window.agentNotch) {
-          window.agentNotch.setSettings(update);
+    if (window.agentNotch.onDisplaysChanged) {
+      window.agentNotch.onDisplaysChanged(() => refreshDisplays());
+    }
+    if (window.agentNotch.onHotkeyRegisterResult) {
+      window.agentNotch.onHotkeyRegisterResult((result) => {
+        if (!result) return;
+        refreshHotkeyInfo();
+        if (app?.showToast && result.ok === false) {
+          app.showToast(result.error || 'Hotkey not available', 'error');
+        } else if (app?.showToast && result.ok) {
+          app.showToast(`Hotkey: ${formatAccelerator(result.accelerator)}`, 'ok');
         }
       });
     }
+  }
+
+  // Agent + master preference toggles
+  for (const [elId, settingKey] of Object.entries(MASTER_TOGGLES)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    el.addEventListener('change', () => {
+      persistSettings({ [settingKey]: el.checked }, app);
+    });
+  }
+
+  // Attention matrix
+  for (const [elId, settingKey] of Object.entries(MATRIX_TOGGLES)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    el.addEventListener('change', () => {
+      persistSettings({ [settingKey]: el.checked }, app);
+    });
+  }
+
+  // Notch controls
+  const displayEl = document.getElementById('set-display');
+  if (displayEl) {
+    displayEl.addEventListener('change', () => {
+      const id = Number(displayEl.value);
+      persistSettings({ notchDisplayId: Number.isFinite(id) ? id : 0 }, app);
+    });
+  }
+
+  const alignEl = document.getElementById('set-align');
+  if (alignEl) {
+    alignEl.addEventListener('change', () => {
+      persistSettings({ notchAlign: alignEl.value }, app);
+    });
+  }
+
+  const autohideEl = document.getElementById('set-autohide');
+  if (autohideEl) {
+    autohideEl.addEventListener('change', () => {
+      const ms = Number(autohideEl.value);
+      persistSettings({ autohideDelayMs: Number.isFinite(ms) ? ms : 4000 }, app);
+    });
+  }
+
+  const captureBtn = document.getElementById('btn-hotkey-capture');
+  if (captureBtn) {
+    captureBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startHotkeyCapture(app);
+    });
+  }
+
+  const resetBtn = document.getElementById('btn-hotkey-reset');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      stopHotkeyCapture();
+      persistSettings({ globalHotkey: '' }, app).then(() => refreshHotkeyInfo());
+      if (app?.showToast) app.showToast('Hotkey reset to default', 'ok');
+    });
   }
 
   const installBtn = document.getElementById('btn-install-claude-hook');
@@ -97,31 +178,265 @@ export function initSettings(app) {
 export function openSettingsView(app) {
   if (!app) return;
   app.switchView('settings');
-  document.querySelectorAll('.ntab:not(.ntab-icon)').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.ntab:not(.ntab-icon)').forEach((t) => t.classList.remove('active'));
   refreshClaudeHookStatus();
+  refreshDisplays();
+  refreshHotkeyInfo();
+  if (window.agentNotch) {
+    window.agentNotch.getSettings().then(applySettings);
+  }
+}
+
+async function persistSettings(update, app) {
+  if (!window.agentNotch?.setSettings) return null;
+  try {
+    const next = await window.agentNotch.setSettings(update);
+    if (next) applySettings(next);
+    return next;
+  } catch (err) {
+    if (app?.showToast) app.showToast(err.message || 'Could not save settings', 'error');
+    return null;
+  }
 }
 
 function applySettings(settings) {
   if (!settings) return;
 
-  const mappings = {
-    'set-claude': 'enableClaude',
-    'set-codex': 'enableCodex',
-    'set-cursor': 'enableCursor',
-    'set-antigravity': 'enableAntigravity',
-    'set-grok': 'enableGrok',
-    'set-opencode': 'enableOpencode',
-    'set-sound': 'soundAlerts',
-    'set-notifications': 'desktopNotifications',
-    'set-startup': 'launchAtStartup'
-  };
-
-  for (const [elId, key] of Object.entries(mappings)) {
+  for (const [elId, key] of Object.entries(MASTER_TOGGLES)) {
     const el = document.getElementById(elId);
     if (el && settings[key] !== undefined) {
-      el.checked = settings[key];
+      el.checked = Boolean(settings[key]);
     }
   }
+
+  for (const [elId, key] of Object.entries(MATRIX_TOGGLES)) {
+    const el = document.getElementById(elId);
+    if (el && settings[key] !== undefined) {
+      el.checked = Boolean(settings[key]);
+    }
+  }
+
+  const alignEl = document.getElementById('set-align');
+  if (alignEl && settings.notchAlign) {
+    alignEl.value = settings.notchAlign;
+  }
+
+  const autohideEl = document.getElementById('set-autohide');
+  if (autohideEl && settings.autohideDelayMs != null) {
+    const ms = Number(settings.autohideDelayMs);
+    // Snap to nearest preset for the select control
+    let best = AUTOHIDE_PRESETS[1];
+    let bestDiff = Infinity;
+    for (const p of AUTOHIDE_PRESETS) {
+      const d = Math.abs(p - ms);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = p;
+      }
+    }
+    autohideEl.value = String(best);
+  }
+
+  const displayEl = document.getElementById('set-display');
+  if (displayEl && settings.notchDisplayId != null) {
+    const id = String(settings.notchDisplayId || 0);
+    // Prefer matching option; 0 means primary — resolve after displays load
+    if ([...displayEl.options].some((o) => o.value === id)) {
+      displayEl.value = id;
+    } else if (settings.notchDisplayId === 0) {
+      const primary = [...displayEl.options].find((o) => o.dataset.primary === '1');
+      if (primary) displayEl.value = primary.value;
+    }
+  }
+
+  // Dim matrix when masters off
+  const matrix = document.getElementById('interrupt-matrix');
+  if (matrix) {
+    const soundOn = settings.soundAlerts !== false;
+    const notifyOn = settings.desktopNotifications !== false;
+    matrix.querySelectorAll('[id^="set-sound-"]').forEach((el) => {
+      el.disabled = !soundOn;
+    });
+    matrix.querySelectorAll('[id^="set-notify-"]').forEach((el) => {
+      el.disabled = !notifyOn;
+    });
+    matrix.classList.toggle('is-muted', !soundOn && !notifyOn);
+  }
+}
+
+async function refreshDisplays() {
+  const select = document.getElementById('set-display');
+  if (!select || !window.agentNotch?.getDisplays) return;
+
+  let selectedId = select.value;
+  try {
+    const settings = await window.agentNotch.getSettings();
+    if (settings?.notchDisplayId != null) {
+      selectedId = String(settings.notchDisplayId || 0);
+    }
+  } catch {
+    // keep current
+  }
+
+  try {
+    const displays = await window.agentNotch.getDisplays();
+    select.innerHTML = '';
+    for (const d of displays || []) {
+      const opt = document.createElement('option');
+      opt.value = String(d.primary ? 0 : d.id);
+      // Store real id for non-primary; primary always saved as 0
+      if (d.primary) {
+        opt.value = '0';
+        opt.dataset.primary = '1';
+        opt.dataset.displayId = String(d.id);
+      } else {
+        opt.value = String(d.id);
+        opt.dataset.displayId = String(d.id);
+      }
+      opt.textContent = d.primary
+        ? `${d.label || 'Display'} (Primary)`
+        : (d.label || `Display ${d.id}`);
+      select.appendChild(opt);
+    }
+
+    // Restore selection: 0 = primary, else match id
+    if (selectedId === '0' || selectedId === '') {
+      const primary = [...select.options].find((o) => o.dataset.primary === '1');
+      if (primary) select.value = primary.value;
+    } else if ([...select.options].some((o) => o.value === selectedId)) {
+      select.value = selectedId;
+    } else {
+      const primary = [...select.options].find((o) => o.dataset.primary === '1');
+      if (primary) select.value = primary.value;
+    }
+  } catch {
+    // ignore
+  }
+}
+
+async function refreshHotkeyInfo() {
+  const btn = document.getElementById('btn-hotkey-capture');
+  const resetBtn = document.getElementById('btn-hotkey-reset');
+  const hint = document.getElementById('hotkey-hint');
+  if (!btn || !window.agentNotch?.getHotkeyInfo) return;
+
+  try {
+    const info = await window.agentNotch.getHotkeyInfo();
+    const label = formatAccelerator(info.accelerator || info.defaultAccelerator);
+    if (!capturingHotkey) {
+      btn.textContent = label;
+      btn.classList.remove('is-capturing');
+    }
+    if (resetBtn) {
+      resetBtn.hidden = !info.custom;
+    }
+    if (hint && !capturingHotkey) {
+      hint.textContent = `Toggle notch: ${label}. Click the button to change.`;
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function formatAccelerator(accel) {
+  if (!accel) return 'Ctrl+Shift+A';
+  return String(accel)
+    .replace(/Command/g, '⌘')
+    .replace(/Control/g, 'Ctrl')
+    .replace(/Cmd/g, '⌘')
+    .replace(/\+/g, '+');
+}
+
+function startHotkeyCapture(app) {
+  const btn = document.getElementById('btn-hotkey-capture');
+  const hint = document.getElementById('hotkey-hint');
+  if (!btn) return;
+
+  stopHotkeyCapture();
+  capturingHotkey = true;
+  btn.textContent = 'Press shortcut…';
+  btn.classList.add('is-capturing');
+  if (hint) hint.textContent = 'Press a combo with Ctrl/⌘ or Alt. Esc to cancel.';
+
+  hotkeyKeyHandler = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      stopHotkeyCapture();
+      refreshHotkeyInfo();
+      return;
+    }
+
+    // Wait for a non-modifier key
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+
+    const accel = eventToAccelerator(e);
+    if (!accel) {
+      if (app?.showToast) app.showToast('Include Ctrl/⌘ or Alt with a key', 'error');
+      return;
+    }
+
+    stopHotkeyCapture();
+    persistSettings({ globalHotkey: accel }, app).then(() => refreshHotkeyInfo());
+  };
+
+  window.addEventListener('keydown', hotkeyKeyHandler, true);
+}
+
+function stopHotkeyCapture() {
+  capturingHotkey = false;
+  const btn = document.getElementById('btn-hotkey-capture');
+  if (btn) btn.classList.remove('is-capturing');
+  if (hotkeyKeyHandler) {
+    window.removeEventListener('keydown', hotkeyKeyHandler, true);
+    hotkeyKeyHandler = null;
+  }
+}
+
+/**
+ * Map a KeyboardEvent to an Electron accelerator string.
+ * Requires at least one of Ctrl/Meta/Alt (Shift alone is not enough).
+ */
+function eventToAccelerator(e) {
+  const parts = [];
+  const isMac = navigator.platform.toUpperCase().includes('MAC');
+
+  if (e.ctrlKey) parts.push('Control');
+  if (e.metaKey) parts.push(isMac ? 'Command' : 'Super');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+
+  if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+    return null; // require a real modifier beyond Shift
+  }
+
+  let key = e.key;
+  if (key === ' ') key = 'Space';
+  else if (key.length === 1) key = key.toUpperCase();
+  else if (key.startsWith('Arrow')) key = key.replace('Arrow', '');
+  else if (key === 'Escape') return null;
+
+  // Normalize common names to Electron accelerators
+  const map = {
+    '+': 'Plus',
+    Enter: 'Enter',
+    Tab: 'Tab',
+    Backspace: 'Backspace',
+    Delete: 'Delete',
+    Home: 'Home',
+    End: 'End',
+    PageUp: 'PageUp',
+    PageDown: 'PageDown',
+    Insert: 'Insert'
+  };
+  key = map[key] || key;
+
+  // Reject pure modifier leftovers
+  if (!key || ['Control', 'Shift', 'Alt', 'Meta', 'Command'].includes(key)) return null;
+
+  parts.push(key);
+  return parts.join('+');
 }
 
 async function refreshClaudeHookStatus() {

@@ -186,7 +186,7 @@
               <input type="checkbox" id="set-opencode" class="toggle" checked>
             </label>
 
-            <h3 class="settings-heading">Preferences</h3>
+            <h3 class="settings-heading">Attention</h3>
             <label class="setting-row">
               <span class="setting-label">Sound alerts</span>
               <input type="checkbox" id="set-sound" class="toggle" checked>
@@ -195,11 +195,71 @@
               <span class="setting-label">Desktop notifications</span>
               <input type="checkbox" id="set-notifications" class="toggle" checked>
             </label>
+            <p class="settings-hint settings-hint-block">When to interrupt — panel never opens itself.</p>
+            <div class="interrupt-matrix" id="interrupt-matrix" role="group" aria-label="When to interrupt">
+              <div class="interrupt-matrix-head" aria-hidden="true">
+                <span></span>
+                <span>Notify</span>
+                <span>Sound</span>
+              </div>
+              <div class="interrupt-matrix-row">
+                <span class="interrupt-matrix-label">Permission</span>
+                <input type="checkbox" id="set-notify-permission" class="interrupt-check" checked aria-label="Notify on permission">
+                <input type="checkbox" id="set-sound-permission" class="interrupt-check" checked aria-label="Sound on permission">
+              </div>
+              <div class="interrupt-matrix-row">
+                <span class="interrupt-matrix-label">Question</span>
+                <input type="checkbox" id="set-notify-question" class="interrupt-check" checked aria-label="Notify on question">
+                <input type="checkbox" id="set-sound-question" class="interrupt-check" checked aria-label="Sound on question">
+              </div>
+              <div class="interrupt-matrix-row">
+                <span class="interrupt-matrix-label">Needs attention</span>
+                <input type="checkbox" id="set-notify-needs" class="interrupt-check" checked aria-label="Notify on needs attention">
+                <input type="checkbox" id="set-sound-needs" class="interrupt-check" checked aria-label="Sound on needs attention">
+              </div>
+              <div class="interrupt-matrix-row">
+                <span class="interrupt-matrix-label">Done</span>
+                <input type="checkbox" id="set-notify-done" class="interrupt-check" checked aria-label="Notify when done">
+                <input type="checkbox" id="set-sound-done" class="interrupt-check" aria-label="Sound when done">
+              </div>
+            </div>
+
+            <h3 class="settings-heading">Notch</h3>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Display</span>
+              <select id="set-display" class="setting-select" aria-label="Notch display"></select>
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Position</span>
+              <select id="set-align" class="setting-select" aria-label="Notch position">
+                <option value="left">Left</option>
+                <option value="center" selected>Center</option>
+                <option value="right">Right</option>
+              </select>
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Autohide after</span>
+              <select id="set-autohide" class="setting-select" aria-label="Autohide delay">
+                <option value="2000">2 seconds</option>
+                <option value="4000" selected>4 seconds</option>
+                <option value="8000">8 seconds</option>
+                <option value="15000">15 seconds</option>
+              </select>
+            </label>
+            <div class="setting-row setting-row-actions">
+              <span class="setting-label">Global hotkey</span>
+              <div class="setting-actions hotkey-actions">
+                <button type="button" id="btn-hotkey-capture" class="btn-settings-action secondary" title="Click then press a shortcut">Ctrl+Shift+A</button>
+                <button type="button" id="btn-hotkey-reset" class="btn-settings-action secondary" hidden>Reset</button>
+              </div>
+            </div>
+            <p class="settings-hint" id="hotkey-hint">Press the button, then a shortcut with Ctrl/⌘ or Alt.</p>
+
+            <h3 class="settings-heading">Preferences</h3>
             <label class="setting-row">
               <span class="setting-label">Launch at startup</span>
               <input type="checkbox" id="set-startup" class="toggle">
             </label>
-            <p class="settings-hint">Global hotkey: Ctrl+Shift+A (⌘⇧A on Mac) toggles the notch.</p>
 
             <h3 class="settings-heading">Claude remote approve</h3>
             <p class="settings-hint settings-hint-block">
