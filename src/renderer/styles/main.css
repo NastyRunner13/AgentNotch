@@ -453,6 +453,23 @@ html, body {
   line-height: 1.2;
 }
 
+/* Attention — amber count when agents need a human */
+.stat-attention .stat-num {
+  color: var(--color-attention-bright);
+}
+
+.stat-attention .stat-label {
+  color: var(--color-attention);
+}
+
+.stat-dot-attention {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-attention);
+  flex-shrink: 0;
+}
+
 /* Running — working blue, dot breathes while agents work */
 .stat-running .stat-num {
   color: var(--color-working-bright);
@@ -809,6 +826,48 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
+}
+
+/* Attention stack section headers (Needs you / Running / Finished) */
+.session-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 2px 0;
+  margin-top: 4px;
+  user-select: none;
+}
+
+.session-section-header:first-child {
+  margin-top: 0;
+}
+
+.session-section-label {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  line-height: 1.2;
+}
+
+.session-section-count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  line-height: 1.2;
+}
+
+.session-section-attention .session-section-label,
+.session-section-attention .session-section-count {
+  color: var(--color-attention);
+}
+
+.session-section-working .session-section-label,
+.session-section-working .session-section-count {
+  color: var(--color-working);
 }
 
 /* ── Dispatch Bar ─────────────────────────────────────── */

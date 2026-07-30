@@ -1,4 +1,4 @@
-import { renderSessionCard, getAgentBarIcon } from './components/session-card.js';
+import { renderSessionCard, getAgentBarIcon, renderSessionSectionHeader } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
 import { renderUsageView, usageFingerprint } from './components/usage-view.js';
 import { renderInsightsView, insightsFingerprint } from './components/insights-view.js';
@@ -15,6 +15,12 @@ function dispatchLabel(session) {
   const short = task.length > 34 ? `${task.slice(0, 33)}…` : task;
   const dir = session.cwd ? String(session.cwd).split(/[\\/]/).filter(Boolean).pop() : '';
   return dir ? `${agent} · ${short} · ${dir}` : `${agent} · ${short}`;
+}
+
+/** Short harness name for multi-attention bar copy. */
+function shortAgentName(agent) {
+  if (agent === 'Claude Code') return 'Claude';
+  return String(agent || 'Agent');
 }
 
 /**
@@ -747,6 +753,10 @@ class App {
         : '0';
       const plan = Array.isArray(s.plan) ? s.plan : [];
       const planKey = plan.map(p => `${p.step || ''}:${p.status || ''}`).join(',');
+      // Snooze remaining minutes so chip labels refresh on the poll boundary
+      const snoozeKey = s.snoozed
+        ? (s.snoozeUntilIdle ? 'idle' : `t${Math.ceil((Number(s.snoozeUntil) - Date.now()) / 60000)}`)
+        : '0';
       return [
         s.id,
         s.status,
@@ -758,7 +768,8 @@ class App {
         actKey,
         planKey,
         s.permissionRequest?.requestId || '',
-        s.question?.prompt || s.question?.text || ''
+        s.question?.prompt || s.question?.text || '',
+        snoozeKey
       ].join('\x1f');
     }).join('\x1e');
   }
@@ -770,7 +781,8 @@ class App {
       s.agent,
       s.taskName || '',
       s.currentTool || '',
-      String(s.lastMessage || '').slice(0, 80)
+      String(s.lastMessage || '').slice(0, 80),
+      s.snoozed ? '1' : '0'
     ].join('\x1f')).join('\x1e');
   }
 
@@ -884,6 +896,9 @@ class App {
 
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
     const runningCount = activeSessions.filter(s => s.status === 'working').length;
+    const ATTENTION = ['permission-request', 'question', 'needs-attention'];
+    const attentionSessions = activeSessions.filter(s => ATTENTION.includes(s.status));
+    const attentionCount = attentionSessions.length;
     // "Done" = a real completed agent run. Bare process placeholders
     // (e.g. "Cursor IDE is open") have no prompt/tools and don't count.
     const isCompletedRun = (s) =>
@@ -908,17 +923,35 @@ class App {
         if (brandEl) brandEl.hidden = true;
 
         if (statusTextEl) {
-          const needsAttention = activeSessions.find(s =>
-            ['permission-request', 'question', 'needs-attention'].includes(s.status)
-          );
+          const needsAttention = attentionSessions[0];
           const running = activeSessions.find(s => s.status === 'working');
 
           if (needsAttention) {
             statusClass(statusTextEl, 'attention');
-            statusTextEl.textContent = needsAttention.status === 'permission-request'
-              ? `${needsAttention.agent} needs permission`
-              : `${needsAttention.agent} asks a question`;
-            statusTextEl.removeAttribute('title');
+            if (attentionCount > 1) {
+              // Multi-attention: names until 3+, then a plain count
+              const names = [];
+              for (const s of attentionSessions) {
+                const n = shortAgentName(s.agent);
+                if (!names.includes(n)) names.push(n);
+              }
+              const line = names.length <= 2
+                ? `${names.join(' + ')} need you`
+                : `${attentionCount} need you`;
+              statusTextEl.textContent = line;
+              statusTextEl.title = attentionSessions
+                .map(s => `${s.agent}: ${s.taskName || s.status}`)
+                .join('\n');
+            } else if (needsAttention.status === 'permission-request') {
+              statusTextEl.textContent = `${needsAttention.agent} needs permission`;
+              statusTextEl.removeAttribute('title');
+            } else if (needsAttention.status === 'question') {
+              statusTextEl.textContent = `${needsAttention.agent} asks a question`;
+              statusTextEl.removeAttribute('title');
+            } else {
+              statusTextEl.textContent = `${needsAttention.agent} needs you`;
+              statusTextEl.removeAttribute('title');
+            }
           } else if (running) {
             statusClass(statusTextEl, 'working');
             const tool = running.currentTool || '';
@@ -950,7 +983,13 @@ class App {
       }
     }
 
-    // Render active/done indicators
+    // Render active / attention / done indicators
+    const statAttentionEl = document.getElementById('stat-attention');
+    if (statAttentionEl) {
+      const num = statAttentionEl.querySelector('.stat-num');
+      if (num) num.textContent = attentionCount;
+      statAttentionEl.style.display = attentionCount > 0 ? '' : 'none';
+    }
     if (statRunningEl) {
       const num = statRunningEl.querySelector('.stat-num');
       if (num) num.textContent = runningCount;
@@ -1013,14 +1052,44 @@ class App {
     const prevIds = this._knownSessionIds;
     const nextIds = new Set(activeSessions.map(s => s.id));
 
-    // Render unified cards — only brand-new sessions get entrance animation
-    list.innerHTML = activeSessions.map((session, i) => {
+    // Attention stack: section headers + cards (sort already attention-first)
+    const ATTENTION = ['permission-request', 'question', 'needs-attention'];
+    const needsYou = activeSessions.filter(s => ATTENTION.includes(s.status));
+    const running = activeSessions.filter(s => s.status === 'working');
+    const finished = activeSessions.filter(
+      s => !ATTENTION.includes(s.status) && s.status !== 'working'
+    );
+
+    const renderGroup = (sessions, startIndex) => sessions.map((session, i) => {
       const isNew = !prevIds.has(session.id);
-      return renderSessionCard(session, i, {
+      return renderSessionCard(session, startIndex + i, {
         animateIn: isNew,
         expandedActivity: this.expandedActivityKeys
       });
     }).join('');
+
+    let html = '';
+    let idx = 0;
+    // Only show section labels when more than one group has sessions (or multi-attention)
+    const groupCount = [needsYou, running, finished].filter(g => g.length > 0).length;
+    const showSections = groupCount > 1 || needsYou.length > 1;
+
+    if (needsYou.length) {
+      if (showSections) html += renderSessionSectionHeader('Needs you', needsYou.length, 'attention');
+      html += renderGroup(needsYou, idx);
+      idx += needsYou.length;
+    }
+    if (running.length) {
+      if (showSections) html += renderSessionSectionHeader('Running', running.length, 'working');
+      html += renderGroup(running, idx);
+      idx += running.length;
+    }
+    if (finished.length) {
+      if (showSections) html += renderSessionSectionHeader('Finished', finished.length, 'idle');
+      html += renderGroup(finished, idx);
+    }
+
+    list.innerHTML = html;
 
     this._knownSessionIds = nextIds;
     list.dataset.bound = '1';
@@ -1177,6 +1246,73 @@ class App {
         } catch (err) {
           this.showToast(`Remove failed: ${err.message || 'main process error'}`, 'error');
         }
+      });
+    });
+
+    // Snooze menu toggle
+    list.querySelectorAll('.btn-snooze').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const wrap = btn.closest('.snooze-menu-wrap');
+        if (!wrap) return;
+        const menu = wrap.querySelector('.snooze-menu');
+        if (!menu) return;
+        const open = menu.hidden;
+        // Close other open menus first
+        list.querySelectorAll('.snooze-menu').forEach(m => {
+          m.hidden = true;
+          const b = m.closest('.snooze-menu-wrap')?.querySelector('.btn-snooze');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        });
+        menu.hidden = !open;
+        btn.setAttribute('aria-expanded', String(open));
+      });
+    });
+
+    list.querySelectorAll('.snooze-option').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        const preset = btn.dataset.preset;
+        if (!sid || !preset || !window.agentNotch?.snoozeSession) return;
+        try {
+          const res = await window.agentNotch.snoozeSession(sid, preset);
+          if (res && res.success) {
+            this.showToast(res.message || 'Alerts muted', 'ok');
+          } else {
+            this.showToast((res && res.message) || 'Could not snooze', 'error');
+          }
+        } catch (err) {
+          this.showToast(`Snooze failed: ${err.message || 'main process error'}`, 'error');
+        }
+      });
+    });
+
+    const clearSnooze = async (sid) => {
+      if (!sid || !window.agentNotch?.clearSnooze) return;
+      try {
+        const res = await window.agentNotch.clearSnooze(sid);
+        if (res && res.success) {
+          this.showToast(res.message || 'Snooze cleared', 'ok');
+        } else {
+          this.showToast((res && res.message) || 'Could not clear snooze', 'error');
+        }
+      } catch (err) {
+        this.showToast(`Clear snooze failed: ${err.message || 'main process error'}`, 'error');
+      }
+    };
+
+    list.querySelectorAll('.btn-clear-snooze').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearSnooze(btn.dataset.sessionId);
+      });
+    });
+
+    list.querySelectorAll('.snooze-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearSnooze(btn.dataset.sessionId);
       });
     });
   }

@@ -661,13 +661,14 @@ export function renderSessionCard(session, index = 0, options = {}) {
     detailContent += renderInlineQuestion(session);
   }
 
-  // Actions
+  // Actions — Jump + Snooze (mute alerts; bar truth stays)
   detailContent += `
     <div class="session-actions">
-      <button class="btn-jump" data-session-id="${escapeHtml(session.id)}">
+      <button class="btn-jump" data-session-id="${escapeHtml(session.id)}" type="button">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Jump to ${escapeHtml(session.terminal || 'Terminal')}
       </button>
+      ${renderSnoozeControls(session)}
     </div>`;
 
   // Logo stays still (bright/dull via CSS); static side cues for attention / finished
@@ -696,20 +697,24 @@ export function renderSessionCard(session, index = 0, options = {}) {
 
   // Dismiss (×) — completed sessions go to history; stuck/errored sessions
   // hide until the watcher reports new activity, then return on their own.
+  // Distinct from Snooze (which only mutes sound/toast).
   const canDismiss = session.status === 'idle' || session.status === 'needs-attention';
   const dismissTitle = session.status === 'idle'
     ? 'Remove — move to history'
-    : 'Dismiss — returns if activity resumes';
+    : 'Hide from list — returns if activity resumes';
   const dismissBtn = canDismiss
-    ? `<button class="btn-dismiss" data-session-id="${escapeHtml(session.id)}" title="${dismissTitle}" aria-label="${dismissTitle}">
+    ? `<button class="btn-dismiss" data-session-id="${escapeHtml(session.id)}" title="${dismissTitle}" aria-label="${dismissTitle}" type="button">
          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><line x1="5" y1="5" x2="19" y2="19"/><line x1="19" y1="5" x2="5" y2="19"/></svg>
        </button>`
     : '';
+
+  const snoozeChip = renderSnoozeChip(session);
 
   const cardClasses = [
     'session-card',
     needsAttention ? 'attention' : '',
     isWorking ? 'is-working' : '',
+    session.snoozed ? 'is-snoozed' : '',
     animateIn ? 'card-enter' : 'card-static'
   ].filter(Boolean).join(' ');
 
@@ -741,6 +746,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
           </div>
           <div class="session-status-line">
             <span class="session-status-text ${statusInfo.textClass}">${escapeHtml(statusInfo.text)}</span>
+            ${snoozeChip}
             <span class="session-last-seen">${escapeHtml(formatRelativeTime(session.lastActivityAt || session.lastTime))}</span>
           </div>
         </div>
@@ -751,6 +757,76 @@ export function renderSessionCard(session, index = 0, options = {}) {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * Quiet chip when alerts are muted for this session.
+ * Click clears snooze (wired in app.js).
+ */
+function renderSnoozeChip(session) {
+  if (!session.snoozed) return '';
+  const label = formatSnoozeChipLabel(session);
+  return `<button type="button" class="snooze-chip" data-session-id="${escapeHtml(session.id)}" title="Alerts muted — click to restore sound and notifications" aria-label="${escapeHtml(label)}. Click to clear snooze.">
+    ${escapeHtml(label)}
+  </button>`;
+}
+
+function formatSnoozeChipLabel(session) {
+  if (session.snoozeUntilIdle) return 'Snoozed · until idle';
+  const until = session.snoozeUntil;
+  if (typeof until !== 'number' || !Number.isFinite(until)) return 'Snoozed';
+  const ms = until - Date.now();
+  if (ms <= 0) return 'Snoozed';
+  if (ms < 60 * 1000) return 'Snoozed · <1m';
+  const mins = Math.ceil(ms / (60 * 1000));
+  if (mins < 60) return `Snoozed · ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `Snoozed · ${hours}h ${rem}m` : `Snoozed · ${hours}h`;
+}
+
+/**
+ * Snooze menu: 15m / 1h / until idle — mutes sound + toast only.
+ */
+function renderSnoozeControls(session) {
+  if (session.snoozed) {
+    return `<button type="button" class="btn-clear-snooze" data-session-id="${escapeHtml(session.id)}" title="Restore sound and notifications for this session">
+      Clear snooze
+    </button>`;
+  }
+
+  return `
+    <div class="snooze-menu-wrap">
+      <button type="button" class="btn-snooze" data-session-id="${escapeHtml(session.id)}" aria-haspopup="true" aria-expanded="false" title="Mute sound and notifications for this session (status stays visible)">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true">
+          <path d="M11 5L6 9H2v6h4l5 4V5z"/>
+          <line x1="23" y1="9" x2="17" y2="15"/>
+          <line x1="17" y1="9" x2="23" y2="15"/>
+        </svg>
+        Snooze
+      </button>
+      <div class="snooze-menu" role="menu" hidden>
+        <button type="button" role="menuitem" class="snooze-option" data-session-id="${escapeHtml(session.id)}" data-preset="15m">15 minutes</button>
+        <button type="button" role="menuitem" class="snooze-option" data-session-id="${escapeHtml(session.id)}" data-preset="1h">1 hour</button>
+        <button type="button" role="menuitem" class="snooze-option" data-session-id="${escapeHtml(session.id)}" data-preset="until-idle">Until idle</button>
+      </div>
+    </div>`;
+}
+
+/**
+ * Section header for the live session list (Needs you / Running / Finished).
+ * @param {string} label
+ * @param {number} count
+ * @param {'attention'|'working'|'idle'} [variant]
+ */
+export function renderSessionSectionHeader(label, count, variant = 'idle') {
+  const n = Number(count) || 0;
+  if (n <= 0) return '';
+  const countLabel = n === 1 ? '1' : String(n);
+  return `<div class="session-section-header session-section-${escapeHtml(variant)}" role="presentation">
+    <span class="session-section-label">${escapeHtml(label)}</span>
+    <span class="session-section-count">${escapeHtml(countLabel)}</span>
+  </div>`;
 }
 
 function renderInlineApproval(session, pr) {
