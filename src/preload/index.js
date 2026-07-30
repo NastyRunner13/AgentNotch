@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('agentNotch', {
   answerQuestion: (sessionId, answer) => ipcRenderer.invoke('answer-question', sessionId, answer),
   jumpToTerminal: (sessionId) => ipcRenderer.invoke('jump-to-terminal', sessionId),
   dismissSession: (sessionId) => ipcRenderer.invoke('dismiss-session', sessionId),
+  /** Mute sound + toast for a session: preset '15m' | '1h' | 'until-idle' */
+  snoozeSession: (sessionId, preset) => ipcRenderer.invoke('snooze-session', sessionId, preset),
+  clearSnooze: (sessionId) => ipcRenderer.invoke('clear-snooze', sessionId),
 
   // Claude remote approve (PermissionRequest hook)
   installClaudePermissionHook: () => ipcRenderer.invoke('install-claude-permission-hook'),

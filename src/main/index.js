@@ -696,6 +696,16 @@ app.whenReady().then(() => {
     return agentManager.dismissSession(sessionId);
   });
 
+  ipcMain.handle('snooze-session', async (_, sessionId, preset) => {
+    validateSessionId(sessionId);
+    return agentManager.snoozeSession(sessionId, preset);
+  });
+
+  ipcMain.handle('clear-snooze', async (_, sessionId) => {
+    validateSessionId(sessionId);
+    return agentManager.clearSnooze(sessionId);
+  });
+
   ipcMain.handle('install-claude-permission-hook', () => {
     return agentManager.installClaudePermissionHook();
   });

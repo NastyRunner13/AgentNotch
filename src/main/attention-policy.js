@@ -1,6 +1,7 @@
 /**
  * Pure attention / interrupt policy.
  * Decides sound, desktop notification, and collapsed-bar reveal per event kind.
+ * Session snooze mutes sound + toast only — bar truth / reveal stay (status-before-chrome).
  * Does not know window focus — callers still suppress toasts when focused.
  */
 
@@ -9,7 +10,21 @@
 /**
  * @typedef {'permission-request'|'question'|'needs-attention'|'done'} InterruptKind
  * @typedef {{ sound: boolean, notify: boolean, reveal: boolean }} InterruptChannels
+ * @typedef {{ until?: number, untilIdle?: boolean }} SnoozeEntry
+ * @typedef {'15m'|'1h'|'until-idle'} SnoozePreset
  */
+
+const ATTENTION_STATUSES = Object.freeze([
+  'permission-request',
+  'question',
+  'needs-attention'
+]);
+
+const SNOOZE_PRESETS = Object.freeze({
+  '15m': 15 * 60 * 1000,
+  '1h': 60 * 60 * 1000,
+  'until-idle': null
+});
 
 /**
  * Normalize session status or event label to a policy kind.
@@ -26,13 +41,122 @@ function kindFromStatus(statusOrKind) {
 }
 
 /**
+ * @param {string} [status]
+ * @returns {boolean}
+ */
+function isAttentionStatus(status) {
+  return ATTENTION_STATUSES.includes(status);
+}
+
+/**
+ * @param {unknown} preset
+ * @returns {SnoozePreset|null}
+ */
+function normalizeSnoozePreset(preset) {
+  if (preset === '15m' || preset === '1h' || preset === 'until-idle') return preset;
+  return null;
+}
+
+/**
+ * Build a snooze entry from a preset.
+ * @param {unknown} preset
+ * @param {number} [now]
+ * @returns {SnoozeEntry|null}
+ */
+function createSnoozeEntry(preset, now = Date.now()) {
+  const p = normalizeSnoozePreset(preset);
+  if (!p) return null;
+  if (p === 'until-idle') return { untilIdle: true };
+  const ms = SNOOZE_PRESETS[p];
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return { until: now + ms };
+}
+
+/**
+ * Whether a snooze entry is still active for this session status.
+ * until-idle clears when the session is idle/stopped.
+ * Timed snoozes clear after `until`.
+ * @param {SnoozeEntry|null|undefined} entry
+ * @param {{ now?: number, status?: string }} [opts]
+ * @returns {boolean}
+ */
+function isSnoozeActive(entry, opts = {}) {
+  if (!entry || typeof entry !== 'object') return false;
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
+  const status = opts.status;
+
+  if (entry.untilIdle) {
+    if (status === 'idle' || status === 'stopped') return false;
+    return true;
+  }
+
+  if (typeof entry.until === 'number' && Number.isFinite(entry.until)) {
+    return now < entry.until;
+  }
+
+  return false;
+}
+
+/**
+ * Session may carry `snoozed` boolean or raw snooze fields.
+ * @param {object|null|undefined} session
+ * @param {{ now?: number }} [opts]
+ * @returns {boolean}
+ */
+function isSessionSnoozed(session, opts = {}) {
+  if (!session) return false;
+  if (session.snoozed === true) {
+    // Explicit flag from AgentManager — still honor until-idle vs idle status
+    if (session.snoozeUntilIdle && (session.status === 'idle' || session.status === 'stopped')) {
+      return false;
+    }
+    if (typeof session.snoozeUntil === 'number' && Number.isFinite(opts.now)) {
+      return opts.now < session.snoozeUntil;
+    }
+    return true;
+  }
+  if (session.snoozeUntilIdle || typeof session.snoozeUntil === 'number') {
+    return isSnoozeActive(
+      {
+        untilIdle: Boolean(session.snoozeUntilIdle),
+        until: session.snoozeUntil
+      },
+      { now: opts.now, status: session.status }
+    );
+  }
+  return false;
+}
+
+/**
+ * Short label for the snooze chip.
+ * @param {object|null|undefined} session
+ * @param {number} [now]
+ * @returns {string}
+ */
+function formatSnoozeLabel(session, now = Date.now()) {
+  if (!session || !isSessionSnoozed(session, { now })) return '';
+  if (session.snoozeUntilIdle) return 'Snoozed · until idle';
+  const until = session.snoozeUntil;
+  if (typeof until !== 'number' || !Number.isFinite(until)) return 'Snoozed';
+  const ms = until - now;
+  if (ms <= 0) return 'Snoozed';
+  if (ms < 60 * 1000) return 'Snoozed · <1m';
+  const mins = Math.ceil(ms / (60 * 1000));
+  if (mins < 60) return `Snoozed · ${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `Snoozed · ${hours}h ${rem}m` : `Snoozed · ${hours}h`;
+}
+
+/**
  * @param {object} settings
- * @param {{ kind: InterruptKind }} opts
+ * @param {{ kind: InterruptKind, snoozed?: boolean }} opts
  * @returns {InterruptChannels}
  */
 function channelsForEvent(settings, opts) {
   const kind = opts && opts.kind;
   const s = settings || {};
+  const snoozed = Boolean(opts && opts.snoozed);
 
   const masters = {
     sound: s.soundAlerts !== false,
@@ -45,55 +169,77 @@ function channelsForEvent(settings, opts) {
   /** @type {InterruptChannels} */
   const off = { sound: false, notify: false, reveal: false };
 
+  /** @type {InterruptChannels} */
+  let ch;
   switch (kind) {
     case 'permission-request':
-      return {
+      ch = {
         sound: masters.sound && s.soundOnPermission !== false,
         notify: masters.notify && s.notifyOnPermission !== false,
         reveal: revealAttention
       };
+      break;
     case 'question':
-      return {
+      ch = {
         sound: masters.sound && s.soundOnQuestion !== false,
         notify: masters.notify && s.notifyOnQuestion !== false,
         reveal: revealAttention
       };
+      break;
     case 'needs-attention':
-      return {
+      ch = {
         sound: masters.sound && s.soundOnNeedsAttention !== false,
         notify: masters.notify && s.notifyOnNeedsAttention !== false,
         reveal: revealAttention
       };
+      break;
     case 'done':
-      return {
+      ch = {
         sound: masters.sound && s.soundOnDone === true,
         notify: masters.notify && s.notifyOnDone !== false,
         reveal: revealDone
       };
+      break;
     default:
       return off;
   }
+
+  // Session snooze: mute sound + toast only. Reveal and bar truth stay.
+  if (snoozed) {
+    ch = { sound: false, notify: false, reveal: ch.reveal };
+  }
+
+  return ch;
 }
 
 /**
  * Combine channel flags for one or more sessions (OR — if any wants sound, play once).
+ * Per-session snooze is applied when `session.snoozed` / snooze fields are set.
  * @param {object} settings
- * @param {Array<{ status?: string }>} sessions
+ * @param {Array<{ status?: string, snoozed?: boolean, snoozeUntil?: number, snoozeUntilIdle?: boolean }>} sessions
  * @param {InterruptKind} [forceKind] — use for done events (status is already idle)
+ * @param {{ now?: number }} [opts]
  * @returns {InterruptChannels}
  */
-function channelsForSessions(settings, sessions, forceKind) {
+function channelsForSessions(settings, sessions, forceKind, opts = {}) {
   const list = Array.isArray(sessions) ? sessions : [];
+  const now = Number.isFinite(opts.now) ? opts.now : Date.now();
   /** @type {InterruptChannels} */
   const acc = { sound: false, notify: false, reveal: false };
 
   if (forceKind) {
-    const ch = channelsForEvent(settings, { kind: forceKind });
-    return {
-      sound: ch.sound,
-      notify: ch.notify,
-      reveal: ch.reveal
-    };
+    // Done / forced kind: OR across sessions with per-session snooze
+    if (list.length === 0) {
+      return channelsForEvent(settings, { kind: forceKind, snoozed: false });
+    }
+    for (const session of list) {
+      const snoozed = isSessionSnoozed(session, { now });
+      const ch = channelsForEvent(settings, { kind: forceKind, snoozed });
+      acc.sound = acc.sound || ch.sound;
+      acc.notify = acc.notify || ch.notify;
+      acc.reveal = acc.reveal || ch.reveal;
+    }
+    return acc;
   }
 
   if (list.length === 0) return acc;
@@ -101,7 +247,8 @@ function channelsForSessions(settings, sessions, forceKind) {
   for (const session of list) {
     const kind = kindFromStatus(session && session.status);
     if (!kind) continue;
-    const ch = channelsForEvent(settings, { kind });
+    const snoozed = isSessionSnoozed(session, { now });
+    const ch = channelsForEvent(settings, { kind, snoozed });
     acc.sound = acc.sound || ch.sound;
     acc.notify = acc.notify || ch.notify;
     acc.reveal = acc.reveal || ch.reveal;
@@ -131,7 +278,15 @@ function normalizeNotchAlign(align) {
 }
 
 module.exports = {
+  ATTENTION_STATUSES,
+  SNOOZE_PRESETS,
   kindFromStatus,
+  isAttentionStatus,
+  normalizeSnoozePreset,
+  createSnoozeEntry,
+  isSnoozeActive,
+  isSessionSnoozed,
+  formatSnoozeLabel,
   channelsForEvent,
   channelsForSessions,
   clampAutohideDelayMs,

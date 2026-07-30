@@ -21,7 +21,12 @@ const { UsageTracker, dayKey } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
 const { buildInsights } = require('./insights');
 const permissionBridge = require('./permission-bridge');
-const { normalizeNotchAlign, clampAutohideDelayMs } = require('./attention-policy');
+const {
+  normalizeNotchAlign,
+  clampAutohideDelayMs,
+  createSnoozeEntry,
+  isSnoozeActive
+} = require('./attention-policy');
 
 const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
 
@@ -90,6 +95,11 @@ class AgentManager extends EventEmitter {
     this._archivedIds = new Set();
     /** @type {Map<string, number>} dismissed non-idle sessions: id → lastTime snapshot at dismiss time */
     this._dismissed = new Map();
+    /**
+     * Session snooze: mute sound + toast only (bar truth stays).
+     * @type {Map<string, { until?: number, untilIdle?: boolean }>}
+     */
+    this._snoozes = new Map();
     this._loadHistory();
 
     this._emitTimer = null;
@@ -327,12 +337,24 @@ class AgentManager extends EventEmitter {
         newlyDone.push(session);
       }
 
+      // until-idle snooze ends when the session settles to idle
+      if (session.status === 'idle' || session.status === 'stopped') {
+        const sn = this._snoozes.get(session.id);
+        if (sn && sn.untilIdle) this._snoozes.delete(session.id);
+      }
+
       this._prevStatus.set(session.id, session.status);
     }
 
     // Drop statuses for sessions that disappeared
     for (const id of this._prevStatus.keys()) {
       if (!seen.has(id)) this._prevStatus.delete(id);
+    }
+    // Drop snoozes for sessions watchers no longer track
+    if (this._snoozes.size) {
+      for (const id of [...this._snoozes.keys()]) {
+        if (!seen.has(id)) this._snoozes.delete(id);
+      }
     }
 
     this._attentionIds = currentAttention;
@@ -517,7 +539,100 @@ class AgentManager extends EventEmitter {
       if (pa !== pb) return pa - pb;
       return (b.lastTime || 0) - (a.lastTime || 0);
     });
-    return merged;
+
+    // Annotate snooze (channel mute only) and drop expired entries
+    return merged.map((session) => this._withSnooze(session));
+  }
+
+  /**
+   * Attach snooze fields for the renderer / interrupt policy.
+   * Does not clone the whole session unless snoozed (cheap path).
+   * @param {object} session
+   * @returns {object}
+   */
+  _withSnooze(session) {
+    if (!session || !session.id) return session;
+    const entry = this._snoozes.get(session.id);
+    if (!entry) {
+      if (session.snoozed || session.snoozeUntil != null || session.snoozeUntilIdle) {
+        return {
+          ...session,
+          snoozed: false,
+          snoozeUntil: null,
+          snoozeUntilIdle: false
+        };
+      }
+      return session;
+    }
+
+    const now = Date.now();
+    if (!isSnoozeActive(entry, { now, status: session.status })) {
+      this._snoozes.delete(session.id);
+      return {
+        ...session,
+        snoozed: false,
+        snoozeUntil: null,
+        snoozeUntilIdle: false
+      };
+    }
+
+    return {
+      ...session,
+      snoozed: true,
+      snoozeUntil: typeof entry.until === 'number' ? entry.until : null,
+      snoozeUntilIdle: Boolean(entry.untilIdle)
+    };
+  }
+
+  /**
+   * Mute sound + desktop toast for a session. Bar status stays truthful.
+   * @param {string} sessionId
+   * @param {'15m'|'1h'|'until-idle'} preset
+   */
+  snoozeSession(sessionId, preset) {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return { success: false, message: 'Invalid session' };
+    }
+    const entry = createSnoozeEntry(preset);
+    if (!entry) {
+      return { success: false, message: 'Unknown snooze preset' };
+    }
+
+    // Allow snooze even if session briefly missing (race with poll)
+    this._snoozes.set(sessionId, entry);
+    this._scheduleEmit();
+
+    let message = 'Alerts muted';
+    if (entry.untilIdle) {
+      message = 'Alerts muted until idle';
+    } else if (preset === '15m') {
+      message = 'Alerts muted for 15 minutes';
+    } else if (preset === '1h') {
+      message = 'Alerts muted for 1 hour';
+    }
+
+    return { success: true, message, snooze: entry };
+  }
+
+  /**
+   * Clear session snooze (restore sound/toast per Attention Control).
+   * @param {string} sessionId
+   */
+  clearSnooze(sessionId) {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return { success: false, message: 'Invalid session' };
+    }
+    const had = this._snoozes.delete(sessionId);
+    if (had) this._scheduleEmit();
+    return {
+      success: true,
+      message: had ? 'Snooze cleared' : 'Not snoozed'
+    };
+  }
+
+  /** @returns {Map<string, { until?: number, untilIdle?: boolean }>} */
+  getSnoozes() {
+    return this._snoozes;
   }
 
   getSettings() {
@@ -773,6 +888,7 @@ class AgentManager extends EventEmitter {
     this._history = [];
     this._archivedIds.clear();
     this._dismissed.clear();
+    this._snoozes.clear();
     this._saveHistory();
     return { success: true };
   }
