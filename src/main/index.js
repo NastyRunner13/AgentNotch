@@ -592,6 +592,43 @@ app.whenReady().then(() => {
     }
   });
 
+  agentManager.on('limit-alert', (alerts) => {
+    // Soft only — never open the panel. Sound is not used for limits.
+    const list = Array.isArray(alerts) ? alerts : [];
+    if (list.length === 0) return;
+    const settings = agentManager.getSettings();
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('limit-alert', list);
+    }
+
+    if (settings.desktopNotifications === false) return;
+    if (!Notification.isSupported()) return;
+
+    for (const a of list) {
+      if (!a) continue;
+      if (a.band === 'crit' && settings.notifyOnLimitCrit === false) continue;
+      if (a.band === 'warn' && settings.notifyOnLimitWarn !== true) continue;
+      try {
+        const n = new Notification({
+          title: `${a.short || a.name} near limit`,
+          body: `${a.usedPercent}% used${a.band === 'crit' ? ' — critical' : ''}`,
+          silent: true
+        });
+        n.on('click', () => {
+          // User action only — expand to Usage
+          showAndExpand();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('open-view', 'usage');
+          }
+        });
+        n.show();
+      } catch {
+        // ignore notification failures
+      }
+    }
+  });
+
   agentManager.on('settings-changed', (settings) => {
     const prev = settings._prev || {};
     if (settings.launchAtStartup !== prev.launchAtStartup) {
@@ -788,6 +825,33 @@ app.whenReady().then(() => {
 
   ipcMain.handle('clear-history', () => {
     return agentManager.clearHistory();
+  });
+
+  ipcMain.handle('pin-history', (_, historyId, pinned) => {
+    if (typeof historyId !== 'string' || !historyId) {
+      throw new Error('Invalid history id');
+    }
+    return agentManager.pinHistory(historyId, Boolean(pinned));
+  });
+
+  ipcMain.handle('dispatch-from-history', async (_, historyId, prompt) => {
+    if (typeof historyId !== 'string' || !historyId) {
+      throw new Error('Invalid history id');
+    }
+    if (prompt != null && typeof prompt !== 'string') {
+      throw new Error('Invalid dispatch prompt');
+    }
+    if (typeof prompt === 'string' && prompt.length > 8000) {
+      throw new Error('Dispatch prompt too long (max 8000 chars)');
+    }
+    return agentManager.dispatchFromHistory(historyId, prompt);
+  });
+
+  ipcMain.handle('focus-agent', async (_, agentName) => {
+    if (typeof agentName !== 'string' || !agentName.trim()) {
+      throw new Error('Invalid agent name');
+    }
+    return agentManager.focusAgentByName(agentName.trim());
   });
 
   // Task dispatch — targets a live session (resumes that chat) or starts a

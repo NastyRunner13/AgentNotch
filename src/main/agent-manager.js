@@ -16,7 +16,7 @@ const {
   ATTENTION_NOTIFY_KEYS,
   ATTENTION_SOUND_KEYS
 } = require('./settings-defaults');
-const { collectUsageLimits } = require('./usage-limits');
+const { collectUsageLimits, detectLimitCrossings } = require('./usage-limits');
 const { UsageTracker, dayKey } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
 const { buildInsights } = require('./insights');
@@ -27,6 +27,13 @@ const {
   createSnoozeEntry,
   isSnoozeActive
 } = require('./attention-policy');
+const {
+  buildArchiveSnapshot,
+  applyHistoryPin,
+  trimHistoryEntries,
+  resolveHistoryResumeTarget,
+  DEFAULT_CONTINUE_PROMPT
+} = require('./history-utils');
 
 const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
 
@@ -109,6 +116,8 @@ class AgentManager extends EventEmitter {
     this._prevStatus = new Map();
     /** @type {Array|null} last usage snapshot */
     this._usageLimits = null;
+    /** @type {Map<string, string>} limit alert debounce: agent|resetsAt|band → band */
+    this._limitAlertState = new Map();
     this._usageTimer = null;
     /** Token/cost accumulation into persisted daily buckets (dashboard data) */
     this._usageTracker = new UsageTracker();
@@ -372,12 +381,21 @@ class AgentManager extends EventEmitter {
       // Prune orphaned pending requests on every usage refresh tick (every 15s)
       permissionBridge.pruneStalePending();
       const sessions = this.getSessions();
+      const previous = this._usageLimits;
       const usage = await collectUsageLimits({
         sessions,
         enabled: this.settings
       });
       this._usageLimits = usage;
       this.emit('usage-update', usage);
+
+      const alerts = detectLimitCrossings(usage, previous, this._limitAlertState, {
+        notifyWarn: this.settings.notifyOnLimitWarn === true,
+        notifyCrit: this.settings.notifyOnLimitCrit !== false
+      });
+      if (alerts.length > 0) {
+        this.emit('limit-alert', alerts);
+      }
     } catch (err) {
       console.warn('[AgentManager] usage limits failed:', err.message);
     }
@@ -818,10 +836,8 @@ class AgentManager extends EventEmitter {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      // Keep last 200 entries max
-      if (this._history.length > 200) {
-        this._history = this._history.slice(-200);
-      }
+      // Cap unpinned at 200; never drop pinned
+      this._history = trimHistoryEntries(this._history, 200);
       fs.writeFileSync(this._historyPath, JSON.stringify(this._history, null, 2));
     } catch (err) {
       console.error('[AgentManager] Failed to save history:', err.message);
@@ -845,32 +861,14 @@ class AgentManager extends EventEmitter {
     if (this._archivedIds.has(session.id)) return;
 
     this._archivedIds.add(session.id);
-    const snapshot = {
-      id: session.id,
-      agent: session.agent,
-      taskName: session.taskName,
-      userPrompt: session.userPrompt,
-      status: session.status,
-      duration: session.duration,
-      durationFormatted: session.durationFormatted,
-      startTime: session.startTime,
-      lastTime: session.lastTime,
-      lastActivityAt: session.lastActivityAt,
-      toolCalls: session.toolCalls || [],
-      lastMessage: session.lastMessage,
-      activity: session.activity || [],
-      plan: session.plan || [],
-      cwd: session.cwd || null,
-      archivedAt: Date.now()
-    };
+    const existingIdx = this._history.findIndex(h => h.id === session.id);
+    const previous = existingIdx !== -1 ? this._history[existingIdx] : null;
+    const snapshot = buildArchiveSnapshot(session, previous, Date.now());
 
     // A session archived before (then revived) updates its entry instead of
     // duplicating it — history stays unique per session id.
-    const existingIdx = this._history.findIndex(h => h.id === session.id);
     if (existingIdx !== -1) {
-      const marker = this._history[existingIdx].dismissedMarker;
       this._history[existingIdx] = snapshot;
-      if (marker !== undefined) this._history[existingIdx].dismissedMarker = marker;
     } else {
       this._history.push(snapshot);
     }
@@ -880,8 +878,151 @@ class AgentManager extends EventEmitter {
   }
 
   getHistory() {
-    // Return sorted by most recent first
+    // Return sorted by most recent first (pins are sorted in the renderer)
     return [...this._history].sort((a, b) => (b.archivedAt || 0) - (a.archivedAt || 0));
+  }
+
+  /**
+   * Pin or unpin a history entry. Pins survive restart and are never trimmed.
+   * @param {string} historyId
+   * @param {boolean} pinned
+   */
+  pinHistory(historyId, pinned) {
+    if (!historyId || typeof historyId !== 'string') {
+      return { success: false, message: 'Invalid history id' };
+    }
+    const idx = this._history.findIndex(h => h.id === historyId);
+    if (idx === -1) {
+      return { success: false, message: 'History entry not found' };
+    }
+    this._history[idx] = applyHistoryPin(this._history[idx], Boolean(pinned), Date.now());
+    this._saveHistory();
+    return {
+      success: true,
+      message: pinned ? 'Pinned' : 'Unpinned',
+      entry: this._history[idx],
+      history: this.getHistory()
+    };
+  }
+
+  /**
+   * Continue work from a history entry: live dispatch, headless resume, new
+   * session in the same project, or focus the agent app.
+   * @param {string} historyId
+   * @param {string} [prompt]
+   */
+  async dispatchFromHistory(historyId, prompt) {
+    if (!historyId || typeof historyId !== 'string') {
+      return { success: false, message: 'Invalid history id' };
+    }
+    const text = String(prompt || '').trim() || DEFAULT_CONTINUE_PROMPT;
+    if (text.length > 8000) {
+      return { success: false, message: 'Dispatch prompt too long (max 8000 chars)' };
+    }
+
+    const entry = this._history.find(h => h.id === historyId);
+    if (!entry) {
+      return { success: false, message: 'History entry not found' };
+    }
+
+    const liveIds = new Set(this.getSessions().map(s => s.id));
+    let target = resolveHistoryResumeTarget(entry, {
+      liveIds,
+      isDirectory,
+      canResume: true
+    });
+
+    if (target.mode === 'live') {
+      return this.dispatchTask(target.sessionId, text);
+    }
+
+    if (target.mode === 'resume') {
+      const sessionLike = {
+        id: entry.id,
+        agent: entry.agent,
+        cwd: entry.cwd,
+        resumeId: entry.resumeId || null
+      };
+      const cmd = buildResumeCommand(sessionLike, text);
+      if (!cmd || !cmd.cwd || !isDirectory(cmd.cwd)) {
+        target = resolveHistoryResumeTarget(entry, {
+          liveIds,
+          isDirectory,
+          canResume: false
+        });
+      } else {
+        try {
+          await runHeadlessResume(cmd);
+          this._scheduleEmit();
+          return {
+            success: true,
+            message: `Continued ${entry.agent} · ${entry.taskName || 'session'}`,
+            mode: 'resume'
+          };
+        } catch (err) {
+          return {
+            success: false,
+            message: err.message || `Failed to resume ${entry.agent}`
+          };
+        }
+      }
+    }
+
+    if (target.mode === 'new') {
+      const cmd = buildNewSessionCommand(target.agent, text, target.cwd);
+      if (!cmd) {
+        return { success: false, message: `Cannot start new ${target.agent} sessions from history.` };
+      }
+      try {
+        await runHeadlessResume(cmd);
+        this._scheduleEmit();
+        return {
+          success: true,
+          message: `New ${target.agent} session in ${cmd.cwd}`,
+          mode: 'new'
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: err.message || `Failed to start ${target.agent}`
+        };
+      }
+    }
+
+    // focus
+    try {
+      const focused = await focusAgentApp(entry.agent);
+      return {
+        success: focused,
+        message: focused
+          ? (target.message || `Focused ${entry.agent}`)
+          : `Could not focus ${entry.agent}. Open it manually.`,
+        mode: 'focus'
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Focus failed', mode: 'focus' };
+    }
+  }
+
+  /**
+   * Focus an agent app by name (history Jump when no live session id).
+   * @param {string} agentName
+   */
+  async focusAgentByName(agentName) {
+    if (!agentName || typeof agentName !== 'string') {
+      return { success: false, message: 'Invalid agent' };
+    }
+    try {
+      const focused = await focusAgentApp(agentName);
+      return {
+        success: focused,
+        message: focused
+          ? `Focused ${agentName}`
+          : `Could not focus ${agentName}. Open it manually.`
+      };
+    } catch (err) {
+      return { success: false, message: err.message || 'Focus failed' };
+    }
   }
 
   clearHistory() {

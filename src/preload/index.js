@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('agentNotch', {
     ipcRenderer.on('usage-update', handler);
     return () => ipcRenderer.removeListener('usage-update', handler);
   },
+  onLimitAlert: (callback) => {
+    const handler = (_, alerts) => callback(alerts);
+    ipcRenderer.on('limit-alert', handler);
+    return () => ipcRenderer.removeListener('limit-alert', handler);
+  },
 
   // Usage dashboard (token/cost buckets + session-time aggregates)
   getUsageStats: () => ipcRenderer.invoke('get-usage-stats'),
@@ -90,6 +95,10 @@ contextBridge.exposeInMainWorld('agentNotch', {
   // History
   getHistory: () => ipcRenderer.invoke('get-history'),
   clearHistory: () => ipcRenderer.invoke('clear-history'),
+  pinHistory: (historyId, pinned) => ipcRenderer.invoke('pin-history', historyId, Boolean(pinned)),
+  dispatchFromHistory: (historyId, prompt) =>
+    ipcRenderer.invoke('dispatch-from-history', historyId, prompt),
+  focusAgent: (agentName) => ipcRenderer.invoke('focus-agent', agentName),
 
   // Task dispatch — sends a message into a live session (continues that chat)
   dispatchTask: (sessionId, prompt) => ipcRenderer.invoke('dispatch-task', sessionId, prompt)
