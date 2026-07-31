@@ -40,6 +40,7 @@ AgentNotch is a **local-first Electron tray app**: a Mac-style top notch that wa
 | Session dispatch (live + new) | Done |
 | Usage dashboard + Insights | Done |
 | Attention Control (event × channel matrix) | Done |
+| Focus mode + per-agent mute | Done |
 | Notch placement (display, align, autohide, hotkey) | Done |
 | History search, pin, Continue / Jump | Done |
 | Usage limits glance (header chips, notch crit, soft alert) | Done |
@@ -61,18 +62,21 @@ Possible slices:
 - Unified **attention queue**: “N things need you” → act / jump / dismiss in order
 - Deeper **Cursor** signal (today is process-only)
 
-#### 2. Focus mode / Quiet hours — **open**
-Attention Control is granular but not situational. Deep work needs one switch: bar still truthful, sound/toast off (or only permissions stay loud).
+#### 2. Focus mode / Quiet hours — **shipped** (schedule later)
+Attention Control is granular but not situational. Deep work needs one switch: bar still truthful, sound/toast off.
 
-- Global Focus toggle (hotkey or tray)
-- Optional schedule later (e.g. 9–12) — not a full calendar product
+- Global Focus toggle (Settings + tray menu) — **shipped**
+- Quiet “focus” chip on collapsed bar — **shipped**
+- Optional schedule later (e.g. 9–12) — not a full calendar product — **open**
 
-#### 3. Per-agent mute — **open**
+#### 3. Per-agent mute — **shipped**
 Session snooze exists; chronically noisy agents need **mute this agent’s alerts** while status stays on the bar.
 
 ```text
 mutedAgents: []  // e.g. 'cursor', 'opencode' — mute sound + toast only
 ```
+
+Settings → Mute alerts; policy wires through `attention-policy.js`.
 
 #### 4. Stronger multi-agent attention command center — **open**
 When 2+ sessions need human input:
@@ -151,9 +155,9 @@ Keep Insights sparse and local — answer *what slowed me down / which agent thr
 |---------|--------|--------|
 | Event × channel matrix | **Shipped** | permission / question / needs-attention / done |
 | Master sound + notifications | **Shipped** | |
-| Focus mode | Open | Suppress sound + toast; bar truth stays |
+| Focus mode | **Shipped** | Suppress sound + toast; bar truth stays; tray + Settings |
 | Focus schedule | Open (later) | Optional daily window |
-| Per-agent mute | Open | Mute sound/toast only |
+| Per-agent mute | **Shipped** | Mute sound/toast only (`mutedAgents`) |
 | Reveal bar on attention / done | Internal | Expose if users ask |
 | Snooze defaults | Open | Optional default preset |
 
@@ -228,7 +232,7 @@ Wire all interrupt delivery through `attention-policy.js`.
 
 | Order | Bet | Rationale |
 |------|-----|-----------|
-| 1 | **Focus mode** *or* **per-agent mute** | Small, high delight; noise control |
+| 1 | ~~**Focus mode** + **per-agent mute**~~ | **Shipped** — noise control |
 | 2 | **Action layer beyond Claude** + attention queue | Largest differentiator |
 | 3 | **Density / auto-collapse** | Drive-by when touching session cards |
 | 4 | **Appearance knobs** | Only if a11y / motion demand appears |
@@ -239,6 +243,8 @@ Wire all interrupt delivery through `attention-policy.js`.
 
 1. ~~History search + pin + Continue~~  
 2. ~~Usage limits glance (header, notch crit, soft alert, settings)~~  
+3. ~~Focus mode (Settings + tray; bar chip; policy mute sound/toast)~~  
+4. ~~Per-agent mute (`mutedAgents` in Settings; policy)~~  
 
 ---
 
