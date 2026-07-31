@@ -101,23 +101,56 @@ function createTrayIcon(color = '#4ADE80', badgeCount = 0) {
 }
 
 /**
- * @param {{ onShow: () => void, onSettings: () => void }} callbacks
+ * @param {{
+ *   onShow?: () => void,
+ *   onSettings?: () => void,
+ *   onToggleFocus?: (enabled: boolean) => void,
+ *   focusMode?: boolean
+ * }} callbacks
  */
-function createTray({ onShow, onSettings }) {
+function createTray({ onShow, onSettings, onToggleFocus, focusMode } = {}) {
   const icon = createTrayIcon('#4ADE80');
   const tray = new Tray(icon);
 
   tray.setToolTip('AgentNotch — AI Agent Monitor');
+  tray._callbacks = { onShow, onSettings, onToggleFocus };
+  updateTrayMenu(tray, { focusMode: Boolean(focusMode) });
+
+  tray.on('click', () => {
+    if (tray._callbacks?.onShow) tray._callbacks.onShow();
+  });
+
+  return tray;
+}
+
+/**
+ * Rebuild context menu (Focus mode checkbox, etc.).
+ * @param {import('electron').Tray|null} tray
+ * @param {{ focusMode?: boolean }} [state]
+ */
+function updateTrayMenu(tray, state = {}) {
+  if (!tray || tray.isDestroyed()) return;
+  const cb = tray._callbacks || {};
+  const focusMode = Boolean(state.focusMode);
 
   const contextMenu = Menu.buildFromTemplate([
     {
       label: 'Show AgentNotch',
-      click: () => onShow && onShow()
+      click: () => cb.onShow && cb.onShow()
+    },
+    { type: 'separator' },
+    {
+      label: 'Focus mode',
+      type: 'checkbox',
+      checked: focusMode,
+      click: (item) => {
+        if (cb.onToggleFocus) cb.onToggleFocus(Boolean(item.checked));
+      }
     },
     { type: 'separator' },
     {
       label: 'Settings',
-      click: () => onSettings && onSettings()
+      click: () => cb.onSettings && cb.onSettings()
     },
     { type: 'separator' },
     {
@@ -127,12 +160,6 @@ function createTray({ onShow, onSettings }) {
   ]);
 
   tray.setContextMenu(contextMenu);
-
-  tray.on('click', () => {
-    if (onShow) onShow();
-  });
-
-  return tray;
 }
 
 function updateTrayIcon(tray, state) {
@@ -152,7 +179,8 @@ function updateTrayIcon(tray, state) {
 
   // Update tooltip with count
   const count = state.activeCount || 0;
-  tray.setToolTip(`AgentNotch — ${count} agent${count !== 1 ? 's' : ''} active`);
+  const focus = state.focusMode ? ' · Focus' : '';
+  tray.setToolTip(`AgentNotch — ${count} agent${count !== 1 ? 's' : ''} active${focus}`);
 }
 
-module.exports = { createTray, updateTrayIcon };
+module.exports = { createTray, updateTrayIcon, updateTrayMenu };

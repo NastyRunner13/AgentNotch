@@ -10,11 +10,22 @@ const MASTER_TOGGLES = {
   'set-antigravity': 'enableAntigravity',
   'set-grok': 'enableGrok',
   'set-opencode': 'enableOpencode',
+  'set-focus': 'focusMode',
   'set-sound': 'soundAlerts',
   'set-notifications': 'desktopNotifications',
   'set-startup': 'launchAtStartup',
   'set-limit-notch': 'showLimitOnNotch',
   'set-limit-notify-crit': 'notifyOnLimitCrit'
+};
+
+/** Element id → mute agent id (settings.mutedAgents) */
+const MUTE_TOGGLES = {
+  'mute-claude': 'claude',
+  'mute-codex': 'codex',
+  'mute-cursor': 'cursor',
+  'mute-antigravity': 'antigravity',
+  'mute-grok': 'grok',
+  'mute-opencode': 'opencode'
 };
 
 const MATRIX_TOGGLES = {
@@ -85,12 +96,50 @@ export function initSettings(app) {
     });
   }
 
+  // Per-agent mute (sound/toast only)
+  for (const [elId, agentId] of Object.entries(MUTE_TOGGLES)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    el.addEventListener('change', async () => {
+      const current = await window.agentNotch.getSettings().catch(() => null);
+      const list = Array.isArray(current?.mutedAgents) ? [...current.mutedAgents] : [];
+      const next = new Set(list);
+      if (el.checked) next.add(agentId);
+      else next.delete(agentId);
+      persistSettings({ mutedAgents: [...next] }, app);
+    });
+  }
+
   // Attention matrix
   for (const [elId, settingKey] of Object.entries(MATRIX_TOGGLES)) {
     const el = document.getElementById(elId);
     if (!el) continue;
     el.addEventListener('change', () => {
       persistSettings({ [settingKey]: el.checked }, app);
+    });
+  }
+
+  // Tray / main can flip focus mode — keep Settings + bar chip in sync
+  if (window.agentNotch?.onSettingsChanged) {
+    window.agentNotch.onSettingsChanged((partial) => {
+      if (!partial) return;
+      if (partial.focusMode !== undefined) {
+        const el = document.getElementById('set-focus');
+        if (el) el.checked = Boolean(partial.focusMode);
+      }
+      if (Array.isArray(partial.mutedAgents)) {
+        applyMutedAgents(partial.mutedAgents);
+      }
+      if (app) {
+        if (partial.focusMode !== undefined) {
+          app.focusMode = Boolean(partial.focusMode);
+          if (typeof app.renderFocusChip === 'function') app.renderFocusChip();
+        }
+        if (partial.showLimitOnNotch !== undefined) {
+          app.showLimitOnNotch = partial.showLimitOnNotch !== false;
+          if (typeof app.renderNotchLimitChip === 'function') app.renderNotchLimitChip();
+        }
+      }
     });
   }
 
@@ -197,8 +246,18 @@ async function persistSettings(update, app) {
       applySettings(next);
       if (app) {
         app.showLimitOnNotch = next.showLimitOnNotch !== false;
+        app.focusMode = Boolean(next.focusMode);
         if (typeof app.renderNotchLimitChip === 'function') {
           app.renderNotchLimitChip();
+        }
+        if (typeof app.renderFocusChip === 'function') {
+          app.renderFocusChip();
+        }
+        if (update.focusMode !== undefined && app.showToast) {
+          app.showToast(
+            next.focusMode ? 'Focus mode on — alerts quiet' : 'Focus mode off',
+            'ok'
+          );
         }
       }
     }
@@ -206,6 +265,14 @@ async function persistSettings(update, app) {
   } catch (err) {
     if (app?.showToast) app.showToast(err.message || 'Could not save settings', 'error');
     return null;
+  }
+}
+
+function applyMutedAgents(mutedAgents) {
+  const set = new Set(Array.isArray(mutedAgents) ? mutedAgents : []);
+  for (const [elId, agentId] of Object.entries(MUTE_TOGGLES)) {
+    const el = document.getElementById(elId);
+    if (el) el.checked = set.has(agentId);
   }
 }
 
@@ -218,6 +285,8 @@ function applySettings(settings) {
       el.checked = Boolean(settings[key]);
     }
   }
+
+  applyMutedAgents(settings.mutedAgents);
 
   for (const [elId, key] of Object.entries(MATRIX_TOGGLES)) {
     const el = document.getElementById(elId);

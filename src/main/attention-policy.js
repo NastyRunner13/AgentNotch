@@ -1,7 +1,8 @@
 /**
  * Pure attention / interrupt policy.
  * Decides sound, desktop notification, and collapsed-bar reveal per event kind.
- * Session snooze mutes sound + toast only — bar truth / reveal stay (status-before-chrome).
+ * Session snooze, focus mode, and per-agent mute silence sound + toast only —
+ * bar truth / reveal stay (status-before-chrome).
  * Does not know window focus — callers still suppress toasts when focused.
  */
 
@@ -12,6 +13,7 @@
  * @typedef {{ sound: boolean, notify: boolean, reveal: boolean }} InterruptChannels
  * @typedef {{ until?: number, untilIdle?: boolean }} SnoozeEntry
  * @typedef {'15m'|'1h'|'until-idle'} SnoozePreset
+ * @typedef {'claude'|'codex'|'cursor'|'antigravity'|'grok'|'opencode'} MuteAgentId
  */
 
 const ATTENTION_STATUSES = Object.freeze([
@@ -24,6 +26,26 @@ const SNOOZE_PRESETS = Object.freeze({
   '15m': 15 * 60 * 1000,
   '1h': 60 * 60 * 1000,
   'until-idle': null
+});
+
+/** Stable ids used in settings.mutedAgents (watcher keys). */
+const MUTE_AGENT_IDS = Object.freeze([
+  'claude',
+  'codex',
+  'cursor',
+  'antigravity',
+  'grok',
+  'opencode'
+]);
+
+/** Display name (session.agent) → mute id */
+const AGENT_NAME_TO_ID = Object.freeze({
+  'Claude Code': 'claude',
+  Codex: 'codex',
+  Cursor: 'cursor',
+  Antigravity: 'antigravity',
+  Grok: 'grok',
+  OpenCode: 'opencode'
 });
 
 /**
@@ -149,14 +171,66 @@ function formatSnoozeLabel(session, now = Date.now()) {
 }
 
 /**
+ * Map session.agent display name or raw id → mute id.
+ * @param {unknown} nameOrId
+ * @returns {MuteAgentId|null}
+ */
+function agentIdFromName(nameOrId) {
+  if (typeof nameOrId !== 'string' || !nameOrId) return null;
+  if (MUTE_AGENT_IDS.includes(/** @type {MuteAgentId} */ (nameOrId))) {
+    return /** @type {MuteAgentId} */ (nameOrId);
+  }
+  return AGENT_NAME_TO_ID[nameOrId] || null;
+}
+
+/**
+ * Whitelist and dedupe mutedAgents from settings or UI.
+ * @param {unknown} value
+ * @returns {MuteAgentId[]}
+ */
+function normalizeMutedAgents(value) {
+  if (!Array.isArray(value)) return [];
+  /** @type {Set<MuteAgentId>} */
+  const ids = new Set();
+  for (const item of value) {
+    const id = agentIdFromName(item);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+
+/**
+ * @param {object|null|undefined} settings
+ * @returns {boolean}
+ */
+function isFocusMode(settings) {
+  return Boolean(settings && settings.focusMode);
+}
+
+/**
+ * @param {object|null|undefined} settings
+ * @param {unknown} agent — session.agent display name or mute id
+ * @returns {boolean}
+ */
+function isAgentMuted(settings, agent) {
+  const id = agentIdFromName(agent);
+  if (!id) return false;
+  const list = settings && Array.isArray(settings.mutedAgents)
+    ? settings.mutedAgents
+    : [];
+  return list.includes(id);
+}
+
+/**
  * @param {object} settings
- * @param {{ kind: InterruptKind, snoozed?: boolean }} opts
+ * @param {{ kind: InterruptKind, snoozed?: boolean, agent?: string }} opts
  * @returns {InterruptChannels}
  */
 function channelsForEvent(settings, opts) {
   const kind = opts && opts.kind;
   const s = settings || {};
   const snoozed = Boolean(opts && opts.snoozed);
+  const agent = opts && opts.agent;
 
   const masters = {
     sound: s.soundAlerts !== false,
@@ -204,8 +278,9 @@ function channelsForEvent(settings, opts) {
       return off;
   }
 
-  // Session snooze: mute sound + toast only. Reveal and bar truth stay.
-  if (snoozed) {
+  // Channel mutes only — reveal and bar truth stay (status-before-chrome).
+  // Session snooze, focus mode, and per-agent mute all silence sound + toast.
+  if (snoozed || isFocusMode(s) || isAgentMuted(s, agent)) {
     ch = { sound: false, notify: false, reveal: ch.reveal };
   }
 
@@ -214,9 +289,10 @@ function channelsForEvent(settings, opts) {
 
 /**
  * Combine channel flags for one or more sessions (OR — if any wants sound, play once).
- * Per-session snooze is applied when `session.snoozed` / snooze fields are set.
+ * Per-session snooze and per-agent mute are applied when session fields are set.
+ * Focus mode is global via settings.
  * @param {object} settings
- * @param {Array<{ status?: string, snoozed?: boolean, snoozeUntil?: number, snoozeUntilIdle?: boolean }>} sessions
+ * @param {Array<{ status?: string, agent?: string, snoozed?: boolean, snoozeUntil?: number, snoozeUntilIdle?: boolean }>} sessions
  * @param {InterruptKind} [forceKind] — use for done events (status is already idle)
  * @param {{ now?: number }} [opts]
  * @returns {InterruptChannels}
@@ -228,13 +304,17 @@ function channelsForSessions(settings, sessions, forceKind, opts = {}) {
   const acc = { sound: false, notify: false, reveal: false };
 
   if (forceKind) {
-    // Done / forced kind: OR across sessions with per-session snooze
+    // Done / forced kind: OR across sessions with per-session snooze / agent mute
     if (list.length === 0) {
       return channelsForEvent(settings, { kind: forceKind, snoozed: false });
     }
     for (const session of list) {
       const snoozed = isSessionSnoozed(session, { now });
-      const ch = channelsForEvent(settings, { kind: forceKind, snoozed });
+      const ch = channelsForEvent(settings, {
+        kind: forceKind,
+        snoozed,
+        agent: session && session.agent
+      });
       acc.sound = acc.sound || ch.sound;
       acc.notify = acc.notify || ch.notify;
       acc.reveal = acc.reveal || ch.reveal;
@@ -248,7 +328,11 @@ function channelsForSessions(settings, sessions, forceKind, opts = {}) {
     const kind = kindFromStatus(session && session.status);
     if (!kind) continue;
     const snoozed = isSessionSnoozed(session, { now });
-    const ch = channelsForEvent(settings, { kind, snoozed });
+    const ch = channelsForEvent(settings, {
+      kind,
+      snoozed,
+      agent: session && session.agent
+    });
     acc.sound = acc.sound || ch.sound;
     acc.notify = acc.notify || ch.notify;
     acc.reveal = acc.reveal || ch.reveal;
@@ -280,6 +364,8 @@ function normalizeNotchAlign(align) {
 module.exports = {
   ATTENTION_STATUSES,
   SNOOZE_PRESETS,
+  MUTE_AGENT_IDS,
+  AGENT_NAME_TO_ID,
   kindFromStatus,
   isAttentionStatus,
   normalizeSnoozePreset,
@@ -287,6 +373,10 @@ module.exports = {
   isSnoozeActive,
   isSessionSnoozed,
   formatSnoozeLabel,
+  agentIdFromName,
+  normalizeMutedAgents,
+  isFocusMode,
+  isAgentMuted,
   channelsForEvent,
   channelsForSessions,
   clampAutohideDelayMs,
