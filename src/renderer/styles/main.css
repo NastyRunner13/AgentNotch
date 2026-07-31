@@ -506,6 +506,13 @@ html, body {
   text-overflow: ellipsis;
 }
 
+/* Focus mode — quiet tertiary pill; status counts still win visual hierarchy */
+.stat-focus .stat-label {
+  color: var(--text-tertiary);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+
 .notch-chevron {
   display: flex;
   align-items: center;

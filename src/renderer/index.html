@@ -53,6 +53,9 @@
             <span class="stat-num">0%</span>
             <span class="stat-label">limit</span>
           </span>
+          <span id="stat-focus" class="stat stat-focus" style="display:none" title="Focus mode — sound and notifications off">
+            <span class="stat-label">focus</span>
+          </span>
         </div>
         <button type="button" id="btn-pin" class="bar-btn" title="Pin — keep the notch on screen" aria-label="Pin notch on screen" aria-pressed="false">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -197,6 +200,11 @@
 
             <h3 class="settings-heading">Attention</h3>
             <label class="setting-row">
+              <span class="setting-label">Focus mode</span>
+              <input type="checkbox" id="set-focus" class="toggle" aria-label="Focus mode — mute all sound and notifications">
+            </label>
+            <p class="settings-hint settings-hint-block">Quiet deep work — bar still shows status; sound and toasts off. Also on the tray menu.</p>
+            <label class="setting-row">
               <span class="setting-label">Sound alerts</span>
               <input type="checkbox" id="set-sound" class="toggle" checked>
             </label>
@@ -232,6 +240,51 @@
                 <input type="checkbox" id="set-sound-done" class="interrupt-check" aria-label="Sound when done">
               </div>
             </div>
+
+            <h3 class="settings-heading">Mute alerts</h3>
+            <p class="settings-hint settings-hint-block">Mute sound and notifications for a noisy agent. Status stays on the bar.</p>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/claude-code.png" width="14" height="14" alt="" draggable="false" />
+                Claude Code
+              </span>
+              <input type="checkbox" id="mute-claude" class="toggle" aria-label="Mute Claude Code alerts">
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/codex.png" width="14" height="14" alt="" draggable="false" />
+                Codex
+              </span>
+              <input type="checkbox" id="mute-codex" class="toggle" aria-label="Mute Codex alerts">
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/cursor.png" width="14" height="14" alt="" draggable="false" />
+                Cursor
+              </span>
+              <input type="checkbox" id="mute-cursor" class="toggle" aria-label="Mute Cursor alerts">
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/antigravity.png" width="14" height="14" alt="" draggable="false" />
+                Antigravity
+              </span>
+              <input type="checkbox" id="mute-antigravity" class="toggle" aria-label="Mute Antigravity alerts">
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/grok-build.png" width="14" height="14" alt="" draggable="false" />
+                Grok Build
+              </span>
+              <input type="checkbox" id="mute-grok" class="toggle" aria-label="Mute Grok Build alerts">
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">
+                <img class="setting-logo" src="../../assets/icons/opencode.png" width="14" height="14" alt="" draggable="false" />
+                OpenCode
+              </span>
+              <input type="checkbox" id="mute-opencode" class="toggle" aria-label="Mute OpenCode alerts">
+            </label>
 
             <h3 class="settings-heading">Notch</h3>
             <label class="setting-row setting-row-control">

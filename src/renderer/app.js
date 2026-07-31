@@ -69,6 +69,8 @@ class App {
     this._dispatching = false;
     /** Settings subset used by notch limit chip */
     this.showLimitOnNotch = true;
+    /** Focus mode — sound/toast suppressed; bar still truthful */
+    this.focusMode = false;
   }
 
   async init() {
@@ -194,6 +196,8 @@ class App {
 
       if (window.agentNotch.onLimitAlert) {
         window.agentNotch.onLimitAlert((alerts) => {
+          // Focus mode suppresses interrupt toasts; limit crit chips still show on the bar
+          if (this.focusMode) return;
           const list = Array.isArray(alerts) ? alerts : [];
           for (const a of list) {
             if (!a) continue;
@@ -233,11 +237,14 @@ class App {
         const s = await window.agentNotch.getSettings();
         this.isPinned = Boolean(s && s.notchPinned);
         this.showLimitOnNotch = s?.showLimitOnNotch !== false;
+        this.focusMode = Boolean(s && s.focusMode);
       } catch {
         this.isPinned = false;
         this.showLimitOnNotch = true;
+        this.focusMode = false;
       }
       this.updateBarControls();
+      this.renderFocusChip();
 
       let sessions;
       try {
@@ -1034,6 +1041,17 @@ class App {
     }
 
     this.renderNotchLimitChip(attentionCount);
+    this.renderFocusChip();
+  }
+
+  /**
+   * Quiet "focus" pill when Focus mode is on — bar truth stays; this only
+   * signals that sound/toast are suppressed.
+   */
+  renderFocusChip() {
+    const el = document.getElementById('stat-focus');
+    if (!el) return;
+    el.style.display = this.focusMode ? '' : 'none';
   }
 
   /**
