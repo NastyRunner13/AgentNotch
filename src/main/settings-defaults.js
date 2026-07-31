@@ -16,6 +16,13 @@ const DEFAULT_SETTINGS = {
   desktopNotifications: true,
   launchAtStartup: false,
 
+  // Focus mode: suppress sound + toast globally; bar truth / reveal stay
+  focusMode: false,
+
+  // Per-agent mute: mute sound + toast only for these agent ids
+  // ids: 'claude' | 'codex' | 'cursor' | 'antigravity' | 'grok' | 'opencode'
+  mutedAgents: [],
+
   // Attention matrix — event × channel (masters gate delivery; see attention-policy.js)
   notifyOnPermission: true,
   notifyOnQuestion: true,
