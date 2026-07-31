@@ -1,6 +1,6 @@
 import { renderSessionCard, getAgentBarIcon, renderSessionSectionHeader } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
-import { renderUsageView, usageFingerprint } from './components/usage-view.js';
+import { renderUsageView, usageFingerprint, pickCritLimit } from './components/usage-view.js';
 import { renderInsightsView, insightsFingerprint } from './components/insights-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
@@ -51,6 +51,9 @@ class App {
     this.initialized = false;
     this.expandedSessionId = null;
     this.expandedHistoryId = null;
+    /** History search query (client-side filter) */
+    this.historyQuery = '';
+    this._historyContinuing = false;
     /** Track which session ids were already in attention to avoid re-locking on every update */
     this._prevAttentionIds = new Set();
     this._clearHistoryPendingConfirm = false;
@@ -64,6 +67,8 @@ class App {
     /** Dispatch target dropdown state */
     this._dispatchFp = '';
     this._dispatching = false;
+    /** Settings subset used by notch limit chip */
+    this.showLimitOnNotch = true;
   }
 
   async init() {
@@ -179,6 +184,23 @@ class App {
         window.agentNotch.onUsageUpdate((usage) => {
           this.usageLimits = usage || [];
           this.renderUsageBar();
+          this.renderNotchLimitChip();
+          if (this.currentView === 'usage') {
+            this._lastUsageViewFp = '\x00force';
+            this.renderUsageDashboard();
+          }
+        });
+      }
+
+      if (window.agentNotch.onLimitAlert) {
+        window.agentNotch.onLimitAlert((alerts) => {
+          const list = Array.isArray(alerts) ? alerts : [];
+          for (const a of list) {
+            if (!a) continue;
+            const label = a.short || a.name || 'Agent';
+            const band = a.band === 'crit' ? 'critical' : 'high';
+            this.showToast(`${label} ${a.usedPercent}% used (${band})`, a.band === 'crit' ? 'error' : 'info');
+          }
         });
       }
 
@@ -210,8 +232,10 @@ class App {
       try {
         const s = await window.agentNotch.getSettings();
         this.isPinned = Boolean(s && s.notchPinned);
+        this.showLimitOnNotch = s?.showLimitOnNotch !== false;
       } catch {
         this.isPinned = false;
+        this.showLimitOnNotch = true;
       }
       this.updateBarControls();
 
@@ -552,12 +576,20 @@ class App {
     if (!container) return;
 
     const stats = this.usageStats || { updatedAt: 0, buckets: [], sessionTime: [] };
-    const fp = usageFingerprint(stats, this.usageRange, this.usageChartMode);
+    const limitsFp = (this.usageLimits || [])
+      .map((u) => `${u.id}|${u.usedPercent ?? 'na'}|${u.available ? 1 : 0}`)
+      .join(';');
+    const fp = `${usageFingerprint(stats, this.usageRange, this.usageChartMode)}|${limitsFp}`;
     if (fp === this._lastUsageViewFp && container.dataset.bound === '1') return;
     this._lastUsageViewFp = fp;
     container.dataset.bound = '1';
 
-    container.innerHTML = renderUsageView(stats, this.usageRange, this.usageChartMode);
+    container.innerHTML = renderUsageView(
+      stats,
+      this.usageRange,
+      this.usageChartMode,
+      this.usageLimits
+    );
 
     container.querySelectorAll('.usage-range-btn[data-range]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -1000,6 +1032,44 @@ class App {
       if (num) num.textContent = doneCount;
       statDoneEl.style.display = doneCount > 0 ? '' : 'none';
     }
+
+    this.renderNotchLimitChip(attentionCount);
+  }
+
+  /**
+   * Crit-only limit chip on the collapsed bar. Attention always outranks it
+   * (hidden when something needs the user). Gated by showLimitOnNotch.
+   * @param {number} [attentionCount]
+   */
+  renderNotchLimitChip(attentionCount) {
+    const el = document.getElementById('stat-limit');
+    if (!el) return;
+
+    const att = attentionCount != null
+      ? attentionCount
+      : this.sessions.filter((s) =>
+        ['permission-request', 'question', 'needs-attention'].includes(s.status)
+      ).length;
+
+    if (!this.showLimitOnNotch || att > 0) {
+      el.style.display = 'none';
+      return;
+    }
+
+    const crit = pickCritLimit(this.usageLimits);
+    if (!crit) {
+      el.style.display = 'none';
+      return;
+    }
+
+    const pct = Math.max(0, Math.min(100, Math.round(Number(crit.usedPercent))));
+    const name = crit.short || crit.name || 'Agent';
+    const num = el.querySelector('.stat-num');
+    const label = el.querySelector('.stat-label');
+    if (num) num.textContent = `${pct}%`;
+    if (label) label.textContent = name;
+    el.title = `${crit.name || name} ${pct}% used — near limit`;
+    el.style.display = '';
   }
 
   renderSessions() {
@@ -1330,7 +1400,31 @@ class App {
     }
 
     if (empty) empty.style.display = 'none';
-    list.innerHTML = renderHistoryView(this.history, this.expandedHistoryId);
+    list.innerHTML = renderHistoryView(this.history, this.expandedHistoryId, {
+      query: this.historyQuery
+    });
+
+    // Search — preserve focus + caret across re-renders
+    const searchEl = document.getElementById('history-search');
+    if (searchEl) {
+      searchEl.addEventListener('input', () => {
+        this.historyQuery = searchEl.value || '';
+        const start = searchEl.selectionStart;
+        const end = searchEl.selectionEnd;
+        this.renderHistory();
+        const again = document.getElementById('history-search');
+        if (again) {
+          again.focus();
+          try {
+            again.setSelectionRange(start, end);
+          } catch {
+            // ignore
+          }
+        }
+      });
+      searchEl.addEventListener('click', (e) => e.stopPropagation());
+      searchEl.addEventListener('keydown', (e) => e.stopPropagation());
+    }
 
     // Clear history button
     const clearBtn = document.getElementById('btn-clear-history');
@@ -1338,18 +1432,17 @@ class App {
       clearBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         if (!this._clearHistoryPendingConfirm) {
-          // First click: show toast asking to confirm
           this._clearHistoryPendingConfirm = true;
           this.showToast('Click Clear History again to confirm', 'info');
           setTimeout(() => { this._clearHistoryPendingConfirm = false; }, 4000);
         } else {
-          // Second click within 4s: execute
           this._clearHistoryPendingConfirm = false;
           try {
             if (window.agentNotch) {
               await window.agentNotch.clearHistory();
             }
             this.history = [];
+            this.historyQuery = '';
             this.renderHistory();
           } catch (err) {
             this.showToast(`Clear failed: ${err.message}`, 'error');
@@ -1358,15 +1451,126 @@ class App {
       });
     }
 
-    // Click history entry to expand tools / prompt detail
-    list.querySelectorAll('.history-entry').forEach(entry => {
-      entry.addEventListener('click', (e) => {
+    // Pin / unpin
+    list.querySelectorAll('.btn-history-pin').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        const id = entry.dataset.id;
+        const id = btn.dataset.historyId;
+        const nextPinned = btn.dataset.pinned !== '1';
+        if (!id || !window.agentNotch?.pinHistory) return;
+        try {
+          const res = await window.agentNotch.pinHistory(id, nextPinned);
+          if (res?.success && Array.isArray(res.history)) {
+            this.history = res.history;
+          } else if (res?.success) {
+            this.history = await window.agentNotch.getHistory();
+          } else {
+            this.showToast(res?.message || 'Could not update pin', 'error');
+            return;
+          }
+          this.renderHistory();
+        } catch (err) {
+          this.showToast(err.message || 'Pin failed', 'error');
+        }
+      });
+    });
+
+    // Continue from history
+    list.querySelectorAll('.btn-history-continue').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await this.continueFromHistory(btn.dataset.historyId, btn);
+      });
+    });
+
+    list.querySelectorAll('.history-continue-input').forEach((input) => {
+      input.addEventListener('click', (e) => e.stopPropagation());
+      input.addEventListener('keydown', async (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          await this.continueFromHistory(input.dataset.historyId, input);
+        }
+      });
+    });
+
+    // Jump / focus agent
+    list.querySelectorAll('.btn-history-jump').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const id = btn.dataset.historyId;
+        const agent = btn.dataset.agent;
+        try {
+          // Prefer live session jump when still present
+          const live = this.sessions.find((s) => s.id === id);
+          let res;
+          if (live && window.agentNotch?.jumpToTerminal) {
+            res = await window.agentNotch.jumpToTerminal(id);
+          } else if (window.agentNotch?.focusAgent && agent) {
+            res = await window.agentNotch.focusAgent(agent);
+          } else {
+            this.showToast('Cannot focus agent', 'error');
+            return;
+          }
+          if (res?.success) {
+            this.showToast(res.message || 'Focused', 'ok');
+          } else {
+            this.showToast(res?.message || 'Focus failed', 'error');
+          }
+        } catch (err) {
+          this.showToast(err.message || 'Focus failed', 'error');
+        }
+      });
+    });
+
+    // Expand/collapse — ignore clicks on actions / pin / inputs
+    list.querySelectorAll('.history-entry').forEach((entryEl) => {
+      entryEl.addEventListener('click', (e) => {
+        if (e.target.closest('[data-stop-expand], .btn-history-pin, .history-actions, .history-continue-input, button, input')) {
+          return;
+        }
+        e.stopPropagation();
+        const id = entryEl.dataset.id;
         this.expandedHistoryId = this.expandedHistoryId === id ? null : id;
         this.renderHistory();
       });
     });
+  }
+
+  async continueFromHistory(historyId, sourceEl) {
+    if (!historyId || this._historyContinuing) return;
+    if (!window.agentNotch?.dispatchFromHistory) {
+      this.showToast('Continue is not available', 'error');
+      return;
+    }
+
+    const row = sourceEl?.closest?.('.history-entry');
+    const input = row?.querySelector?.('.history-continue-input');
+    const prompt = (input?.value || '').trim();
+
+    this._historyContinuing = true;
+    if (sourceEl && 'disabled' in sourceEl) sourceEl.disabled = true;
+    try {
+      const res = await window.agentNotch.dispatchFromHistory(historyId, prompt);
+      if (res?.success) {
+        this.showToast(res.message || 'Continued', 'ok');
+        // Refresh sessions after headless resume/new
+        if (window.agentNotch.getSessions) {
+          try {
+            this.sessions = (await window.agentNotch.getSessions()) || this.sessions;
+          } catch {
+            // ignore
+          }
+        }
+      } else {
+        this.showToast(res?.message || 'Could not continue', 'error');
+      }
+    } catch (err) {
+      this.showToast(err.message || 'Continue failed', 'error');
+    } finally {
+      this._historyContinuing = false;
+      if (sourceEl && 'disabled' in sourceEl) sourceEl.disabled = false;
+    }
   }
 
   updateBadges() {
@@ -1511,10 +1715,10 @@ function getMockSessions() {
 function getMockUsageLimits() {
   return [
     { id: 'claude', short: 'Claude', name: 'Claude Code', color: '#D97757', available: false, usedPercent: null, model: 'opus', note: 'Limit not exposed locally' },
-    { id: 'codex', short: 'Codex', name: 'Codex', color: '#10B981', available: true, usedPercent: 10, remainingPercent: 90, plan: 'go', model: 'gpt-5.6-terra' },
+    { id: 'codex', short: 'Codex', name: 'Codex', color: '#10B981', available: true, usedPercent: 88, remainingPercent: 12, plan: 'go', model: 'gpt-5.6-terra', resetsLabel: 'in 2h' },
     { id: 'cursor', short: 'Cursor', name: 'Cursor', color: '#06B6D4', available: false, usedPercent: null, note: 'Limit not available locally' },
     { id: 'antigravity', short: 'Gemini', name: 'Antigravity', color: '#4285F4', available: false, usedPercent: null },
-    { id: 'grok', short: 'Grok', name: 'Grok', color: '#EF4444', available: true, usedPercent: 22, remainingPercent: 78, plan: 'X Premium', model: 'grok-4.5' }
+    { id: 'grok', short: 'Grok', name: 'Grok', color: '#EF4444', available: true, usedPercent: 62, remainingPercent: 38, plan: 'X Premium', model: 'grok-4.5' }
   ];
 }
 
@@ -1606,6 +1810,9 @@ function getMockHistory() {
       durationFormatted: '12m',
       lastTime: Date.now() - 3600000,
       archivedAt: Date.now() - 3600000,
+      cwd: 'C:\\dev\\agent-notch',
+      pinned: true,
+      pinnedAt: Date.now() - 1000,
       toolCalls: ['run(npm test)', 'search(eslint.config.js)']
     },
     {
@@ -1617,7 +1824,20 @@ function getMockHistory() {
       durationFormatted: '25m',
       lastTime: Date.now() - 86400000,
       archivedAt: Date.now() - 86400000,
+      cwd: 'C:\\dev\\webapp',
       toolCalls: ['search(routes/)', 'write(routes/auth.js)']
+    },
+    {
+      id: 'cursor-mock-hist-3',
+      agent: 'Cursor',
+      taskName: 'IDE open — exploration',
+      userPrompt: '',
+      status: 'idle',
+      durationFormatted: '—',
+      lastTime: Date.now() - 172800000,
+      archivedAt: Date.now() - 172800000,
+      cwd: 'C:\\dev\\notes',
+      toolCalls: []
     }
   ];
 }

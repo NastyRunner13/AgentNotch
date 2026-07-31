@@ -49,6 +49,10 @@
             <span class="stat-num">0</span>
             <span class="stat-label">done</span>
           </span>
+          <span id="stat-limit" class="stat stat-limit" style="display:none" title="Agent near rate/credit limit">
+            <span class="stat-num">0%</span>
+            <span class="stat-label">limit</span>
+          </span>
         </div>
         <button type="button" id="btn-pin" class="bar-btn" title="Pin — keep the notch on screen" aria-label="Pin notch on screen" aria-pressed="false">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -264,6 +268,17 @@
             <label class="setting-row">
               <span class="setting-label">Launch at startup</span>
               <input type="checkbox" id="set-startup" class="toggle">
+            </label>
+
+            <h3 class="settings-heading">Usage limits</h3>
+            <p class="settings-hint settings-hint-block">Rate and credit remaining from local agent files. Never opens the panel.</p>
+            <label class="setting-row">
+              <span class="setting-label">Show critical limit on notch</span>
+              <input type="checkbox" id="set-limit-notch" class="toggle" checked>
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Notify when limit is critical</span>
+              <input type="checkbox" id="set-limit-notify-crit" class="toggle" checked>
             </label>
 
             <h3 class="settings-heading">Claude remote approve</h3>

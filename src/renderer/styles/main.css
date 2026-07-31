@@ -493,6 +493,19 @@ html, body {
   flex-shrink: 0;
 }
 
+/* Crit rate/credit limit — quiet mono chip; hidden when attention is active */
+.stat-limit .stat-num {
+  color: var(--color-error);
+  font-family: var(--font-mono);
+}
+
+.stat-limit .stat-label {
+  color: var(--color-error);
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .notch-chevron {
   display: flex;
   align-items: center;
