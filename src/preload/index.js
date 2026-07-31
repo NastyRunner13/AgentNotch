@@ -48,6 +48,12 @@ contextBridge.exposeInMainWorld('agentNotch', {
     ipcRenderer.on('displays-changed', handler);
     return () => ipcRenderer.removeListener('displays-changed', handler);
   },
+  /** Partial settings push from main (focus mode, muted agents, etc.) */
+  onSettingsChanged: (callback) => {
+    const handler = (_, settings) => callback(settings);
+    ipcRenderer.on('settings-changed', handler);
+    return () => ipcRenderer.removeListener('settings-changed', handler);
+  },
 
   // Actions
   approvePermission: (sessionId) => ipcRenderer.invoke('approve-permission', sessionId),

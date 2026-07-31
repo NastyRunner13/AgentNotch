@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain, screen, shell, globalShortcut, Notification } = require('electron');
 const path = require('path');
-const { createTray, updateTrayIcon } = require('./tray');
+const { createTray, updateTrayIcon, updateTrayMenu } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
 const { installConsoleCapture, closeLogger } = require('./logger');
 const {
@@ -500,6 +500,9 @@ function repositionNotch() {
 app.whenReady().then(() => {
   createWindow();
 
+  // Initialize agent manager (after window — settings drive placement / hotkey)
+  agentManager = new AgentManager();
+
   tray = createTray({
     onShow: () => {
       if (mainWindow) {
@@ -508,11 +511,13 @@ app.whenReady().then(() => {
         mainWindow.focus();
       }
     },
-    onSettings: () => openSettings()
+    onSettings: () => openSettings(),
+    onToggleFocus: (enabled) => {
+      if (!agentManager) return;
+      agentManager.updateSettings({ focusMode: Boolean(enabled) });
+    },
+    focusMode: agentManager.getSettings().focusMode
   });
-
-  // Initialize agent manager (after window — settings drive placement / hotkey)
-  agentManager = new AgentManager();
 
   // Apply launch-at-startup + place notch using persisted display/align
   applyLoginItemSetting(agentManager.getSettings().launchAtStartup);
@@ -543,7 +548,8 @@ app.whenReady().then(() => {
       hasWorking,
       activeCount,
       workingCount,
-      idleCount
+      idleCount,
+      focusMode: Boolean(agentManager.getSettings().focusMode)
     });
   });
 
@@ -602,6 +608,8 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('limit-alert', list);
     }
 
+    // Focus mode + master notify gate — toast only; bar truth stays
+    if (settings.focusMode) return;
     if (settings.desktopNotifications === false) return;
     if (!Notification.isSupported()) return;
 
@@ -648,6 +656,17 @@ app.whenReady().then(() => {
     }
     if (settings.autohideDelayMs !== prev.autohideDelayMs && !isExpanded && !isNotchPinned()) {
       scheduleAutoHide();
+    }
+    // Keep tray Focus checkbox + renderer settings in sync
+    if (settings.focusMode !== prev.focusMode) {
+      updateTrayMenu(tray, { focusMode: Boolean(settings.focusMode) });
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('settings-changed', {
+        focusMode: Boolean(settings.focusMode),
+        mutedAgents: Array.isArray(settings.mutedAgents) ? settings.mutedAgents : [],
+        showLimitOnNotch: settings.showLimitOnNotch !== false
+      });
     }
   });
 

@@ -25,7 +25,8 @@ const {
   normalizeNotchAlign,
   clampAutohideDelayMs,
   createSnoozeEntry,
-  isSnoozeActive
+  isSnoozeActive,
+  normalizeMutedAgents
 } = require('./attention-policy');
 const {
   buildArchiveSnapshot,
@@ -704,6 +705,8 @@ class AgentManager extends EventEmitter {
     if (typeof this.settings.globalHotkey !== 'string') {
       this.settings.globalHotkey = '';
     }
+    this.settings.focusMode = Boolean(this.settings.focusMode);
+    this.settings.mutedAgents = normalizeMutedAgents(this.settings.mutedAgents);
   }
 
   _persistSettings() {
@@ -748,6 +751,12 @@ class AgentManager extends EventEmitter {
     const safeUpdate = {};
     for (const key of Object.keys(DEFAULT_SETTINGS)) {
       if (!Object.prototype.hasOwnProperty.call(newSettings, key)) continue;
+      // mutedAgents is an array (typeof 'object') — accept only real arrays
+      if (key === 'mutedAgents') {
+        if (!Array.isArray(newSettings[key])) continue;
+        safeUpdate[key] = normalizeMutedAgents(newSettings[key]);
+        continue;
+      }
       if (typeof newSettings[key] !== typeof DEFAULT_SETTINGS[key]) continue;
       safeUpdate[key] = newSettings[key];
     }
