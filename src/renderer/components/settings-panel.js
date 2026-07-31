@@ -12,7 +12,9 @@ const MASTER_TOGGLES = {
   'set-opencode': 'enableOpencode',
   'set-sound': 'soundAlerts',
   'set-notifications': 'desktopNotifications',
-  'set-startup': 'launchAtStartup'
+  'set-startup': 'launchAtStartup',
+  'set-limit-notch': 'showLimitOnNotch',
+  'set-limit-notify-crit': 'notifyOnLimitCrit'
 };
 
 const MATRIX_TOGGLES = {
@@ -191,7 +193,15 @@ async function persistSettings(update, app) {
   if (!window.agentNotch?.setSettings) return null;
   try {
     const next = await window.agentNotch.setSettings(update);
-    if (next) applySettings(next);
+    if (next) {
+      applySettings(next);
+      if (app) {
+        app.showLimitOnNotch = next.showLimitOnNotch !== false;
+        if (typeof app.renderNotchLimitChip === 'function') {
+          app.renderNotchLimitChip();
+        }
+      }
+    }
     return next;
   } catch (err) {
     if (app?.showToast) app.showToast(err.message || 'Could not save settings', 'error');

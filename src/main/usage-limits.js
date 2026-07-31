@@ -456,11 +456,101 @@ async function collectUsageLimits(opts = {}) {
   });
 }
 
+/** Shared warn/crit bands for chips, notch, and soft alerts. */
+const LIMIT_WARN_PERCENT = 60;
+const LIMIT_CRIT_PERCENT = 85;
+
+/**
+ * @param {number|null|undefined} usedPercent
+ * @returns {'ok'|'warn'|'crit'|null} null when percent unavailable
+ */
+function limitLevel(usedPercent) {
+  if (usedPercent == null || !Number.isFinite(Number(usedPercent))) return null;
+  const pct = Number(usedPercent);
+  if (pct >= LIMIT_CRIT_PERCENT) return 'crit';
+  if (pct >= LIMIT_WARN_PERCENT) return 'warn';
+  return 'ok';
+}
+
+/**
+ * Highest-usage available limit at or above crit (for collapsed notch).
+ * @param {Array<object>} items
+ * @returns {object|null}
+ */
+function pickCritLimit(items) {
+  const list = Array.isArray(items) ? items : [];
+  let best = null;
+  for (const u of list) {
+    if (!u || !u.available || u.usedPercent == null) continue;
+    if (limitLevel(u.usedPercent) !== 'crit') continue;
+    if (!best || Number(u.usedPercent) > Number(best.usedPercent)) best = u;
+  }
+  return best;
+}
+
+/**
+ * Detect band crossings for soft one-shot alerts.
+ * Tracks last notified band per agent+reset window in `state` (mutated).
+ *
+ * @param {Array<object>} current — latest usage limits
+ * @param {Array<object>|null} previous — prior snapshot
+ * @param {Map<string, string>} state — key `${id}|${resetsAt||0}` → last band notified
+ * @param {{ notifyWarn?: boolean, notifyCrit?: boolean }} [opts]
+ * @returns {Array<{ id: string, short: string, name: string, band: 'warn'|'crit', usedPercent: number }>}
+ */
+function detectLimitCrossings(current, previous, state, opts = {}) {
+  const notifyWarn = opts.notifyWarn === true;
+  const notifyCrit = opts.notifyCrit !== false;
+  if (!notifyWarn && !notifyCrit) return [];
+
+  const prevMap = new Map();
+  for (const u of Array.isArray(previous) ? previous : []) {
+    if (u && u.id) prevMap.set(u.id, u);
+  }
+
+  const alerts = [];
+  for (const u of Array.isArray(current) ? current : []) {
+    if (!u || !u.available || u.usedPercent == null) continue;
+    const band = limitLevel(u.usedPercent);
+    if (band !== 'warn' && band !== 'crit') continue;
+    if (band === 'warn' && !notifyWarn) continue;
+    if (band === 'crit' && !notifyCrit) continue;
+
+    const prev = prevMap.get(u.id);
+    const prevBand = prev && prev.available ? limitLevel(prev.usedPercent) : null;
+    // Only fire when newly entering this band (or first sighting at/above)
+    const entered =
+      prevBand == null ||
+      (band === 'crit' && prevBand !== 'crit') ||
+      (band === 'warn' && prevBand === 'ok');
+
+    if (!entered) continue;
+
+    const key = `${u.id}|${u.resetsAt || 0}|${band}`;
+    if (state instanceof Map && state.has(key)) continue;
+    if (state instanceof Map) state.set(key, band);
+
+    alerts.push({
+      id: u.id,
+      short: u.short || u.name || u.id,
+      name: u.name || u.short || u.id,
+      band,
+      usedPercent: Math.round(Number(u.usedPercent))
+    });
+  }
+  return alerts;
+}
+
 module.exports = {
   collectUsageLimits,
   readGrokUsage,
   readCodexUsage,
   readClaudeUsage,
   readOpencodeUsage,
-  extractCodexRateLimitFromFile
+  extractCodexRateLimitFromFile,
+  LIMIT_WARN_PERCENT,
+  LIMIT_CRIT_PERCENT,
+  limitLevel,
+  pickCritLimit,
+  detectLimitCrossings
 };

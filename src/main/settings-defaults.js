@@ -37,6 +37,11 @@ const DEFAULT_SETTINGS = {
   notchAlign: 'center', // 'left' | 'center' | 'right'
   globalHotkey: '', // empty = platform default Control/Command+Shift+A
 
+  // Usage limits glance (rate/credit remaining)
+  showLimitOnNotch: true, // crit-only chip on collapsed bar
+  notifyOnLimitCrit: true, // soft toast/notify when crossing crit (never auto-opens panel)
+  notifyOnLimitWarn: false, // off by default — quieter
+
   pollInterval: 3000
 };
 

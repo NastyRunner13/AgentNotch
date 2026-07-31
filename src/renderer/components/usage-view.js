@@ -537,8 +537,90 @@ function renderAgents(agents) {
   </div>`;
 }
 
-export function renderUsageView(stats, rangeDays, chartMode = 'tokens') {
+/** Warn / crit bands — keep in sync with main/usage-limits.js */
+const LIMIT_WARN_PERCENT = 60;
+const LIMIT_CRIT_PERCENT = 85;
+
+/**
+ * @param {number|null|undefined} usedPercent
+ * @returns {'ok'|'warn'|'crit'|null}
+ */
+export function limitLevel(usedPercent) {
+  if (usedPercent == null || !Number.isFinite(Number(usedPercent))) return null;
+  const pct = Number(usedPercent);
+  if (pct >= LIMIT_CRIT_PERCENT) return 'crit';
+  if (pct >= LIMIT_WARN_PERCENT) return 'warn';
+  return 'ok';
+}
+
+/**
+ * Compact limit chips for Usage header (all agents with available data).
+ * @param {Array<object>} limits
+ * @returns {string} HTML
+ */
+export function renderLimitHeader(limits) {
+  const items = (Array.isArray(limits) ? limits : []).filter(
+    (u) => u && u.available && u.usedPercent != null
+  );
+  if (items.length === 0) return '';
+
+  const chips = items
+    .slice()
+    .sort((a, b) => Number(b.usedPercent) - Number(a.usedPercent))
+    .map((u) => {
+      const pct = Math.max(0, Math.min(100, Math.round(Number(u.usedPercent))));
+      const level = limitLevel(pct) || 'ok';
+      const name = escapeHtml(u.short || u.name || u.id || '?');
+      const color = u.color || FALLBACK_AGENT_COLOR;
+      const title = escapeHtml(
+        [
+          u.name || name,
+          `${pct}% used`,
+          u.remainingPercent != null ? `${u.remainingPercent}% left` : null,
+          u.resetsLabel ? `resets ${u.resetsLabel}` : null,
+          u.plan || null
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      );
+      return `<span class="usage-limit-chip level-${level}" title="${title}">
+        <span class="usage-limit-dot" style="background:${color}"></span>
+        <span class="usage-limit-name">${name}</span>
+        <span class="usage-limit-pct">${pct}%</span>
+      </span>`;
+    })
+    .join('');
+
+  return `<div class="usage-limits-header" aria-label="Rate and credit limits">
+    <h4 class="usage-eyebrow">Limits</h4>
+    <div class="usage-limits-chips">${chips}</div>
+  </div>`;
+}
+
+/**
+ * Highest crit limit for collapsed notch (or null).
+ * @param {Array<object>} limits
+ * @returns {object|null}
+ */
+export function pickCritLimit(limits) {
+  let best = null;
+  for (const u of Array.isArray(limits) ? limits : []) {
+    if (!u || !u.available || u.usedPercent == null) continue;
+    if (limitLevel(u.usedPercent) !== 'crit') continue;
+    if (!best || Number(u.usedPercent) > Number(best.usedPercent)) best = u;
+  }
+  return best;
+}
+
+/**
+ * @param {object} stats
+ * @param {number} rangeDays
+ * @param {string} [chartMode]
+ * @param {Array<object>} [usageLimits]
+ */
+export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLimits = []) {
   const model = buildUsageModel(stats, rangeDays);
+  const limitsHeader = renderLimitHeader(usageLimits);
 
   const rangeToggle = `<div class="usage-range" role="tablist" aria-label="Usage range">
     ${USAGE_RANGES.map(r => `<button type="button" class="usage-range-btn${r.days === rangeDays ? ' active' : ''}"
@@ -547,6 +629,7 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens') {
 
   if (model.empty) {
     return `${rangeToggle}
+      ${limitsHeader}
       <div class="empty-state usage-empty">
         <p class="empty-title">No usage in this range</p>
         <p class="empty-desc">Session time, tokens, and cost appear here as agents work. Token data comes from local agent files only.</p>
@@ -580,6 +663,7 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens') {
     : `<p class="usage-footnote">No priced token data in this range — costs appear when an agent reports tokens for a known model. Local data only.</p>`;
 
   return `${rangeToggle}
+    ${limitsHeader}
     ${renderSummary(model.totals)}
     ${chartSection}
     ${mixSection}
