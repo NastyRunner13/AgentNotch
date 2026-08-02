@@ -575,7 +575,9 @@ function renderPhaseFooter(text) {
  */
 export function getAgentBarIcon(session) {
   const colors = AGENT_COLORS[session.agent] || { main: '#60A5FA' };
-  const isAttention = ['permission-request', 'question', 'needs-attention'].includes(session.status);
+  const isAttention =
+    ['permission-request', 'question', 'needs-attention'].includes(session.status) &&
+    !session.attentionAcknowledged;
   const isWorking = session.status === 'working';
   const statusClass = isAttention ? 'attention' : isWorking ? 'working' : 'idle';
 
@@ -612,7 +614,10 @@ export function getAgentBarIcon(session) {
 export function renderSessionCard(session, index = 0, options = {}) {
   const agent = AGENT_COLORS[session.agent] || { main: '#60A5FA', class: 'agent-claude' };
   const statusInfo = getStatusInfo(session);
-  const needsAttention = ['permission-request', 'question', 'needs-attention'].includes(session.status);
+  const isAttentionStatus = ['permission-request', 'question', 'needs-attention'].includes(session.status);
+  const attentionAcknowledged = Boolean(session.attentionAcknowledged);
+  /** Active queue member — still needs the user and not dismissed from the queue */
+  const needsAttention = isAttentionStatus && !attentionAcknowledged;
   const isWorking = session.status === 'working';
   const delay = index * 50;
   const animateIn = options.animateIn !== false && options.animateIn !== undefined
@@ -661,13 +666,14 @@ export function renderSessionCard(session, index = 0, options = {}) {
     detailContent += renderInlineQuestion(session);
   }
 
-  // Actions — Jump + Snooze (mute alerts; bar truth stays)
+  // Actions — Jump + clear attention (queue) + Snooze (mute alerts; bar truth stays)
   detailContent += `
     <div class="session-actions">
       <button class="btn-jump" data-session-id="${escapeHtml(session.id)}" type="button">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Jump to ${escapeHtml(session.terminal || 'Terminal')}
       </button>
+      ${renderAttentionQueueControls(session, needsAttention, attentionAcknowledged)}
       ${renderSnoozeControls(session)}
     </div>`;
 
@@ -709,23 +715,31 @@ export function renderSessionCard(session, index = 0, options = {}) {
     : '';
 
   const snoozeChip = renderSnoozeChip(session);
+  const queueBadge = renderQueueBadge(session, needsAttention);
+  const attentionChip = renderAttentionAckChip(session, attentionAcknowledged);
 
   const cardClasses = [
     'session-card',
     needsAttention ? 'attention' : '',
+    attentionAcknowledged && isAttentionStatus ? 'attention-acked' : '',
     isWorking ? 'is-working' : '',
     session.snoozed ? 'is-snoozed' : '',
     animateIn ? 'card-enter' : 'card-static'
   ].filter(Boolean).join(' ');
 
+  const ariaQueue = needsAttention && session.queueTotal > 1
+    ? `, queue ${session.queueIndex} of ${session.queueTotal}`
+    : '';
+
   return `
     <div class="${cardClasses}"
          data-session-id="${escapeHtml(session.id)}"
          data-status="${escapeHtml(session.status)}"
+         data-queue-index="${needsAttention && session.queueIndex ? session.queueIndex : ''}"
          role="button"
          tabindex="0"
          aria-expanded="false"
-         aria-label="${escapeHtml(session.agent)}: ${escapeHtml(session.taskName)}"
+         aria-label="${escapeHtml(session.agent)}: ${escapeHtml(session.taskName)}${escapeHtml(ariaQueue)}"
          style="${animateIn ? `animation-delay: ${delay}ms` : ''}">
       ${sessionLaser}
       <div class="session-header">
@@ -738,6 +752,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
         </div>
         <div class="session-meta">
           <div class="session-row-top">
+            ${queueBadge}
             <span class="session-name">${escapeHtml(session.taskName)}</span>
             <span class="session-tag ${agent.class}">${escapeHtml(session.agent)}</span>
             ${session.model ? `<span class="session-model" title="Model">${escapeHtml(formatModelLabel(session.model))}</span>` : ''}
@@ -745,7 +760,8 @@ export function renderSessionCard(session, index = 0, options = {}) {
             ${dismissBtn}
           </div>
           <div class="session-status-line">
-            <span class="session-status-text ${statusInfo.textClass}">${escapeHtml(statusInfo.text)}</span>
+            <span class="session-status-text ${attentionAcknowledged && isAttentionStatus ? 'idle' : statusInfo.textClass}">${escapeHtml(attentionAcknowledged && isAttentionStatus ? 'Waiting · cleared from queue' : statusInfo.text)}</span>
+            ${attentionChip}
             ${snoozeChip}
             <span class="session-last-seen">${escapeHtml(formatRelativeTime(session.lastActivityAt || session.lastTime))}</span>
           </div>
@@ -757,6 +773,46 @@ export function renderSessionCard(session, index = 0, options = {}) {
         </div>
       </div>
     </div>`;
+}
+
+/**
+ * Queue position badge for multi-attention (1 / 1 of 3).
+ */
+function renderQueueBadge(session, needsAttention) {
+  if (!needsAttention) return '';
+  const total = Number(session.queueTotal) || 0;
+  const idx = Number(session.queueIndex) || 0;
+  if (total < 1 || idx < 1) return '';
+  const label = total > 1 ? `${idx}/${total}` : String(idx);
+  const title = total > 1
+    ? `Attention queue ${idx} of ${total} — Ctrl+] next, Ctrl+[ previous`
+    : 'Next in attention queue';
+  return `<span class="queue-badge" title="${escapeHtml(title)}" aria-hidden="true">${escapeHtml(label)}</span>`;
+}
+
+/**
+ * Chip when this attention episode was cleared from the queue (session remains).
+ */
+function renderAttentionAckChip(session, attentionAcknowledged) {
+  if (!attentionAcknowledged) return '';
+  return `<button type="button" class="attention-ack-chip" data-session-id="${escapeHtml(session.id)}" title="Back in attention queue" aria-label="Attention cleared. Click to restore to queue.">
+    Cleared
+  </button>`;
+}
+
+/**
+ * Clear / restore attention queue controls (not hide session, not snooze).
+ */
+function renderAttentionQueueControls(session, needsAttention, attentionAcknowledged) {
+  if (attentionAcknowledged) {
+    return `<button type="button" class="btn-restore-attention" data-session-id="${escapeHtml(session.id)}" title="Put this session back in the attention queue">
+      Restore to queue
+    </button>`;
+  }
+  if (!needsAttention) return '';
+  return `<button type="button" class="btn-clear-attention" data-session-id="${escapeHtml(session.id)}" title="Clear from attention queue — session stays (Ctrl+Shift+D)">
+    Clear <kbd>Ctrl+Shift+D</kbd>
+  </button>`;
 }
 
 /**
@@ -817,15 +873,20 @@ function renderSnoozeControls(session) {
  * Section header for the live session list (Needs you / Running / Finished).
  * @param {string} label
  * @param {number} count
- * @param {'attention'|'working'|'idle'} [variant]
+ * @param {'attention'|'working'|'idle'|'acked'} [variant]
+ * @param {{ hint?: string }} [opts]
  */
-export function renderSessionSectionHeader(label, count, variant = 'idle') {
+export function renderSessionSectionHeader(label, count, variant = 'idle', opts = {}) {
   const n = Number(count) || 0;
   if (n <= 0) return '';
   const countLabel = n === 1 ? '1' : String(n);
+  const hint = opts && opts.hint
+    ? `<span class="session-section-hint">${escapeHtml(opts.hint)}</span>`
+    : '';
   return `<div class="session-section-header session-section-${escapeHtml(variant)}" role="presentation">
     <span class="session-section-label">${escapeHtml(label)}</span>
     <span class="session-section-count">${escapeHtml(countLabel)}</span>
+    ${hint}
   </div>`;
 }
 
