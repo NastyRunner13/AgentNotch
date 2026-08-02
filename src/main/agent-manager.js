@@ -26,7 +26,12 @@ const {
   clampAutohideDelayMs,
   createSnoozeEntry,
   isSnoozeActive,
-  normalizeMutedAgents
+  normalizeMutedAgents,
+  isAttentionStatus,
+  attentionEpisodeKey,
+  isAttentionEpisodeAcknowledged,
+  compareSessionsByAttention,
+  annotateAttentionQueue
 } = require('./attention-policy');
 const {
   buildArchiveSnapshot,
@@ -108,11 +113,21 @@ class AgentManager extends EventEmitter {
      * @type {Map<string, { until?: number, untilIdle?: boolean }>}
      */
     this._snoozes = new Map();
+    /**
+     * Dismiss-attention acks: session id → episode key.
+     * Clears that episode from the attention queue without removing the session.
+     * @type {Map<string, string>}
+     */
+    this._attentionAcks = new Map();
     this._loadHistory();
 
     this._emitTimer = null;
-    /** @type {Set<string>} session ids currently in attention (for sound debounce) */
-    this._attentionIds = new Set();
+    /**
+     * Session id → attention episode key currently known (interrupt debounce).
+     * Re-fires when the episode key changes even if status stays attention.
+     * @type {Map<string, string>}
+     */
+    this._attentionEpisodes = new Map();
     /** @type {Map<string, string>} previous status per session id (for done detection) */
     this._prevStatus = new Map();
     /** @type {Array|null} last usage snapshot */
@@ -321,12 +336,13 @@ class AgentManager extends EventEmitter {
   }
 
   /**
-   * Emit attention (permission/question) and done (finished implementing) once per transition.
+   * Emit attention (permission/question) and done (finished implementing) once per
+   * transition or new attention episode (new permission / question after dismiss).
    */
   _detectStatusTransitions(sessions) {
-    const ATTENTION = new Set(['permission-request', 'question', 'needs-attention']);
     const ACTIVE_WORK = new Set(['working', 'permission-request', 'question', 'needs-attention']);
-    const currentAttention = new Set();
+    /** @type {Map<string, string>} */
+    const currentEpisodes = new Map();
     const newlyAttention = [];
     const newlyDone = [];
     const seen = new Set();
@@ -335,10 +351,16 @@ class AgentManager extends EventEmitter {
       seen.add(session.id);
       const prev = this._prevStatus.get(session.id);
 
-      if (ATTENTION.has(session.status)) {
-        currentAttention.add(session.id);
-        if (!this._attentionIds.has(session.id)) {
-          newlyAttention.push(session);
+      if (isAttentionStatus(session.status)) {
+        const key = attentionEpisodeKey(session) || session.status;
+        currentEpisodes.set(session.id, key);
+        // Interrupt only for unacked queue items; keep episode map when
+        // dismissed so "restore" does not re-blast sound/toast.
+        if (!session.attentionAcknowledged) {
+          const prevKey = this._attentionEpisodes.get(session.id);
+          if (prevKey !== key) {
+            newlyAttention.push(session);
+          }
         }
       }
 
@@ -366,8 +388,14 @@ class AgentManager extends EventEmitter {
         if (!seen.has(id)) this._snoozes.delete(id);
       }
     }
+    // Drop attention acks for sessions watchers no longer track
+    if (this._attentionAcks.size) {
+      for (const id of [...this._attentionAcks.keys()]) {
+        if (!seen.has(id)) this._attentionAcks.delete(id);
+      }
+    }
 
-    this._attentionIds = currentAttention;
+    this._attentionEpisodes = currentEpisodes;
 
     if (newlyAttention.length > 0) {
       this.emit('attention', newlyAttention);
@@ -543,24 +571,59 @@ class AgentManager extends EventEmitter {
     // Merge Claude PermissionRequest hook pendings (true remote approve)
     const merged = permissionBridge.mergePendingIntoSessions(all);
 
-    // Sort: needs-attention first, then working, then idle
-    const priority = {
-      'permission-request': 0,
-      'question': 1,
-      'needs-attention': 2,
-      'working': 3,
-      'idle': 4,
-      'stopped': 5
-    };
-    merged.sort((a, b) => {
-      const pa = priority[a.status] ?? 4;
-      const pb = priority[b.status] ?? 4;
-      if (pa !== pb) return pa - pb;
-      return (b.lastTime || 0) - (a.lastTime || 0);
-    });
+    // Annotate snooze + attention-ack, then sort (active queue first)
+    const annotated = merged.map((session) => this._withAttentionMeta(this._withSnooze(session)));
+    annotated.sort(compareSessionsByAttention);
+    annotateAttentionQueue(annotated);
+    return annotated;
+  }
 
-    // Annotate snooze (channel mute only) and drop expired entries
-    return merged.map((session) => this._withSnooze(session));
+  /**
+   * Attach attention-ack + episode key for the renderer / queue.
+   * Drops stale acks when the episode changes or status leaves attention.
+   * @param {object} session
+   * @returns {object}
+   */
+  _withAttentionMeta(session) {
+    if (!session || !session.id) return session;
+
+    const key = attentionEpisodeKey(session);
+    const ackedKey = this._attentionAcks.get(session.id);
+
+    if (!isAttentionStatus(session.status)) {
+      if (ackedKey != null) this._attentionAcks.delete(session.id);
+      if (session.attentionAcknowledged || session.attentionEpisodeKey != null) {
+        return {
+          ...session,
+          attentionAcknowledged: false,
+          attentionEpisodeKey: null
+        };
+      }
+      return session;
+    }
+
+    // Stale ack for a different episode — clear so the queue sees the new need
+    if (ackedKey != null && !isAttentionEpisodeAcknowledged(session, ackedKey)) {
+      this._attentionAcks.delete(session.id);
+    }
+
+    const acknowledged = isAttentionEpisodeAcknowledged(
+      session,
+      this._attentionAcks.get(session.id)
+    );
+
+    if (
+      session.attentionAcknowledged === acknowledged &&
+      session.attentionEpisodeKey === key
+    ) {
+      return session;
+    }
+
+    return {
+      ...session,
+      attentionAcknowledged: acknowledged,
+      attentionEpisodeKey: key
+    };
   }
 
   /**
@@ -649,9 +712,60 @@ class AgentManager extends EventEmitter {
     };
   }
 
+  /**
+   * Dismiss this attention episode from the queue without removing the session.
+   * Session stays visible; bar/queue stop counting it until a new episode.
+   * Distinct from dismissSession (hide/archive) and snooze (mute channels only).
+   * @param {string} sessionId
+   */
+  dismissAttention(sessionId) {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return { success: false, message: 'Invalid session' };
+    }
+    const session = this.getSessions().find((s) => s.id === sessionId);
+    if (!session) {
+      return { success: false, message: 'Session not found' };
+    }
+    if (!isAttentionStatus(session.status)) {
+      return { success: false, message: 'Session is not waiting for you' };
+    }
+    const key = attentionEpisodeKey(session);
+    if (!key) {
+      return { success: false, message: 'No attention episode' };
+    }
+    if (session.attentionAcknowledged) {
+      return { success: true, message: 'Already cleared from queue' };
+    }
+    this._attentionAcks.set(sessionId, key);
+    this._scheduleEmit();
+    return { success: true, message: 'Cleared from attention queue' };
+  }
+
+  /**
+   * Restore a dismissed attention episode back into the queue.
+   * Does not re-fire sound/toast for the same episode.
+   * @param {string} sessionId
+   */
+  clearAttentionAck(sessionId) {
+    if (!sessionId || typeof sessionId !== 'string') {
+      return { success: false, message: 'Invalid session' };
+    }
+    const had = this._attentionAcks.delete(sessionId);
+    if (had) this._scheduleEmit();
+    return {
+      success: true,
+      message: had ? 'Back in attention queue' : 'Not dismissed'
+    };
+  }
+
   /** @returns {Map<string, { until?: number, untilIdle?: boolean }>} */
   getSnoozes() {
     return this._snoozes;
+  }
+
+  /** @returns {Map<string, string>} */
+  getAttentionAcks() {
+    return this._attentionAcks;
   }
 
   getSettings() {
@@ -1039,6 +1153,7 @@ class AgentManager extends EventEmitter {
     this._archivedIds.clear();
     this._dismissed.clear();
     this._snoozes.clear();
+    this._attentionAcks.clear();
     this._saveHistory();
     return { success: true };
   }

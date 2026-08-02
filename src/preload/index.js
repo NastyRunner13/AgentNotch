@@ -64,6 +64,10 @@ contextBridge.exposeInMainWorld('agentNotch', {
   /** Mute sound + toast for a session: preset '15m' | '1h' | 'until-idle' */
   snoozeSession: (sessionId, preset) => ipcRenderer.invoke('snooze-session', sessionId, preset),
   clearSnooze: (sessionId) => ipcRenderer.invoke('clear-snooze', sessionId),
+  /** Clear this attention episode from the queue (session stays) */
+  dismissAttention: (sessionId) => ipcRenderer.invoke('dismiss-attention', sessionId),
+  /** Put a dismissed attention episode back in the queue */
+  clearAttentionAck: (sessionId) => ipcRenderer.invoke('clear-attention-ack', sessionId),
 
   // Claude remote approve (PermissionRequest hook)
   installClaudePermissionHook: () => ipcRenderer.invoke('install-claude-permission-hook'),

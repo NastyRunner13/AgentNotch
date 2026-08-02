@@ -22,6 +22,16 @@ const ATTENTION_STATUSES = Object.freeze([
   'needs-attention'
 ]);
 
+/** Lower rank = higher priority in the attention queue and session list. */
+const ATTENTION_PRIORITY = Object.freeze({
+  'permission-request': 0,
+  'question': 1,
+  'needs-attention': 2,
+  'working': 3,
+  'idle': 4,
+  'stopped': 5
+});
+
 const SNOOZE_PRESETS = Object.freeze({
   '15m': 15 * 60 * 1000,
   '1h': 60 * 60 * 1000,
@@ -68,6 +78,142 @@ function kindFromStatus(statusOrKind) {
  */
 function isAttentionStatus(status) {
   return ATTENTION_STATUSES.includes(status);
+}
+
+/**
+ * Sort rank for session status (lower first). Unknown statuses sort like idle.
+ * @param {string} [status]
+ * @returns {number}
+ */
+function attentionRank(status) {
+  if (status != null && Object.prototype.hasOwnProperty.call(ATTENTION_PRIORITY, status)) {
+    return ATTENTION_PRIORITY[status];
+  }
+  return ATTENTION_PRIORITY.idle;
+}
+
+/**
+ * Stable key for the current "needs human" episode on a session.
+ * When the key changes (new permission, new question, new stall), a prior
+ * dismiss-attention ack no longer applies and interrupts may fire again.
+ * @param {object|null|undefined} session
+ * @returns {string|null}
+ */
+function attentionEpisodeKey(session) {
+  if (!session || !isAttentionStatus(session.status)) return null;
+  const status = session.status;
+  if (status === 'permission-request') {
+    const pr = session.permissionRequest || {};
+    const id = pr.requestId || pr.id || '';
+    const tool = pr.tool || session.currentTool || '';
+    const file = pr.filePath || '';
+    return `perm:${id}|${tool}|${file}`;
+  }
+  if (status === 'question') {
+    const q = session.question || {};
+    const text = String(q.text || q.prompt || '').slice(0, 160);
+    return `q:${text}`;
+  }
+  // needs-attention — stall / generic human need.
+  // Avoid lastTime: poll updates thrash the episode key and re-fire interrupts.
+  const msg = String(session.lastMessage || session.currentTool || session.taskName || '').slice(0, 120);
+  return `att:${msg || session.id || 'need'}`;
+}
+
+/**
+ * Whether an ack map entry still covers this session's current attention episode.
+ * @param {object|null|undefined} session
+ * @param {string|null|undefined} ackedKey — stored episode key
+ * @returns {boolean}
+ */
+function isAttentionEpisodeAcknowledged(session, ackedKey) {
+  if (!ackedKey || typeof ackedKey !== 'string') return false;
+  const key = attentionEpisodeKey(session);
+  return Boolean(key && key === ackedKey);
+}
+
+/**
+ * Compare sessions for the live list + attention queue.
+ * Unacked attention first (by status priority, then recency), then acked
+ * attention, then working / idle / stopped.
+ * @param {object} a
+ * @param {object} b
+ * @returns {number}
+ */
+function compareSessionsByAttention(a, b) {
+  const aAtt = isAttentionStatus(a && a.status);
+  const bAtt = isAttentionStatus(b && b.status);
+  const aAck = Boolean(a && a.attentionAcknowledged);
+  const bAck = Boolean(b && b.attentionAcknowledged);
+
+  // Active (unacked) attention before everything else
+  const aActive = aAtt && !aAck;
+  const bActive = bAtt && !bAck;
+  if (aActive !== bActive) return aActive ? -1 : 1;
+
+  // Acked attention after active attention, before working
+  const aSoft = aAtt && aAck;
+  const bSoft = bAtt && bAck;
+  if (aSoft !== bSoft) return aSoft ? -1 : 1;
+
+  const ra = attentionRank(a && a.status);
+  const rb = attentionRank(b && b.status);
+  if (ra !== rb) return ra - rb;
+
+  return (Number(b && b.lastTime) || 0) - (Number(a && a.lastTime) || 0);
+}
+
+/**
+ * Active attention queue: human-needed sessions not dismissed for this episode.
+ * Already sorted by priority when `sessions` were sorted with compareSessionsByAttention.
+ * @param {Array<object>|null|undefined} sessions
+ * @returns {object[]}
+ */
+function buildAttentionQueue(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  return list.filter(
+    (s) => s && isAttentionStatus(s.status) && !s.attentionAcknowledged && s.status !== 'stopped'
+  );
+}
+
+/**
+ * Annotate queue index/total on active attention sessions (1-based).
+ * Mutates queue members in place; clears stale fields on non-queue sessions.
+ * @param {Array<object>} sessions
+ * @returns {object[]} the attention queue (same object refs as in sessions)
+ */
+function annotateAttentionQueue(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  const queue = buildAttentionQueue(list);
+  const total = queue.length;
+  const inQueue = new Set(queue);
+  for (const s of list) {
+    if (!s) continue;
+    if (!inQueue.has(s)) {
+      if (s.queueIndex != null) delete s.queueIndex;
+      if (s.queueTotal != null) delete s.queueTotal;
+    }
+  }
+  for (let i = 0; i < total; i++) {
+    queue[i].queueIndex = i + 1;
+    queue[i].queueTotal = total;
+  }
+  return queue;
+}
+
+/**
+ * Short status phrase for the collapsed strip (single session).
+ * @param {object|null|undefined} session
+ * @param {(agent: string) => string} [shortName]
+ * @returns {string}
+ */
+function formatAttentionStatusLine(session, shortName) {
+  if (!session) return '';
+  const nameFn = typeof shortName === 'function' ? shortName : (a) => String(a || 'Agent');
+  const agent = nameFn(session.agent);
+  if (session.status === 'permission-request') return `${agent} needs permission`;
+  if (session.status === 'question') return `${agent} asks a question`;
+  return `${agent} needs you`;
 }
 
 /**
@@ -363,11 +509,19 @@ function normalizeNotchAlign(align) {
 
 module.exports = {
   ATTENTION_STATUSES,
+  ATTENTION_PRIORITY,
   SNOOZE_PRESETS,
   MUTE_AGENT_IDS,
   AGENT_NAME_TO_ID,
   kindFromStatus,
   isAttentionStatus,
+  attentionRank,
+  attentionEpisodeKey,
+  isAttentionEpisodeAcknowledged,
+  compareSessionsByAttention,
+  buildAttentionQueue,
+  annotateAttentionQueue,
+  formatAttentionStatusLine,
   normalizeSnoozePreset,
   createSnoozeEntry,
   isSnoozeActive,
