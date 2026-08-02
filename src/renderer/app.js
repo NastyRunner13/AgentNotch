@@ -23,6 +23,17 @@ function shortAgentName(agent) {
   return String(agent || 'Agent');
 }
 
+const ATTENTION_STATUSES = ['permission-request', 'question', 'needs-attention'];
+
+/** Active attention queue (unacked) — priority order matches main sort. */
+function isInAttentionQueue(session) {
+  return Boolean(
+    session &&
+    ATTENTION_STATUSES.includes(session.status) &&
+    !session.attentionAcknowledged
+  );
+}
+
 /**
  * AgentNotch — Main Renderer Application
  * Integrates autohide, single-window unified UI, expandable sessions,
@@ -164,18 +175,17 @@ class App {
 
       window.agentNotch.onSessionsUpdate((sessions) => {
         this.sessions = sessions;
-        // Only auto-focus the attention session when it NEWLY enters attention
+        // Only auto-focus the attention session when it NEWLY enters the queue
         // (not on every update) so the user can keep a different card expanded.
-        const ATTENTION = ['permission-request', 'question', 'needs-attention'];
         const newlyAttention = sessions.find(s =>
-          ATTENTION.includes(s.status) && !this._prevAttentionIds.has(s.id)
+          isInAttentionQueue(s) && !this._prevAttentionIds.has(s.id)
         );
         if (newlyAttention) {
           this.expandedSessionId = newlyAttention.id;
         }
-        // Update the tracked set
+        // Track active queue membership (episode acks drop out)
         const currentAttentionIds = new Set(
-          sessions.filter(s => ATTENTION.includes(s.status)).map(s => s.id)
+          sessions.filter(s => isInAttentionQueue(s)).map(s => s.id)
         );
         this._prevAttentionIds = currentAttentionIds;
         this._maybeRefreshUsageStats();
@@ -286,6 +296,23 @@ class App {
       const mod = e.ctrlKey || e.metaKey;
       if (!mod) return;
 
+      // Attention queue navigation (Ctrl+] next, Ctrl+[ previous)
+      if (e.key === ']' || e.key === '[') {
+        e.preventDefault();
+        this.cycleAttentionQueue(e.key === ']' ? 1 : -1);
+        return;
+      }
+
+      // Dismiss current attention episode from queue (session stays)
+      if ((e.key === 'd' || e.key === 'D') && e.shiftKey) {
+        const target = this.getAttentionSession();
+        if (target && isInAttentionQueue(target)) {
+          e.preventDefault();
+          this.handleDismissAttention(target.id);
+        }
+        return;
+      }
+
       const attentionSession = this.getAttentionSession();
 
       if (e.key === 'y' || e.key === 'Y') {
@@ -319,17 +346,106 @@ class App {
     });
   }
 
+  /** Active (unacked) attention queue in list order. */
+  getAttentionQueue() {
+    return this.sessions.filter(s => isInAttentionQueue(s) && s.status !== 'stopped');
+  }
+
+  /**
+   * Prefer expanded queue member; else head of the attention queue.
+   * Used by Ctrl+Y/N/1-9 and dismiss-attention.
+   */
   getAttentionSession() {
-    // Prefer expanded session if it needs attention
     if (this.expandedSessionId) {
       const expanded = this.sessions.find(s => s.id === this.expandedSessionId);
-      if (expanded && ['permission-request', 'question', 'needs-attention'].includes(expanded.status)) {
+      if (expanded && isInAttentionQueue(expanded)) {
         return expanded;
       }
     }
-    return this.sessions.find(s =>
-      ['permission-request', 'question', 'needs-attention'].includes(s.status)
-    ) || null;
+    return this.getAttentionQueue()[0] || null;
+  }
+
+  /**
+   * Expand the next/previous item in the attention queue and scroll it into view.
+   * @param {1|-1} delta
+   */
+  cycleAttentionQueue(delta) {
+    const queue = this.getAttentionQueue();
+    if (queue.length === 0) {
+      this.showToast('Nothing needs you right now', 'info');
+      return;
+    }
+
+    // Switch to Sessions tab so the card is visible
+    if (this.currentView !== 'sessions') {
+      this.switchView('sessions');
+      document.querySelectorAll('.ntab:not(.ntab-icon)').forEach(t => {
+        t.classList.toggle('active', t.dataset.tab === 'sessions');
+      });
+    }
+
+    let idx = queue.findIndex(s => s.id === this.expandedSessionId);
+    if (idx < 0) {
+      idx = delta > 0 ? 0 : queue.length - 1;
+    } else {
+      idx = (idx + delta + queue.length) % queue.length;
+    }
+
+    const target = queue[idx];
+    this.expandedSessionId = target.id;
+    this._lastSessionsFp = '\x00force';
+    this.renderSessions();
+
+    requestAnimationFrame(() => {
+      const card = document.querySelector(
+        `.session-card[data-session-id="${CSS.escape(target.id)}"]`
+      );
+      if (card) {
+        card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        try { card.focus({ preventScroll: true }); } catch { /* ignore */ }
+      }
+    });
+
+    if (queue.length > 1) {
+      this.showToast(
+        `${idx + 1}/${queue.length} · ${shortAgentName(target.agent)}`,
+        'info'
+      );
+    }
+  }
+
+  async handleDismissAttention(sessionId) {
+    if (!window.agentNotch?.dismissAttention) return;
+    try {
+      const res = await window.agentNotch.dismissAttention(sessionId);
+      if (res && res.success) {
+        // Advance to next remaining queue item if we cleared the focused one
+        const queue = this.getAttentionQueue().filter(s => s.id !== sessionId);
+        if (this.expandedSessionId === sessionId) {
+          this.expandedSessionId = queue[0]?.id || null;
+        }
+        this.showToast(res.message || 'Cleared from queue', 'ok');
+      } else {
+        this.showToast((res && res.message) || 'Could not clear attention', 'error');
+      }
+    } catch (err) {
+      this.showToast(`Clear failed: ${err.message || 'main process error'}`, 'error');
+    }
+  }
+
+  async handleRestoreAttention(sessionId) {
+    if (!window.agentNotch?.clearAttentionAck) return;
+    try {
+      const res = await window.agentNotch.clearAttentionAck(sessionId);
+      if (res && res.success) {
+        this.expandedSessionId = sessionId;
+        this.showToast(res.message || 'Back in queue', 'ok');
+      } else {
+        this.showToast((res && res.message) || 'Could not restore', 'error');
+      }
+    } catch (err) {
+      this.showToast(`Restore failed: ${err.message || 'main process error'}`, 'error');
+    }
   }
 
   async handleApprove(sessionId) {
@@ -808,7 +924,10 @@ class App {
         planKey,
         s.permissionRequest?.requestId || '',
         s.question?.prompt || s.question?.text || '',
-        snoozeKey
+        snoozeKey,
+        s.attentionAcknowledged ? '1' : '0',
+        s.queueIndex || 0,
+        s.queueTotal || 0
       ].join('\x1f');
     }).join('\x1e');
   }
@@ -821,7 +940,9 @@ class App {
       s.taskName || '',
       s.currentTool || '',
       String(s.lastMessage || '').slice(0, 80),
-      s.snoozed ? '1' : '0'
+      s.snoozed ? '1' : '0',
+      s.attentionAcknowledged ? '1' : '0',
+      s.queueIndex || 0
     ].join('\x1f')).join('\x1e');
   }
 
@@ -833,9 +954,7 @@ class App {
 
     const active = this.sessions.filter(s => s.status !== 'stopped');
     const working = active.some(s => s.status === 'working');
-    const attention = active.some(s =>
-      ['permission-request', 'question', 'needs-attention'].includes(s.status)
-    );
+    const attention = active.some(s => isInAttentionQueue(s));
 
     appEl.classList.toggle('laser-active', working);
     appEl.classList.toggle('laser-attention', attention && !working);
@@ -935,8 +1054,7 @@ class App {
 
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
     const runningCount = activeSessions.filter(s => s.status === 'working').length;
-    const ATTENTION = ['permission-request', 'question', 'needs-attention'];
-    const attentionSessions = activeSessions.filter(s => ATTENTION.includes(s.status));
+    const attentionSessions = activeSessions.filter(s => isInAttentionQueue(s));
     const attentionCount = attentionSessions.length;
     // "Done" = a real completed agent run. Bare process placeholders
     // (e.g. "Cursor IDE is open") have no prompt/tools and don't count.
@@ -967,28 +1085,28 @@ class App {
 
           if (needsAttention) {
             statusClass(statusTextEl, 'attention');
-            if (attentionCount > 1) {
-              // Multi-attention: names until 3+, then a plain count
-              const names = [];
-              for (const s of attentionSessions) {
-                const n = shortAgentName(s.agent);
-                if (!names.includes(n)) names.push(n);
-              }
-              const line = names.length <= 2
-                ? `${names.join(' + ')} need you`
-                : `${attentionCount} need you`;
-              statusTextEl.textContent = line;
-              statusTextEl.title = attentionSessions
-                .map(s => `${s.agent}: ${s.taskName || s.status}`)
-                .join('\n');
-            } else if (needsAttention.status === 'permission-request') {
-              statusTextEl.textContent = `${needsAttention.agent} needs permission`;
-              statusTextEl.removeAttribute('title');
+            const agent = shortAgentName(needsAttention.agent);
+            let detail;
+            if (needsAttention.status === 'permission-request') {
+              detail = `${agent} needs permission`;
             } else if (needsAttention.status === 'question') {
-              statusTextEl.textContent = `${needsAttention.agent} asks a question`;
-              statusTextEl.removeAttribute('title');
+              detail = `${agent} asks a question`;
             } else {
-              statusTextEl.textContent = `${needsAttention.agent} needs you`;
+              detail = `${agent} needs you`;
+            }
+
+            if (attentionCount > 1) {
+              // Queue command center: position + head of queue
+              const pos = needsAttention.queueIndex || 1;
+              statusTextEl.textContent = `${pos} of ${attentionCount} · ${detail}`;
+              statusTextEl.title = attentionSessions
+                .map((s, i) => {
+                  const n = s.queueIndex || (i + 1);
+                  return `${n}. ${s.agent}: ${s.taskName || s.status}`;
+                })
+                .join('\n');
+            } else {
+              statusTextEl.textContent = detail;
               statusTextEl.removeAttribute('title');
             }
           } else if (running) {
@@ -1065,9 +1183,7 @@ class App {
 
     const att = attentionCount != null
       ? attentionCount
-      : this.sessions.filter((s) =>
-        ['permission-request', 'question', 'needs-attention'].includes(s.status)
-      ).length;
+      : this.sessions.filter((s) => isInAttentionQueue(s)).length;
 
     if (!this.showLimitOnNotch || att > 0) {
       el.style.display = 'none';
@@ -1140,12 +1256,14 @@ class App {
     const prevIds = this._knownSessionIds;
     const nextIds = new Set(activeSessions.map(s => s.id));
 
-    // Attention stack: section headers + cards (sort already attention-first)
-    const ATTENTION = ['permission-request', 'question', 'needs-attention'];
-    const needsYou = activeSessions.filter(s => ATTENTION.includes(s.status));
+    // Attention stack: active queue → acked attention → running → finished
+    const needsYou = activeSessions.filter(s => isInAttentionQueue(s));
+    const ackedAttention = activeSessions.filter(
+      s => ATTENTION_STATUSES.includes(s.status) && s.attentionAcknowledged
+    );
     const running = activeSessions.filter(s => s.status === 'working');
     const finished = activeSessions.filter(
-      s => !ATTENTION.includes(s.status) && s.status !== 'working'
+      s => !ATTENTION_STATUSES.includes(s.status) && s.status !== 'working'
     );
 
     const renderGroup = (sessions, startIndex) => sessions.map((session, i) => {
@@ -1159,13 +1277,25 @@ class App {
     let html = '';
     let idx = 0;
     // Only show section labels when more than one group has sessions (or multi-attention)
-    const groupCount = [needsYou, running, finished].filter(g => g.length > 0).length;
+    const groupCount = [needsYou, ackedAttention, running, finished].filter(g => g.length > 0).length;
     const showSections = groupCount > 1 || needsYou.length > 1;
 
     if (needsYou.length) {
-      if (showSections) html += renderSessionSectionHeader('Needs you', needsYou.length, 'attention');
+      if (showSections) {
+        const hint = needsYou.length > 1
+          ? 'Ctrl+] next · Ctrl+Shift+D clear'
+          : '';
+        html += renderSessionSectionHeader('Needs you', needsYou.length, 'attention', { hint });
+      }
       html += renderGroup(needsYou, idx);
       idx += needsYou.length;
+    }
+    if (ackedAttention.length) {
+      if (showSections) {
+        html += renderSessionSectionHeader('Cleared', ackedAttention.length, 'acked');
+      }
+      html += renderGroup(ackedAttention, idx);
+      idx += ackedAttention.length;
     }
     if (running.length) {
       if (showSections) html += renderSessionSectionHeader('Running', running.length, 'working');
@@ -1334,6 +1464,23 @@ class App {
         } catch (err) {
           this.showToast(`Remove failed: ${err.message || 'main process error'}`, 'error');
         }
+      });
+    });
+
+    // Clear attention from queue (session stays)
+    list.querySelectorAll('.btn-clear-attention').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        if (sid) this.handleDismissAttention(sid);
+      });
+    });
+
+    list.querySelectorAll('.btn-restore-attention, .attention-ack-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        if (sid) this.handleRestoreAttention(sid);
       });
     });
 
@@ -1594,9 +1741,7 @@ class App {
   updateBadges() {
     const sessionsBadge = document.getElementById('sessions-badge');
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
-    const attentionCount = activeSessions.filter(s =>
-      ['permission-request', 'question', 'needs-attention'].includes(s.status)
-    ).length;
+    const attentionCount = activeSessions.filter(s => isInAttentionQueue(s)).length;
 
     if (sessionsBadge) {
       if (attentionCount > 0) {

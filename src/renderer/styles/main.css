@@ -890,6 +890,28 @@ html, body {
   color: var(--color-working);
 }
 
+.session-section-hint {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--text-tertiary);
+  opacity: 0.85;
+  line-height: 1.2;
+}
+
+.session-section-attention .session-section-hint {
+  color: var(--color-attention);
+  opacity: 0.7;
+}
+
+.session-section-acked .session-section-label,
+.session-section-acked .session-section-count {
+  color: var(--text-tertiary);
+}
+
 /* ── Dispatch Bar ─────────────────────────────────────── */
 .dispatch-bar {
   display: flex;
