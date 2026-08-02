@@ -54,13 +54,13 @@ Ranked by **job impact** for solo multi-agent developers.
 
 ### Tier A — Highest desire (protects or completes the core job)
 
-#### 1. Act without leaving the notch (beyond Claude) — **open**
+#### 1. Act without leaving the notch (beyond Claude) — **partial**
 Claude remote approve is the standout differentiator. Other agents still force Jump → native UI.
 
 Possible slices:
-- Remote or faster approve/deny where hooks/APIs exist
-- Unified **attention queue**: “N things need you” → act / jump / dismiss in order
-- Deeper **Cursor** signal (today is process-only)
+- Remote or faster approve/deny where hooks/APIs exist — **open**
+- Unified **attention queue**: “N things need you” → act / jump / dismiss in order — **shipped** (see #4)
+- Deeper **Cursor** signal (today is process-only) — **open**
 
 #### 2. Focus mode / Quiet hours — **shipped** (schedule later)
 Attention Control is granular but not situational. Deep work needs one switch: bar still truthful, sound/toast off.
@@ -78,11 +78,11 @@ mutedAgents: []  // e.g. 'cursor', 'opencode' — mute sound + toast only
 
 Settings → Mute alerts; policy wires through `attention-policy.js`.
 
-#### 4. Stronger multi-agent attention command center — **open**
+#### 4. Stronger multi-agent attention command center — **shipped**
 When 2+ sessions need human input:
-- Clear priority on the strip and list
-- Keyboard path to next attention item
-- Optional “dismiss this attention” without losing the session
+- Clear priority on the strip and list — **shipped** (`1 of N · agent…`, queue badges)
+- Keyboard path to next attention item — **shipped** (`Ctrl+]` / `Ctrl+[`)
+- Optional “dismiss this attention” without losing the session — **shipped** (Clear / `Ctrl+Shift+D`, restore chip)
 
 ---
 
@@ -233,10 +233,11 @@ Wire all interrupt delivery through `attention-policy.js`.
 | Order | Bet | Rationale |
 |------|-----|-----------|
 | 1 | ~~**Focus mode** + **per-agent mute**~~ | **Shipped** — noise control |
-| 2 | **Action layer beyond Claude** + attention queue | Largest differentiator |
-| 3 | **Density / auto-collapse** | Drive-by when touching session cards |
-| 4 | **Appearance knobs** | Only if a11y / motion demand appears |
-| 5 | Expose reveal-on-done / start-pinned | Small Settings rows when convenient |
+| 2 | ~~**Attention queue** / command center~~ | **Shipped** — multi-attention act path |
+| 3 | **Remote approve beyond Claude** + deeper Cursor | Remaining action-layer differentiator |
+| 4 | **Density / auto-collapse** | Drive-by when touching session cards |
+| 5 | **Appearance knobs** | Only if a11y / motion demand appears |
+| 6 | Expose reveal-on-done / start-pinned | Small Settings rows when convenient |
 | — | New agents / heavy analytics | After action + noise feel excellent |
 
 ### Recently completed (this cycle)
@@ -245,6 +246,7 @@ Wire all interrupt delivery through `attention-policy.js`.
 2. ~~Usage limits glance (header, notch crit, soft alert, settings)~~  
 3. ~~Focus mode (Settings + tray; bar chip; policy mute sound/toast)~~  
 4. ~~Per-agent mute (`mutedAgents` in Settings; policy)~~  
+5. ~~Attention command center (queue, keyboard, clear episode)~~  
 
 ---
 

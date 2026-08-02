@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Attention command center**: Unified multi-agent attention queue — priority order on the strip and Sessions list (`1 of N · …`), queue badges on cards, keyboard path (`Ctrl+]` / `Ctrl+[` next/previous), and **Clear** attention (`Ctrl+Shift+D`) which drops the episode from the queue without removing the session (restore via chip). New episodes re-enter the queue; sound/toast debounce follows episode keys.
 - **Focus mode**: One switch (Settings + tray menu) suppresses sound and desktop notifications while the bar stays truthful. Quiet `focus` chip on the collapsed notch. Limit toasts also respect Focus.
 - **Per-agent mute**: Mute sound/toast for specific agents (`mutedAgents`: claude, codex, cursor, antigravity, grok, opencode) while status stays on the bar. Wired through `attention-policy.js` with session snooze and Focus.
 - **History resume**: Search history by task / project / agent; pin important entries (never trimmed); Continue (headless resume or new session in project cwd) and Jump for archived sessions. Archive snapshots keep `resumeId` for Codex resume.
