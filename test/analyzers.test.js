@@ -5,6 +5,12 @@ const { analyzeCodexEntries } = require('../src/main/watchers/codex-watcher');
 const { analyzeGrokEntries } = require('../src/main/watchers/grok-watcher');
 const { analyzeAntigravityEntries } = require('../src/main/watchers/antigravity-watcher');
 const { analyzeOpencodeSession } = require('../src/main/watchers/opencode-watcher');
+const {
+  mapCursorStatus,
+  analyzeCursorComposer,
+  analyzeCursorTranscript,
+  fileUrlToPath
+} = require('../src/main/watchers/cursor-watcher');
 const { extractTaskName, parseJSONL, formatDuration } = require('../src/main/watchers/base-watcher');
 const { getText, normalizePlan } = require('../src/main/watchers/session-utils');
 const { collectUsageLimits } = require('../src/main/usage-limits');
@@ -473,6 +479,192 @@ describe('Antigravity analyzer', () => {
     const entries = [{ type: 'SYSTEM', status: 'ERROR' }];
     const result = analyzeAntigravityEntries(entries, 'a1', 'conv', '', fileTimes);
     assert.equal(result.status, 'needs-attention');
+  });
+});
+
+describe('Cursor analyzer', () => {
+  it('mapCursorStatus treats generating bubbles and known phases as working', () => {
+    assert.equal(mapCursorStatus({ status: 'completed' }), 'idle');
+    assert.equal(mapCursorStatus({ status: 'none' }), 'idle');
+    assert.equal(
+      mapCursorStatus({ status: 'none', generatingBubbleIds: ['b1'] }),
+      'working'
+    );
+    assert.equal(mapCursorStatus({ status: 'generating' }), 'working');
+    assert.equal(mapCursorStatus({ status: 'error' }), 'needs-attention');
+    assert.equal(mapCursorStatus({ isReadingLongFile: true }), 'working');
+  });
+
+  it('mapCursorStatus treats very recent agentic none as working', () => {
+    const now = 1_000_000;
+    assert.equal(
+      mapCursorStatus(
+        { status: 'none', isAgentic: true, lastUpdatedAt: now - 5_000 },
+        { now, liveWriteMs: 90_000 }
+      ),
+      'working'
+    );
+    assert.equal(
+      mapCursorStatus(
+        { status: 'none', isAgentic: true, lastUpdatedAt: now - 200_000 },
+        { now, liveWriteMs: 90_000 }
+      ),
+      'idle'
+    );
+  });
+
+  it('analyzeCursorComposer builds task, cwd, and messages from bubbles', () => {
+    const composer = {
+      composerId: 'abc-123',
+      name: 'Add authentication',
+      status: 'completed',
+      isAgentic: true,
+      unifiedMode: 'agent',
+      createdAt: 1_000,
+      lastUpdatedAt: 2_000,
+      subtitle: 'Done with auth middleware',
+      modelConfig: { modelName: 'claude-4-sonnet' },
+      filesChangedCount: 3
+    };
+    const bubbles = [
+      { type: 1, text: 'Please add password auth', bubbleId: 'u1' },
+      {
+        type: 2,
+        text: 'I added login routes.',
+        bubbleId: 'a1',
+        codeBlocks: [{ uri: 'file:///c%3A/proj/app.py' }]
+      }
+    ];
+    const result = analyzeCursorComposer(composer, {
+      cwd: 'C:\\proj',
+      bubbles,
+      now: 10_000
+    });
+    assert.equal(result.taskName, 'Add authentication');
+    assert.equal(result.status, 'idle');
+    assert.equal(result.cwd, 'C:\\proj');
+    assert.equal(result.userPrompt, 'Please add password auth');
+    assert.ok(String(result.lastMessage).includes('login routes'));
+    assert.equal(result.model, 'claude-4-sonnet');
+    assert.equal(result.resumeId, 'abc-123');
+    assert.ok(result.toolCalls.some((t) => /app\.py/i.test(t)));
+  });
+
+  it('analyzeCursorComposer marks generating composers working', () => {
+    const result = analyzeCursorComposer(
+      {
+        composerId: 'live-1',
+        name: 'Refactor API',
+        status: 'none',
+        generatingBubbleIds: ['x'],
+        createdAt: 1_000,
+        lastUpdatedAt: 2_000,
+        isAgentic: true
+      },
+      { now: 3_000 }
+    );
+    assert.equal(result.status, 'working');
+    assert.equal(result.isActive, true);
+  });
+
+  it('analyzeCursorComposer labels toolFormerData and nested summaries', () => {
+    const result = analyzeCursorComposer(
+      {
+        composerId: 't1',
+        name: 'Search auth',
+        status: 'completed',
+        createdAt: 1_000,
+        lastUpdatedAt: 2_000,
+        modelConfig: { modelName: 'default' },
+        latestConversationSummary: {
+          summary: { summary: 'Implemented password auth flow.' }
+        }
+      },
+      {
+        now: 10_000,
+        bubbles: [
+          {
+            type: 2,
+            text: '',
+            toolFormerData: {
+              name: 'codebase_search',
+              rawArgs: JSON.stringify({ query: 'password_callback' })
+            }
+          },
+          {
+            type: 2,
+            text: '',
+            toolFormerData: {
+              name: 'read_file',
+              rawArgs: JSON.stringify({ relativeWorkspacePath: 'app/auth.py' })
+            }
+          }
+        ]
+      }
+    );
+    assert.equal(result.model, null);
+    assert.ok(result.toolCalls.some((t) => /Search:.*password/i.test(t)));
+    assert.ok(result.toolCalls.some((t) => /Read:.*auth\.py/i.test(t)));
+    assert.ok(String(result.lastMessage).includes('password auth'));
+  });
+
+  it('analyzeCursorTranscript parses plain-text tool export', () => {
+    const text = [
+      'user:',
+      '<user_query>why is the auth middleware failing?</user_query>',
+      '',
+      'A:',
+      '[Tool call] Shell',
+      '  command: grep -r "authMiddleware" src/',
+      '  description: Search for auth middleware usage',
+      '[Tool result] Shell',
+      '',
+      'A:',
+      'I found the issue.'
+    ].join('\n');
+    const now = Date.now();
+    const result = analyzeCursorTranscript(text, { mtime: now, now });
+    assert.equal(result.status, 'working');
+    assert.match(result.userPrompt, /auth middleware/i);
+    assert.ok(result.toolCalls.some((t) => /Shell|grep/i.test(t)));
+    assert.ok(result.currentTool);
+  });
+
+  it('analyzeCursorTranscript parses JSONL tool calls', () => {
+    const content = [
+      JSON.stringify({ role: 'user', text: 'Fix the flaky test' }),
+      JSON.stringify({
+        role: 'assistant',
+        text: 'Running tests',
+        tool_name: 'Shell',
+        tool_input: { command: 'npm test' }
+      })
+    ].join('\n');
+    const now = Date.now();
+    const result = analyzeCursorTranscript(content, { mtime: now, now });
+    assert.equal(result.userPrompt, 'Fix the flaky test');
+    assert.ok(result.toolCalls.some((t) => /npm test/i.test(t)));
+    assert.equal(result.status, 'working');
+  });
+
+  it('analyzeCursorTranscript settles to idle when mtime is stale', () => {
+    const now = 1_000_000;
+    const result = analyzeCursorTranscript(
+      'user:\nhello\nA:\n[Tool call] Shell\n  command: ls\n',
+      { mtime: now - 200_000, now }
+    );
+    assert.equal(result.status, 'idle');
+    assert.equal(result.currentTool, null);
+  });
+
+  it('fileUrlToPath decodes Windows file URIs', () => {
+    const p = fileUrlToPath('file:///c%3A/Users/test/proj');
+    if (process.platform === 'win32') {
+      assert.match(p, /^c:\\Users\\test\\proj$/i);
+    } else {
+      // Non-Windows keeps a posix-ish form after decode
+      assert.ok(p.toLowerCase().includes('users/test/proj') || p.toLowerCase().includes('users\\test\\proj'));
+    }
   });
 });
 
