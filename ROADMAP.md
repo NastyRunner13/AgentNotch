@@ -89,19 +89,19 @@ When 2+ sessions need human input:
 
 ### Tier B — High value polish (daily stickiness)
 
-#### 5. Smarter session feed density — **open**
+#### 5. Smarter session feed density — **shipped**
 - Compact vs comfortable cards
 - Auto-collapse finished sessions
 - Toggle which fields show by default (model, cwd, activity)
 - Filter/group by agent or project folder
 
-#### 6. Better Jump & project context — **open**
+#### 6. Better Jump & project context — **shipped**
 - Open project folder / copy cwd
 - Remember last-focused agent window per OS
 - Clearer labels when multiple sessions share the same agent
 
-#### 7. Dispatch reliability & discoverability — **partial**
-Dispatch exists for Claude/Codex/Grok/OpenCode. Still useful:
+#### 7. Dispatch reliability & discoverability — **shipped**
+Dispatch exists for Claude/Codex/Grok/OpenCode.
 - Clearer feedback when a prompt landed
 - Optional default agent/project for “new session”
 
@@ -178,10 +178,10 @@ Wire all interrupt delivery through `attention-policy.js`.
 
 | Setting | Status | Notes |
 |---------|--------|--------|
-| Card density | Open | Compact / comfortable |
-| Field visibility | Open | Model / cwd / activity |
-| Auto-collapse idle | Open | Reduces list noise |
-| Group by agent | Open | Optional |
+| Card density | **Shipped** | Compact / comfortable |
+| Field visibility | **Shipped** | Model / cwd / activity |
+| Auto-collapse idle | **Shipped** | Finished stay collapsed unless opened |
+| Group by agent / project | **Shipped** | Toolbar + Settings default |
 | Motion intensity | Open | Full / reduced / off |
 | High-contrast status | Open | Accessibility |
 
@@ -198,9 +198,9 @@ Wire all interrupt delivery through `attention-policy.js`.
 
 | Setting | Status | Notes |
 |---------|--------|--------|
-| Default dispatch agent | Open | For “new session” |
+| Default dispatch agent | **Shipped** | For “new session” |
 | Confirm before dispatch | Open | Optional |
-| Default project cwd | Open | Last used / per-agent |
+| Default project cwd | **Shipped** | Settings path or last used |
 
 ### F. Notifications & privacy
 
@@ -237,7 +237,7 @@ Wire all interrupt delivery through `attention-policy.js`.
 | 2 | ~~**Attention queue** / command center~~ | **Shipped** — multi-attention act path |
 | 3 | ~~**Deeper Cursor** signal~~ | **Shipped** — composers + transcripts |
 | 4 | **Remote approve beyond Claude** | Still open where hooks allow human-in-loop allow/deny |
-| 5 | **Density / auto-collapse** | Drive-by when touching session cards |
+| 5 | **Density / auto-collapse** | **Shipped** |
 | 6 | **Appearance knobs** | Only if a11y / motion demand appears |
 | 7 | Expose reveal-on-done / start-pinned | Small Settings rows when convenient |
 | — | New agents / heavy analytics | After action + noise feel excellent |

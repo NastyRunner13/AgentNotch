@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Smarter session feed density**: Compact vs comfortable cards; toggles for model / project folder / activity line; auto-collapse finished sessions; group and filter the live feed by status, agent, or project folder.
+- **Jump & project context**: Open project folder and copy cwd from each card; Jump remembers the last-focused agent window (sticky per OS); clearer agent tags when multiple sessions share a harness (`Claude · project` / `#2`).
+- **Dispatch feedback & defaults**: Clearer “Landed in …” toast plus brief bar/check feedback when a prompt is accepted; optional default agent and default project path for new sessions (Settings → Dispatch).
 - **Deeper Cursor signal**: Cursor is no longer process-presence only. AgentNotch reads local Cursor composer state (`state.vscdb` / `cursorDiskKV`) and optional `~/.cursor/projects/*/agent-transcripts` so session cards show real agent chats — task name, working vs finished, project folder, model, and activity — while Jump still focuses the Cursor window. Remote Allow/Deny remains Claude-only (Cursor has no equivalent permission bridge).
 - **Attention command center**: Unified multi-agent attention queue — priority order on the strip and Sessions list (`1 of N · …`), queue badges on cards, keyboard path (`Ctrl+]` / `Ctrl+[` next/previous), and **Clear** attention (`Ctrl+Shift+D`) which drops the episode from the queue without removing the session (restore via chip). New episodes re-enter the queue; sound/toast debounce follows episode keys.
 - **Focus mode**: One switch (Settings + tray menu) suppresses sound and desktop notifications while the bar stays truthful. Quiet `focus` chip on the collapsed notch. Limit toasts also respect Focus.
