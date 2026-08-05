@@ -849,7 +849,7 @@ class AgentManager extends EventEmitter {
     return {
       claude: exists(path.join(home, '.claude', 'projects')),
       codex: exists(path.join(home, '.codex', 'sessions')),
-      cursor: true, // process-based
+      cursor: true, // process + local composer DB / transcripts
       antigravity: exists(path.join(home, '.gemini', 'antigravity-ide', 'brain')),
       grok: exists(path.join(home, '.grok', 'sessions')),
       opencode: opencodeDbPaths.some(exists)
