@@ -318,6 +318,62 @@
   letter-spacing: -0.01em;
 }
 
+.session-cwd {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: -0.01em;
+}
+
+/* Compact density — denser header, shorter name, quieter chips */
+.session-card.density-compact .session-header {
+  padding: 6px 10px;
+  gap: 6px;
+}
+
+.session-card.density-compact .session-pet {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.session-card.density-compact .session-pet .agent-logo,
+.session-card.density-compact .session-pet .agent-logo-fallback {
+  width: 18px;
+  height: 18px;
+  font-size: 10px;
+}
+
+.session-card.density-compact .session-name {
+  font-size: var(--text-sm);
+  max-width: 180px;
+}
+
+.session-card.density-compact .session-model,
+.session-card.density-compact .session-cwd {
+  max-width: 80px;
+  padding: 0 5px;
+}
+
+.session-card.density-compact .session-status-line {
+  gap: 4px;
+}
+
+.session-card.density-compact .session-detail-inner {
+  padding-top: 4px;
+}
+
 .session-duration {
   font-size: var(--text-xs);
   font-family: var(--font-mono);
@@ -974,6 +1030,8 @@
 }
 
 .btn-jump,
+.btn-open-folder,
+.btn-copy-cwd,
 .btn-snooze,
 .btn-clear-snooze {
   display: inline-flex;
@@ -994,6 +1052,8 @@
 }
 
 .btn-jump:hover,
+.btn-open-folder:hover,
+.btn-copy-cwd:hover,
 .btn-snooze:hover,
 .btn-clear-snooze:hover {
   background: rgba(255,255,255,0.05);
@@ -1001,6 +1061,8 @@
 }
 
 .btn-jump:focus-visible,
+.btn-open-folder:focus-visible,
+.btn-copy-cwd:focus-visible,
 .btn-snooze:focus-visible,
 .btn-clear-snooze:focus-visible,
 .btn-clear-attention:focus-visible,
@@ -1977,6 +2039,31 @@
 .setting-select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
+}
+
+.setting-text {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  max-width: 220px;
+  min-width: 140px;
+  width: 100%;
+}
+
+.setting-text::placeholder {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+}
+
+.setting-text:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-working);
 }
 
 .hotkey-actions {

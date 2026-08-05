@@ -607,7 +607,16 @@ export function getAgentBarIcon(session) {
 /**
  * @param {object} session
  * @param {number} [index]
- * @param {{ animateIn?: boolean, expandedActivity?: Set<string> }} [options]
+ * @param {{
+ *   animateIn?: boolean,
+ *   expandedActivity?: Set<string>,
+ *   density?: 'compact'|'comfortable',
+ *   showModel?: boolean,
+ *   showCwd?: boolean,
+ *   showActivity?: boolean,
+ *   agentLabel?: string,
+ *   projectLabel?: string
+ * }} [options]
  *   animateIn only for brand-new cards (avoids poll flicker);
  *   expandedActivity holds fold keys of long activity rows the user opened.
  */
@@ -624,6 +633,14 @@ export function renderSessionCard(session, index = 0, options = {}) {
     ? options.animateIn
     : false;
 
+  const density = options.density === 'compact' ? 'compact' : 'comfortable';
+  const showModel = options.showModel !== false;
+  const showCwd = options.showCwd !== false;
+  const showActivity = options.showActivity !== false;
+  const agentLabel = options.agentLabel || session.agent;
+  const projectLabel = options.projectLabel || projectBaseName(session.cwd);
+  const logoSize = density === 'compact' ? 18 : 22;
+
   // Build expandable detail content
   let detailContent = '';
 
@@ -639,12 +656,14 @@ export function renderSessionCard(session, index = 0, options = {}) {
     }
   }
 
-  detailContent += renderActivity(session, options.expandedActivity);
+  if (showActivity) {
+    detailContent += renderActivity(session, options.expandedActivity);
+  }
   detailContent += renderPlan(session.plan);
 
   // Recent tools only when the live feed is empty (feed already shows tools)
-  const hasActivityFeed = Array.isArray(session.activity) && session.activity.length > 0;
-  if (!hasActivityFeed && session.toolCalls && session.toolCalls.length > 0) {
+  const hasActivityFeed = showActivity && Array.isArray(session.activity) && session.activity.length > 0;
+  if (showActivity && !hasActivityFeed && session.toolCalls && session.toolCalls.length > 0) {
     const toolsHtml = session.toolCalls.map(t =>
       `<span class="session-tool">${escapeHtml(t)}</span>`
     ).join('');
@@ -666,13 +685,14 @@ export function renderSessionCard(session, index = 0, options = {}) {
     detailContent += renderInlineQuestion(session);
   }
 
-  // Actions — Jump + clear attention (queue) + Snooze (mute alerts; bar truth stays)
+  // Actions — Jump + project cwd + clear attention + Snooze
   detailContent += `
     <div class="session-actions">
       <button class="btn-jump" data-session-id="${escapeHtml(session.id)}" type="button">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
         Jump to ${escapeHtml(session.terminal || 'Terminal')}
       </button>
+      ${session.cwd ? renderCwdActions(session) : ''}
       ${renderAttentionQueueControls(session, needsAttention, attentionAcknowledged)}
       ${renderSnoozeControls(session)}
     </div>`;
@@ -718,8 +738,27 @@ export function renderSessionCard(session, index = 0, options = {}) {
   const queueBadge = renderQueueBadge(session, needsAttention);
   const attentionChip = renderAttentionAckChip(session, attentionAcknowledged);
 
+  const modelChip = showModel && session.model
+    ? `<span class="session-model" title="Model">${escapeHtml(formatModelLabel(session.model))}</span>`
+    : '';
+  const cwdChip = showCwd && projectLabel
+    ? `<span class="session-cwd" title="${escapeHtml(session.cwd || projectLabel)}">${escapeHtml(projectLabel)}</span>`
+    : '';
+
+  const statusLine = showActivity
+    ? `<div class="session-status-line">
+        <span class="session-status-text ${attentionAcknowledged && isAttentionStatus ? 'idle' : statusInfo.textClass}">${escapeHtml(attentionAcknowledged && isAttentionStatus ? 'Waiting · cleared from queue' : statusInfo.text)}</span>
+        ${attentionChip}
+        ${snoozeChip}
+        <span class="session-last-seen">${escapeHtml(formatRelativeTime(session.lastActivityAt || session.lastTime))}</span>
+      </div>`
+    : (attentionChip || snoozeChip
+      ? `<div class="session-status-line session-status-line-minimal">${attentionChip}${snoozeChip}</div>`
+      : '');
+
   const cardClasses = [
     'session-card',
+    density === 'compact' ? 'density-compact' : 'density-comfortable',
     needsAttention ? 'attention' : '',
     attentionAcknowledged && isAttentionStatus ? 'attention-acked' : '',
     isWorking ? 'is-working' : '',
@@ -730,23 +769,26 @@ export function renderSessionCard(session, index = 0, options = {}) {
   const ariaQueue = needsAttention && session.queueTotal > 1
     ? `, queue ${session.queueIndex} of ${session.queueTotal}`
     : '';
+  const ariaAgent = agentLabel || session.agent;
 
   return `
     <div class="${cardClasses}"
          data-session-id="${escapeHtml(session.id)}"
          data-status="${escapeHtml(session.status)}"
+         data-agent="${escapeHtml(session.agent || '')}"
+         data-project="${escapeHtml(projectLabel || '')}"
          data-queue-index="${needsAttention && session.queueIndex ? session.queueIndex : ''}"
          role="button"
          tabindex="0"
          aria-expanded="false"
-         aria-label="${escapeHtml(session.agent)}: ${escapeHtml(session.taskName)}${escapeHtml(ariaQueue)}"
+         aria-label="${escapeHtml(ariaAgent)}: ${escapeHtml(session.taskName)}${escapeHtml(ariaQueue)}"
          style="${animateIn ? `animation-delay: ${delay}ms` : ''}">
       ${sessionLaser}
       <div class="session-header">
         <div class="session-pet-wrap ${isWorking ? 'working' : needsAttention ? 'attention' : session.status === 'idle' ? 'idle' : ''}"
              style="color: ${agent.main}">
           <div class="session-pet">
-            ${getAgentLogo(session.agent, 22)}
+            ${getAgentLogo(session.agent, logoSize)}
           </div>
           ${petIndicator}
         </div>
@@ -754,17 +796,13 @@ export function renderSessionCard(session, index = 0, options = {}) {
           <div class="session-row-top">
             ${queueBadge}
             <span class="session-name">${escapeHtml(session.taskName)}</span>
-            <span class="session-tag ${agent.class}">${escapeHtml(session.agent)}</span>
-            ${session.model ? `<span class="session-model" title="Model">${escapeHtml(formatModelLabel(session.model))}</span>` : ''}
+            <span class="session-tag ${agent.class}" title="${escapeHtml(session.agent)}">${escapeHtml(agentLabel)}</span>
+            ${modelChip}
+            ${cwdChip}
             <span class="session-duration">${escapeHtml(session.durationFormatted)}</span>
             ${dismissBtn}
           </div>
-          <div class="session-status-line">
-            <span class="session-status-text ${attentionAcknowledged && isAttentionStatus ? 'idle' : statusInfo.textClass}">${escapeHtml(attentionAcknowledged && isAttentionStatus ? 'Waiting · cleared from queue' : statusInfo.text)}</span>
-            ${attentionChip}
-            ${snoozeChip}
-            <span class="session-last-seen">${escapeHtml(formatRelativeTime(session.lastActivityAt || session.lastTime))}</span>
-          </div>
+          ${statusLine}
         </div>
       </div>
       <div class="session-detail">
@@ -773,6 +811,30 @@ export function renderSessionCard(session, index = 0, options = {}) {
         </div>
       </div>
     </div>`;
+}
+
+/** @param {string|null|undefined} cwd */
+function projectBaseName(cwd) {
+  if (!cwd) return '';
+  const parts = String(cwd).split(/[/\\]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+/**
+ * Open project folder + copy cwd — quiet project context actions.
+ */
+function renderCwdActions(session) {
+  const cwd = String(session.cwd || '');
+  if (!cwd) return '';
+  return `
+    <button type="button" class="btn-open-folder" data-session-id="${escapeHtml(session.id)}" data-cwd="${escapeHtml(cwd)}" title="Open project folder">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
+      Folder
+    </button>
+    <button type="button" class="btn-copy-cwd" data-session-id="${escapeHtml(session.id)}" data-cwd="${escapeHtml(cwd)}" title="Copy project path">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+      Copy path
+    </button>`;
 }
 
 /**

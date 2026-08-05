@@ -49,6 +49,18 @@ const DEFAULT_SETTINGS = {
   notifyOnLimitCrit: true, // soft toast/notify when crossing crit (never auto-opens panel)
   notifyOnLimitWarn: false, // off by default — quieter
 
+  // Sessions appearance (density, not themes)
+  cardDensity: 'comfortable', // 'compact' | 'comfortable'
+  showSessionModel: true,
+  showSessionCwd: true,
+  showSessionActivity: true, // status/activity line on the collapsed card
+  autoCollapseFinished: true, // keep finished sessions collapsed by default
+  sessionGroupBy: 'status', // 'status' | 'agent' | 'project'
+
+  // Dispatch defaults for "new session"
+  defaultDispatchAgent: '', // '' = auto, else 'Claude Code' | 'Codex' | 'Grok' | 'OpenCode'
+  defaultProjectCwd: '', // empty = derive from recent sessions; else absolute path
+
   pollInterval: 3000
 };
 
