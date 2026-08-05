@@ -115,6 +115,28 @@
       <div class="notch-content">
         <!-- Sessions View (unified — includes approve/ask inline) -->
         <section id="view-sessions" class="view active">
+          <div id="sessions-toolbar" class="sessions-toolbar" hidden>
+            <label class="feed-control" title="Group sessions">
+              <span class="feed-control-label">Group</span>
+              <select id="feed-group-by" class="feed-select" aria-label="Group sessions by">
+                <option value="status">Status</option>
+                <option value="agent">Agent</option>
+                <option value="project">Project</option>
+              </select>
+            </label>
+            <label class="feed-control" title="Filter by agent">
+              <span class="feed-control-label">Agent</span>
+              <select id="feed-filter-agent" class="feed-select" aria-label="Filter by agent">
+                <option value="all">All</option>
+              </select>
+            </label>
+            <label class="feed-control" title="Filter by project folder">
+              <span class="feed-control-label">Project</span>
+              <select id="feed-filter-project" class="feed-select" aria-label="Filter by project">
+                <option value="all">All</option>
+              </select>
+            </label>
+          </div>
           <div id="sessions-list" class="sessions-list"></div>
           <div id="empty-state" class="empty-state">
             <div class="empty-icon">
@@ -323,6 +345,59 @@
               <input type="checkbox" id="set-startup" class="toggle">
             </label>
 
+            <h3 class="settings-heading">Sessions</h3>
+            <p class="settings-hint settings-hint-block">Density and fields — not themes. Keep the feed scannable.</p>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Card density</span>
+              <select id="set-card-density" class="setting-select" aria-label="Card density">
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Group by</span>
+              <select id="set-session-group" class="setting-select" aria-label="Default group by">
+                <option value="status">Status</option>
+                <option value="agent">Agent</option>
+                <option value="project">Project</option>
+              </select>
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Show model</span>
+              <input type="checkbox" id="set-show-model" class="toggle" checked>
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Show project folder</span>
+              <input type="checkbox" id="set-show-cwd" class="toggle" checked>
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Show activity line</span>
+              <input type="checkbox" id="set-show-activity" class="toggle" checked>
+            </label>
+            <label class="setting-row">
+              <span class="setting-label">Auto-collapse finished</span>
+              <input type="checkbox" id="set-auto-collapse" class="toggle" checked>
+            </label>
+            <p class="settings-hint settings-hint-block">Finished sessions stay collapsed unless you open them.</p>
+
+            <h3 class="settings-heading">Dispatch</h3>
+            <p class="settings-hint settings-hint-block">Defaults when starting a new session from the bar.</p>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Default agent</span>
+              <select id="set-default-dispatch-agent" class="setting-select" aria-label="Default dispatch agent">
+                <option value="">Auto</option>
+                <option value="Claude Code">Claude Code</option>
+                <option value="Codex">Codex</option>
+                <option value="Grok">Grok</option>
+                <option value="OpenCode">OpenCode</option>
+              </select>
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Default project</span>
+              <input type="text" id="set-default-project-cwd" class="setting-text" placeholder="Leave empty for last used…" aria-label="Default project folder path" autocomplete="off" spellcheck="false">
+            </label>
+            <p class="settings-hint settings-hint-block">Absolute path, or empty to use the agent’s last project.</p>
+
             <h3 class="settings-heading">Usage limits</h3>
             <p class="settings-hint settings-hint-block">Rate and credit remaining from local agent files. Never opens the panel.</p>
             <label class="setting-row">
@@ -357,13 +432,16 @@
       </div>
 
       <!-- Task Dispatch Input — targets a live session; the message resumes that chat -->
-      <div class="dispatch-bar">
+      <div class="dispatch-bar" id="dispatch-bar">
         <select id="dispatch-agent" class="dispatch-agent"></select>
         <input type="text" id="dispatch-input" class="dispatch-input" placeholder="Message this session…" autocomplete="off">
         <button id="dispatch-btn" class="dispatch-btn" title="Send">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="dispatch-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <line x1="22" y1="2" x2="11" y2="13"/>
             <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+          <svg class="dispatch-btn-check" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden>
+            <polyline points="20 6 9 17 4 12"/>
           </svg>
         </button>
       </div>

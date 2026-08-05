@@ -821,6 +821,26 @@ class AgentManager extends EventEmitter {
     }
     this.settings.focusMode = Boolean(this.settings.focusMode);
     this.settings.mutedAgents = normalizeMutedAgents(this.settings.mutedAgents);
+
+    // Sessions appearance
+    const dens = String(this.settings.cardDensity || 'comfortable');
+    this.settings.cardDensity = dens === 'compact' ? 'compact' : 'comfortable';
+    const groupBy = String(this.settings.sessionGroupBy || 'status');
+    this.settings.sessionGroupBy = ['status', 'agent', 'project'].includes(groupBy) ? groupBy : 'status';
+    this.settings.showSessionModel = this.settings.showSessionModel !== false;
+    this.settings.showSessionCwd = this.settings.showSessionCwd !== false;
+    this.settings.showSessionActivity = this.settings.showSessionActivity !== false;
+    this.settings.autoCollapseFinished = this.settings.autoCollapseFinished !== false;
+
+    // Dispatch defaults
+    const allowedAgents = new Set(['', 'Claude Code', 'Codex', 'Grok', 'OpenCode']);
+    const defAgent = String(this.settings.defaultDispatchAgent || '');
+    this.settings.defaultDispatchAgent = allowedAgents.has(defAgent) ? defAgent : '';
+    if (typeof this.settings.defaultProjectCwd !== 'string') {
+      this.settings.defaultProjectCwd = '';
+    } else {
+      this.settings.defaultProjectCwd = this.settings.defaultProjectCwd.trim().slice(0, 500);
+    }
   }
 
   _persistSettings() {
@@ -1378,10 +1398,18 @@ class AgentManager extends EventEmitter {
     try {
       await runHeadlessResume(cmd);
       this._scheduleEmit();
+      const agentShort = session.agent === 'Claude Code' ? 'Claude' : session.agent;
+      const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
+      const shortTask = task.length > 36 ? `${task.slice(0, 35)}…` : task;
+      const dir = projectFolderName(session.cwd);
+      const where = dir ? ` · ${dir}` : '';
       return {
         success: true,
-        message: `Sent to ${session.agent} · ${session.taskName || 'session'}`,
-        sessionId: session.id
+        message: `Landed in ${agentShort} · ${shortTask}${where}`,
+        sessionId: session.id,
+        landed: true,
+        agent: session.agent,
+        cwd: session.cwd || ''
       };
     } catch (err) {
       return {
@@ -1405,9 +1433,16 @@ class AgentManager extends EventEmitter {
     try {
       await runHeadlessResume(cmd);
       this._scheduleEmit();
+      const agentShort = agentName === 'Claude Code' ? 'Claude' : agentName;
+      const dir = projectFolderName(cmd.cwd);
       return {
         success: true,
-        message: `New ${agentName} session started in ${cmd.cwd}`
+        message: dir
+          ? `New ${agentShort} session landed in ${dir}`
+          : `New ${agentShort} session started`,
+        landed: true,
+        agent: agentName,
+        cwd: cmd.cwd || ''
       };
     } catch (err) {
       return {
@@ -1418,11 +1453,16 @@ class AgentManager extends EventEmitter {
   }
 
   /**
-   * Best-guess working directory for a new session: the directory the agent
-   * used most recently (live sessions first, then history), else any known
-   * session directory, else the user's home.
+   * Best-guess working directory for a new session:
+   * 1. Settings defaultProjectCwd (if valid)
+   * 2. Directory the agent used most recently (live, then history)
+   * 3. Any known session directory
+   * 4. User home
    */
   _resolveNewSessionCwd(agentName) {
+    const preferred = String(this.settings.defaultProjectCwd || '').trim();
+    if (preferred && isDirectory(preferred)) return preferred;
+
     const live = this.getSessions();
     const fromLiveAgent = live.find(s => s.agent === agentName && isDirectory(s.cwd || ''));
     if (fromLiveAgent) return fromLiveAgent.cwd;
@@ -1442,31 +1482,54 @@ class AgentManager extends EventEmitter {
 }
 
 /**
+ * Last successfully focused window per agent (process id + optional title).
+ * Prefer this window on the next Jump so multi-instance agents stay sticky.
+ * @type {Map<string, { pid: number, title: string, at: number }>}
+ */
+const lastFocusedByAgent = new Map();
+
+/**
  * Focus an agent application window (best-effort, platform-specific).
+ * Remembers the last focused process per agent so Jump is sticky.
+ * @param {string} agentName
+ * @returns {Promise<boolean>}
  */
 function focusAgentApp(agentName) {
   return new Promise((resolve) => {
     const mapping = AGENT_APP_MAP[agentName];
     const platform = process.platform;
+    const remembered = lastFocusedByAgent.get(agentName);
+    const prefPid = remembered && Number.isFinite(remembered.pid) ? remembered.pid : 0;
 
     if (platform === 'win32') {
       const processNames = (mapping && mapping.processNames) || [agentName];
-      // Try each process name; use PowerShell to restore/focus main window
       const namesList = processNames.map(n => n.replace(/'/g, "''")).join("','");
+      const agentEsc = agentName.replace(/'/g, "''");
+      // Prefer last-focused PID when still alive with a window; else scan process names.
+      // Prints "ok:<pid>:<title>" on success so we can remember stickiness.
       const ps = `
+        Add-Type -Name Win -Namespace Native -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);' -ErrorAction SilentlyContinue;
+        function Focus-Proc($p) {
+          if (-not $p -or $p.MainWindowHandle -eq 0) { return $false }
+          [Native.Win]::ShowWindow($p.MainWindowHandle, 9) | Out-Null;
+          [Native.Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null;
+          $title = ($p.MainWindowTitle -replace '[\\r\\n:]',' ').Trim();
+          Write-Output ("ok:" + $p.Id + ":" + $title);
+          return $true
+        }
+        $pref = ${prefPid};
+        if ($pref -gt 0) {
+          $p = Get-Process -Id $pref -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1;
+          if (Focus-Proc $p) { exit 0 }
+        }
         $names = @('${namesList}');
         foreach ($n in $names) {
           $p = Get-Process -Name $n -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1;
-          if ($p) {
-            Add-Type -Name Win -Namespace Native -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd); [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);';
-            [Native.Win]::ShowWindow($p.MainWindowHandle, 9) | Out-Null;
-            [Native.Win]::SetForegroundWindow($p.MainWindowHandle) | Out-Null;
-            exit 0;
-          }
+          if (Focus-Proc $p) { exit 0 }
         }
-        # Fallback: start Cursor if agent is Cursor
-        if ('${agentName.replace(/'/g, "''")}' -eq 'Cursor') {
+        if ('${agentEsc}' -eq 'Cursor') {
           Start-Process 'Cursor' -ErrorAction SilentlyContinue;
+          Write-Output 'ok:0:Cursor';
           exit 0;
         }
         exit 1;
@@ -1476,41 +1539,115 @@ function focusAgentApp(agentName) {
         '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps
       ], { windowsHide: true });
 
-      child.on('close', (code) => resolve(code === 0));
+      let stdout = '';
+      child.stdout.on('data', (chunk) => { stdout += String(chunk || ''); });
+      child.on('close', (code) => {
+        if (code === 0) {
+          rememberFocusedFromStdout(agentName, stdout);
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
       child.on('error', () => resolve(false));
       return;
     }
 
     if (platform === 'darwin') {
       const appName = (mapping && mapping.mac) || agentName;
+      // Prefer re-activating the same app; remember by app name (PID less useful for activate)
       const script = `tell application "${appName.replace(/"/g, '\\"')}" to activate`;
       const child = spawn('osascript', ['-e', script]);
-      child.on('close', (code) => resolve(code === 0));
+      child.on('close', (code) => {
+        if (code === 0) {
+          lastFocusedByAgent.set(agentName, { pid: prefPid || 0, title: appName, at: Date.now() });
+          resolve(true);
+        } else {
+          resolve(false);
+        }
+      });
       child.on('error', () => resolve(false));
       return;
     }
 
-    // Linux best-effort
+    // Linux best-effort — prefer last window title via wmctrl when available
     if (mapping && mapping.linux) {
-      const child = spawn('wmctrl', ['-a', mapping.linux]);
-      child.on('close', (code) => {
-        if (code === 0) return resolve(true);
-        spawn(mapping.linux, [], { detached: true, stdio: 'ignore' }).unref();
-        resolve(true);
+      const tryWmctrl = (titleHint) => new Promise((res) => {
+        if (!titleHint) return res(false);
+        const c = spawn('wmctrl', ['-a', titleHint]);
+        c.on('close', (code) => res(code === 0));
+        c.on('error', () => res(false));
       });
-      child.on('error', () => {
-        try {
-          spawn(mapping.linux, [], { detached: true, stdio: 'ignore' }).unref();
-          resolve(true);
-        } catch {
-          resolve(false);
+
+      (async () => {
+        if (remembered && remembered.title) {
+          if (await tryWmctrl(remembered.title)) {
+            lastFocusedByAgent.set(agentName, { ...remembered, at: Date.now() });
+            return resolve(true);
+          }
         }
-      });
+        const child = spawn('wmctrl', ['-a', mapping.linux]);
+        child.on('close', (code) => {
+          if (code === 0) {
+            lastFocusedByAgent.set(agentName, {
+              pid: 0,
+              title: mapping.linux,
+              at: Date.now()
+            });
+            return resolve(true);
+          }
+          try {
+            spawn(mapping.linux, [], { detached: true, stdio: 'ignore' }).unref();
+            lastFocusedByAgent.set(agentName, {
+              pid: 0,
+              title: mapping.linux,
+              at: Date.now()
+            });
+            resolve(true);
+          } catch {
+            resolve(false);
+          }
+        });
+        child.on('error', () => {
+          try {
+            spawn(mapping.linux, [], { detached: true, stdio: 'ignore' }).unref();
+            resolve(true);
+          } catch {
+            resolve(false);
+          }
+        });
+      })();
       return;
     }
 
     resolve(false);
   });
+}
+
+/**
+ * Parse PowerShell focus stdout ("ok:<pid>:<title>") into lastFocusedByAgent.
+ * @param {string} agentName
+ * @param {string} stdout
+ */
+function rememberFocusedFromStdout(agentName, stdout) {
+  const line = String(stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
+  const m = line.match(/^ok:(\d+):(.*)$/);
+  if (!m) {
+    lastFocusedByAgent.set(agentName, { pid: 0, title: '', at: Date.now() });
+    return;
+  }
+  lastFocusedByAgent.set(agentName, {
+    pid: Number(m[1]) || 0,
+    title: String(m[2] || '').slice(0, 200),
+    at: Date.now()
+  });
+}
+
+/** @param {string|null|undefined} cwd */
+function projectFolderName(cwd) {
+  if (!cwd) return '';
+  const parts = String(cwd).split(/[/\\]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
 }
 
 /**

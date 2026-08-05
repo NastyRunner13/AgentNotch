@@ -15,7 +15,11 @@ const MASTER_TOGGLES = {
   'set-notifications': 'desktopNotifications',
   'set-startup': 'launchAtStartup',
   'set-limit-notch': 'showLimitOnNotch',
-  'set-limit-notify-crit': 'notifyOnLimitCrit'
+  'set-limit-notify-crit': 'notifyOnLimitCrit',
+  'set-show-model': 'showSessionModel',
+  'set-show-cwd': 'showSessionCwd',
+  'set-show-activity': 'showSessionActivity',
+  'set-auto-collapse': 'autoCollapseFinished'
 };
 
 /** Element id → mute agent id (settings.mutedAgents) */
@@ -167,6 +171,62 @@ export function initSettings(app) {
     });
   }
 
+  // Sessions appearance
+  const densityEl = document.getElementById('set-card-density');
+  if (densityEl) {
+    densityEl.addEventListener('change', () => {
+      const v = densityEl.value === 'compact' ? 'compact' : 'comfortable';
+      persistSettings({ cardDensity: v }, app).then(() => {
+        if (app && typeof app.applySessionAppearance === 'function') {
+          app.applySessionAppearance({ cardDensity: v });
+        }
+      });
+    });
+  }
+
+  const groupEl = document.getElementById('set-session-group');
+  if (groupEl) {
+    groupEl.addEventListener('change', () => {
+      const v = ['status', 'agent', 'project'].includes(groupEl.value) ? groupEl.value : 'status';
+      persistSettings({ sessionGroupBy: v }, app).then(() => {
+        if (app && typeof app.applySessionAppearance === 'function') {
+          app.applySessionAppearance({ sessionGroupBy: v });
+        }
+      });
+    });
+  }
+
+  // Dispatch defaults
+  const defAgentEl = document.getElementById('set-default-dispatch-agent');
+  if (defAgentEl) {
+    defAgentEl.addEventListener('change', () => {
+      persistSettings({ defaultDispatchAgent: defAgentEl.value || '' }, app).then(() => {
+        if (app && typeof app.applyDispatchDefaults === 'function') {
+          app.applyDispatchDefaults({ defaultDispatchAgent: defAgentEl.value || '' });
+        }
+      });
+    });
+  }
+
+  const defCwdEl = document.getElementById('set-default-project-cwd');
+  if (defCwdEl) {
+    let cwdTimer = null;
+    const saveCwd = () => {
+      const v = String(defCwdEl.value || '').trim();
+      persistSettings({ defaultProjectCwd: v }, app).then(() => {
+        if (app && typeof app.applyDispatchDefaults === 'function') {
+          app.applyDispatchDefaults({ defaultProjectCwd: v });
+        }
+      });
+    };
+    defCwdEl.addEventListener('change', saveCwd);
+    defCwdEl.addEventListener('blur', saveCwd);
+    defCwdEl.addEventListener('input', () => {
+      clearTimeout(cwdTimer);
+      cwdTimer = setTimeout(saveCwd, 600);
+    });
+  }
+
   const captureBtn = document.getElementById('btn-hotkey-capture');
   if (captureBtn) {
     captureBtn.addEventListener('click', (e) => {
@@ -247,6 +307,12 @@ async function persistSettings(update, app) {
       if (app) {
         app.showLimitOnNotch = next.showLimitOnNotch !== false;
         app.focusMode = Boolean(next.focusMode);
+        if (typeof app.applySessionAppearance === 'function') {
+          app.applySessionAppearance(next);
+        }
+        if (typeof app.applyDispatchDefaults === 'function') {
+          app.applyDispatchDefaults(next);
+        }
         if (typeof app.renderNotchLimitChip === 'function') {
           app.renderNotchLimitChip();
         }
@@ -326,6 +392,28 @@ function applySettings(settings) {
       const primary = [...displayEl.options].find((o) => o.dataset.primary === '1');
       if (primary) displayEl.value = primary.value;
     }
+  }
+
+  const densityEl = document.getElementById('set-card-density');
+  if (densityEl && settings.cardDensity) {
+    densityEl.value = settings.cardDensity === 'compact' ? 'compact' : 'comfortable';
+  }
+
+  const groupEl = document.getElementById('set-session-group');
+  if (groupEl && settings.sessionGroupBy) {
+    groupEl.value = ['status', 'agent', 'project'].includes(settings.sessionGroupBy)
+      ? settings.sessionGroupBy
+      : 'status';
+  }
+
+  const defAgentEl = document.getElementById('set-default-dispatch-agent');
+  if (defAgentEl && settings.defaultDispatchAgent !== undefined) {
+    defAgentEl.value = settings.defaultDispatchAgent || '';
+  }
+
+  const defCwdEl = document.getElementById('set-default-project-cwd');
+  if (defCwdEl && settings.defaultProjectCwd !== undefined) {
+    defCwdEl.value = settings.defaultProjectCwd || '';
   }
 
   // Dim matrix when masters off
