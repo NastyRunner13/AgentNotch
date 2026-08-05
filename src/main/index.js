@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, shell, globalShortcut, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification } = require('electron');
 const path = require('path');
 const { createTray, updateTrayIcon, updateTrayMenu } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
@@ -745,6 +745,34 @@ app.whenReady().then(() => {
   ipcMain.handle('jump-to-terminal', async (_, sessionId) => {
     validateSessionId(sessionId);
     return agentManager.jumpToTerminal(sessionId);
+  });
+
+  // Open a project folder in the OS file manager (session cwd)
+  ipcMain.handle('open-path', async (_, targetPath) => {
+    if (typeof targetPath !== 'string' || !targetPath.trim()) {
+      return { success: false, message: 'No path provided' };
+    }
+    const p = targetPath.trim().slice(0, 1000);
+    try {
+      const err = await shell.openPath(p);
+      if (err) return { success: false, message: err };
+      return { success: true, message: 'Opened folder' };
+    } catch (e) {
+      return { success: false, message: e.message || 'Could not open path' };
+    }
+  });
+
+  // Copy text to system clipboard (cwd, etc.)
+  ipcMain.handle('copy-text', (_, text) => {
+    if (typeof text !== 'string' || !text) {
+      return { success: false, message: 'Nothing to copy' };
+    }
+    try {
+      clipboard.writeText(text.slice(0, 8000));
+      return { success: true, message: 'Copied' };
+    } catch (e) {
+      return { success: false, message: e.message || 'Copy failed' };
+    }
   });
 
   ipcMain.handle('dismiss-session', async (_, sessionId) => {

@@ -8,13 +8,66 @@ import { initSettings, openSettingsView } from './components/settings-panel.js';
 const DISPATCHABLE_AGENT_LIST = ['Claude Code', 'Codex', 'Grok', 'OpenCode'];
 const DISPATCHABLE_AGENTS = new Set(DISPATCHABLE_AGENT_LIST);
 
-/** Compact option label: `Claude · fix auth bug · agent-notch`. */
-function dispatchLabel(session) {
-  const agent = session.agent === 'Claude Code' ? 'Claude' : session.agent;
+/** Compact option label: `Claude · fix auth bug · agent-notch` (disambiguates multi-session). */
+function dispatchLabel(session, labels) {
+  const meta = labels && labels.get(session.id);
+  const agent = meta?.agentLabel
+    || (session.agent === 'Claude Code' ? 'Claude' : session.agent);
   const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
   const short = task.length > 34 ? `${task.slice(0, 33)}…` : task;
   const dir = session.cwd ? String(session.cwd).split(/[\\/]/).filter(Boolean).pop() : '';
+  // Avoid double project when agentLabel already includes it
+  if (meta?.instanceTotal > 1 && meta.project && String(agent).includes(meta.project)) {
+    return `${agent} · ${short}`;
+  }
   return dir ? `${agent} · ${short} · ${dir}` : `${agent} · ${short}`;
+}
+
+/** Project folder basename from a cwd path. */
+function projectBase(cwd) {
+  if (!cwd) return '';
+  const parts = String(cwd).split(/[/\\]/).filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
+}
+
+/**
+ * Clearer agent tags when multiple sessions share one harness.
+ * @returns {Map<string, { agentLabel: string, instanceIndex: number, instanceTotal: number, project: string }>}
+ */
+function buildSessionDisambiguation(sessions) {
+  const list = Array.isArray(sessions) ? sessions : [];
+  /** @type {Map<string, typeof list>} */
+  const byAgent = new Map();
+  for (const s of list) {
+    if (!s?.id) continue;
+    const agent = s.agent || 'Agent';
+    if (!byAgent.has(agent)) byAgent.set(agent, []);
+    byAgent.get(agent).push(s);
+  }
+  /** @type {Map<string, { agentLabel: string, instanceIndex: number, instanceTotal: number, project: string }>} */
+  const out = new Map();
+  for (const [agent, group] of byAgent) {
+    const short = agent === 'Claude Code' ? 'Claude' : agent;
+    const total = group.length;
+    group.forEach((s, i) => {
+      const project = projectBase(s.cwd);
+      const idx = i + 1;
+      let agentLabel = short;
+      if (total > 1) {
+        const projects = group.map((g) => projectBase(g.cwd)).filter(Boolean);
+        const uniqueProjects = new Set(projects);
+        if (project && uniqueProjects.size > 1) {
+          agentLabel = `${short} · ${project}`;
+        } else if (project && uniqueProjects.size === total) {
+          agentLabel = `${short} · ${project}`;
+        } else {
+          agentLabel = `${short} #${idx}`;
+        }
+      }
+      out.set(s.id, { agentLabel, instanceIndex: idx, instanceTotal: total, project });
+    });
+  }
+  return out;
 }
 
 /** Short harness name for multi-attention bar copy. */
@@ -82,6 +135,22 @@ class App {
     this.showLimitOnNotch = true;
     /** Focus mode — sound/toast suppressed; bar still truthful */
     this.focusMode = false;
+    /** Session feed appearance (from settings) */
+    this.cardDensity = 'comfortable';
+    this.showSessionModel = true;
+    this.showSessionCwd = true;
+    this.showSessionActivity = true;
+    this.autoCollapseFinished = true;
+    this.sessionGroupBy = 'status';
+    /** Ephemeral feed filters (toolbar) */
+    this.feedFilterAgent = 'all';
+    this.feedFilterProject = 'all';
+    /** Sessions the user explicitly expanded while finished (skip auto-collapse) */
+    this._userPinnedExpand = new Set();
+    /** Dispatch defaults */
+    this.defaultDispatchAgent = '';
+    this.defaultProjectCwd = '';
+    this._dispatchLandedTimer = null;
   }
 
   async init() {
@@ -154,11 +223,25 @@ class App {
     // Settings panel bindings
     initSettings(this);
 
+    // Session feed toolbar (group / filter)
+    this.initSessionsToolbar();
+
     // Task dispatch bar bindings
     this.initDispatch();
 
     // Keyboard shortcuts (when notch is expanded)
     this.initKeyboardShortcuts();
+
+    // Load appearance + dispatch defaults once
+    if (window.agentNotch?.getSettings) {
+      window.agentNotch.getSettings().then((settings) => {
+        if (!settings) return;
+        this.applySessionAppearance(settings);
+        this.applyDispatchDefaults(settings);
+        this.showLimitOnNotch = settings.showLimitOnNotch !== false;
+        this.focusMode = Boolean(settings.focusMode);
+      }).catch(() => {});
+    }
 
     // Subscribe to IPC events from main process
     if (window.agentNotch) {
@@ -735,6 +818,166 @@ class App {
     });
   }
 
+  /**
+   * Apply session feed appearance settings and re-render.
+   * @param {object} partial
+   */
+  applySessionAppearance(partial) {
+    if (!partial) return;
+    if (partial.cardDensity !== undefined) {
+      this.cardDensity = partial.cardDensity === 'compact' ? 'compact' : 'comfortable';
+    }
+    if (partial.showSessionModel !== undefined) {
+      this.showSessionModel = partial.showSessionModel !== false;
+    }
+    if (partial.showSessionCwd !== undefined) {
+      this.showSessionCwd = partial.showSessionCwd !== false;
+    }
+    if (partial.showSessionActivity !== undefined) {
+      this.showSessionActivity = partial.showSessionActivity !== false;
+    }
+    if (partial.autoCollapseFinished !== undefined) {
+      this.autoCollapseFinished = partial.autoCollapseFinished !== false;
+    }
+    if (partial.sessionGroupBy !== undefined) {
+      const g = partial.sessionGroupBy;
+      this.sessionGroupBy = ['status', 'agent', 'project'].includes(g) ? g : 'status';
+      const groupSel = document.getElementById('feed-group-by');
+      if (groupSel && groupSel.value !== this.sessionGroupBy) {
+        groupSel.value = this.sessionGroupBy;
+      }
+    }
+    // Force feed rebuild with new density / fields
+    this._lastSessionsFp = '\x00force';
+    if (this.initialized) this.renderSessions();
+  }
+
+  /**
+   * Apply dispatch default agent / project path.
+   * @param {object} partial
+   */
+  applyDispatchDefaults(partial) {
+    if (!partial) return;
+    if (partial.defaultDispatchAgent !== undefined) {
+      this.defaultDispatchAgent = String(partial.defaultDispatchAgent || '');
+    }
+    if (partial.defaultProjectCwd !== undefined) {
+      this.defaultProjectCwd = String(partial.defaultProjectCwd || '');
+    }
+    this._dispatchFp = ''; // rebuild targets so default selection can apply
+    if (this.initialized) this.updateDispatchTargets();
+  }
+
+  initSessionsToolbar() {
+    const groupSel = document.getElementById('feed-group-by');
+    const agentSel = document.getElementById('feed-filter-agent');
+    const projectSel = document.getElementById('feed-filter-project');
+
+    if (groupSel) {
+      groupSel.value = this.sessionGroupBy;
+      groupSel.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const v = groupSel.value;
+        this.sessionGroupBy = ['status', 'agent', 'project'].includes(v) ? v : 'status';
+        // Persist as default grouping
+        if (window.agentNotch?.setSettings) {
+          window.agentNotch.setSettings({ sessionGroupBy: this.sessionGroupBy }).catch(() => {});
+        }
+        this._lastSessionsFp = '\x00force';
+        this.renderSessions();
+      });
+      groupSel.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    if (agentSel) {
+      agentSel.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this.feedFilterAgent = agentSel.value || 'all';
+        this._lastSessionsFp = '\x00force';
+        this.renderSessions();
+      });
+      agentSel.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    if (projectSel) {
+      projectSel.addEventListener('change', (e) => {
+        e.stopPropagation();
+        this.feedFilterProject = projectSel.value || 'all';
+        this._lastSessionsFp = '\x00force';
+        this.renderSessions();
+      });
+      projectSel.addEventListener('click', (e) => e.stopPropagation());
+    }
+  }
+
+  /**
+   * Refresh filter dropdown options from live sessions (preserve selection when possible).
+   * @param {object[]} activeSessions
+   */
+  updateFeedFilterOptions(activeSessions) {
+    const agentSel = document.getElementById('feed-filter-agent');
+    const projectSel = document.getElementById('feed-filter-project');
+    const toolbar = document.getElementById('sessions-toolbar');
+
+    const agents = [];
+    const agentSeen = new Set();
+    const projects = [];
+    const projectSeen = new Set();
+    for (const s of activeSessions) {
+      if (s.agent && !agentSeen.has(s.agent)) {
+        agentSeen.add(s.agent);
+        agents.push(s.agent);
+      }
+      const base = projectBase(s.cwd);
+      if (base && !projectSeen.has(base)) {
+        projectSeen.add(base);
+        projects.push(base);
+      }
+    }
+    agents.sort((a, b) => a.localeCompare(b));
+    projects.sort((a, b) => a.localeCompare(b));
+
+    if (toolbar) {
+      toolbar.hidden = activeSessions.length < 2;
+    }
+
+    if (agentSel) {
+      const prev = this.feedFilterAgent;
+      agentSel.innerHTML = '<option value="all">All</option>';
+      for (const a of agents) {
+        const opt = document.createElement('option');
+        opt.value = a;
+        opt.textContent = a === 'Claude Code' ? 'Claude' : a;
+        agentSel.appendChild(opt);
+      }
+      if (prev !== 'all' && agents.includes(prev)) {
+        agentSel.value = prev;
+        this.feedFilterAgent = prev;
+      } else {
+        agentSel.value = 'all';
+        this.feedFilterAgent = 'all';
+      }
+    }
+
+    if (projectSel) {
+      const prev = this.feedFilterProject;
+      projectSel.innerHTML = '<option value="all">All</option>';
+      for (const p of projects) {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        projectSel.appendChild(opt);
+      }
+      if (prev !== 'all' && projects.includes(prev)) {
+        projectSel.value = prev;
+        this.feedFilterProject = prev;
+      } else {
+        projectSel.value = 'all';
+        this.feedFilterProject = 'all';
+      }
+    }
+  }
+
   initDispatch() {
     const input = document.getElementById('dispatch-input');
     const agentSelect = document.getElementById('dispatch-agent');
@@ -752,13 +995,15 @@ class App {
       input.disabled = true;
       agentSelect.disabled = true;
       btn.disabled = true;
+      btn.classList.remove('dispatch-success');
 
       try {
         if (window.agentNotch) {
           const res = await window.agentNotch.dispatchTask(sessionId, prompt);
           if (res && res.success) {
             input.value = '';
-            this.showToast(res.message || 'Dispatched', 'ok');
+            this.flashDispatchLanded(res.message || 'Landed');
+            this.showToast(res.message || 'Landed in session', 'ok');
             // Switch view back to sessions to watch the session work
             this.switchView('sessions');
             const tabs = document.querySelectorAll('.ntab:not(.ntab-icon)');
@@ -771,6 +1016,7 @@ class App {
         } else {
           // Dev mode stub
           input.value = '';
+          this.flashDispatchLanded('Dispatched (preview)');
         }
       } catch (err) {
         this.showToast(`Error: ${err.message}`, 'error');
@@ -810,6 +1056,40 @@ class App {
   }
 
   /**
+   * Brief visual confirmation that a prompt landed in a session.
+   * @param {string} [message]
+   */
+  flashDispatchLanded(message) {
+    const bar = document.getElementById('dispatch-bar');
+    const btn = document.getElementById('dispatch-btn');
+    if (bar) {
+      bar.classList.add('dispatch-landed');
+      bar.title = message || 'Prompt landed';
+    }
+    if (btn) {
+      btn.classList.add('dispatch-success');
+      const icon = btn.querySelector('.dispatch-btn-icon');
+      const check = btn.querySelector('.dispatch-btn-check');
+      if (icon) icon.hidden = true;
+      if (check) check.hidden = false;
+    }
+    clearTimeout(this._dispatchLandedTimer);
+    this._dispatchLandedTimer = setTimeout(() => {
+      if (bar) {
+        bar.classList.remove('dispatch-landed');
+        bar.removeAttribute('title');
+      }
+      if (btn) {
+        btn.classList.remove('dispatch-success');
+        const icon = btn.querySelector('.dispatch-btn-icon');
+        const check = btn.querySelector('.dispatch-btn-check');
+        if (icon) icon.hidden = false;
+        if (check) check.hidden = true;
+      }
+    }, 1600);
+  }
+
+  /**
    * Populate the dispatch dropdown with live sessions (one entry per running
    * agent chat) plus "new session" entries per agent. Rebuilds only when the
    * option set changes so polling never collapses an open dropdown; the
@@ -822,18 +1102,21 @@ class App {
     if (!select || !input || !btn) return;
 
     const targets = this.sessions.filter(s => DISPATCHABLE_AGENTS.has(s.agent));
+    const labels = buildSessionDisambiguation(targets);
 
     // Best-known working directory per agent (sessions arrive recency-sorted)
     const dirByAgent = new Map();
+    const defaultBase = projectBase(this.defaultProjectCwd);
     for (const s of this.sessions) {
       if (!dirByAgent.has(s.agent) && s.cwd) {
-        const base = String(s.cwd).split(/[\\/]/).filter(Boolean).pop();
+        const base = projectBase(s.cwd);
         if (base) dirByAgent.set(s.agent, base);
       }
     }
 
     const fp = targets.map(s => s.id).join('\x1e') + '\x1f' +
-      DISPATCHABLE_AGENT_LIST.map(a => dirByAgent.get(a) || '').join('\x1e');
+      DISPATCHABLE_AGENT_LIST.map(a => dirByAgent.get(a) || '').join('\x1e') +
+      `\x1f${this.defaultDispatchAgent}\x1f${defaultBase}`;
 
     if (fp !== this._dispatchFp) {
       const prev = select.value;
@@ -852,7 +1135,7 @@ class App {
         for (const s of targets) {
           const opt = document.createElement('option');
           opt.value = s.id;
-          opt.textContent = dispatchLabel(s);
+          opt.textContent = dispatchLabel(s, labels);
           opt.title = `${s.agent} — ${s.taskName || 'session'}${s.cwd ? `\n${s.cwd}` : ''}`;
           liveGroup.appendChild(opt);
         }
@@ -865,9 +1148,13 @@ class App {
         const opt = document.createElement('option');
         opt.value = `new:${agent}`;
         const name = agent === 'Claude Code' ? 'Claude' : agent;
-        const dir = dirByAgent.get(agent);
-        opt.textContent = dir ? `+ New ${name} · ${dir}` : `+ New ${name}`;
-        opt.title = `Start a new ${agent} session${dir ? ` in ${dir}` : ''}`;
+        // Prefer configured default project basename, else last-used for agent
+        const dir = defaultBase || dirByAgent.get(agent);
+        const isDefault = this.defaultDispatchAgent === agent;
+        opt.textContent = dir
+          ? `+ New ${name} · ${dir}${isDefault ? ' ★' : ''}`
+          : `+ New ${name}${isDefault ? ' ★' : ''}`;
+        opt.title = `Start a new ${agent} session${dir ? ` in ${dir}` : ''}${isDefault ? ' (default)' : ''}`;
         newGroup.appendChild(opt);
       }
       select.appendChild(newGroup);
@@ -875,8 +1162,12 @@ class App {
       const stillThere = Array.from(select.options).some(o => o.value === prev && !o.disabled);
       if (stillThere) {
         select.value = prev;
+      } else if (targets.length) {
+        select.value = targets[0].id;
+      } else if (this.defaultDispatchAgent && DISPATCHABLE_AGENTS.has(this.defaultDispatchAgent)) {
+        select.value = `new:${this.defaultDispatchAgent}`;
       } else {
-        select.value = targets.length ? targets[0].id : `new:${DISPATCHABLE_AGENT_LIST[0]}`;
+        select.value = `new:${DISPATCHABLE_AGENT_LIST[0]}`;
       }
     }
 
@@ -892,7 +1183,14 @@ class App {
     const input = document.getElementById('dispatch-input');
     if (!select || !input) return;
     const isNew = (select.value || '').startsWith('new:');
-    input.placeholder = isNew ? 'Prompt for the new session…' : 'Message this session…';
+    if (isNew) {
+      const dir = projectBase(this.defaultProjectCwd);
+      input.placeholder = dir
+        ? `Prompt for new session in ${dir}…`
+        : 'Prompt for the new session…';
+    } else {
+      input.placeholder = 'Message this session…';
+    }
   }
 
   /**
@@ -1213,7 +1511,18 @@ class App {
     if (!list) return;
 
     const activeSessions = this.sessions.filter(s => s.status !== 'stopped');
-    const sessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${this.expandedSessionId || ''}`;
+    const appearanceKey = [
+      this.cardDensity,
+      this.showSessionModel ? '1' : '0',
+      this.showSessionCwd ? '1' : '0',
+      this.showSessionActivity ? '1' : '0',
+      this.autoCollapseFinished ? '1' : '0',
+      this.sessionGroupBy,
+      this.feedFilterAgent,
+      this.feedFilterProject
+    ].join('|');
+    const sessionsFp = this._sessionFingerprint(activeSessions) +
+      `\x1d${this.expandedSessionId || ''}\x1d${appearanceKey}`;
 
     // Skip full card rebuild when content is unchanged (stops poll-driven flicker)
     if (sessionsFp === this._lastSessionsFp && list.dataset.bound === '1') {
@@ -1225,12 +1534,25 @@ class App {
       list.innerHTML = '';
       list.dataset.bound = '0';
       this._knownSessionIds.clear();
+      this._userPinnedExpand.clear();
+      const toolbar = document.getElementById('sessions-toolbar');
+      if (toolbar) toolbar.hidden = true;
       if (empty) empty.style.display = '';
       this.updateEmptyDetection();
       return;
     }
 
     if (empty) empty.style.display = 'none';
+    this.updateFeedFilterOptions(activeSessions);
+
+    // Apply ephemeral filters
+    let filtered = activeSessions;
+    if (this.feedFilterAgent && this.feedFilterAgent !== 'all') {
+      filtered = filtered.filter((s) => s.agent === this.feedFilterAgent);
+    }
+    if (this.feedFilterProject && this.feedFilterProject !== 'all') {
+      filtered = filtered.filter((s) => projectBase(s.cwd) === this.feedFilterProject);
+    }
 
     // Forget fold expansions for sessions that are gone
     if (this.expandedActivityKeys.size) {
@@ -1238,6 +1560,21 @@ class App {
       for (const k of this.expandedActivityKeys) {
         const sid = k.slice(0, k.indexOf('|'));
         if (!liveIds.has(sid)) this.expandedActivityKeys.delete(k);
+      }
+    }
+    // Forget user pins for sessions that left
+    if (this._userPinnedExpand.size) {
+      const liveIds = new Set(activeSessions.map(s => s.id));
+      for (const id of this._userPinnedExpand) {
+        if (!liveIds.has(id)) this._userPinnedExpand.delete(id);
+      }
+    }
+
+    // Auto-collapse finished: drop expand when session is idle and user didn't pin it
+    if (this.autoCollapseFinished && this.expandedSessionId) {
+      const exp = activeSessions.find((s) => s.id === this.expandedSessionId);
+      if (exp && exp.status === 'idle' && !this._userPinnedExpand.has(exp.id) && !isInAttentionQueue(exp)) {
+        this.expandedSessionId = null;
       }
     }
 
@@ -1255,56 +1592,100 @@ class App {
 
     const prevIds = this._knownSessionIds;
     const nextIds = new Set(activeSessions.map(s => s.id));
+    const labels = buildSessionDisambiguation(activeSessions);
 
-    // Attention stack: active queue → acked attention → running → finished
-    const needsYou = activeSessions.filter(s => isInAttentionQueue(s));
-    const ackedAttention = activeSessions.filter(
-      s => ATTENTION_STATUSES.includes(s.status) && s.attentionAcknowledged
-    );
-    const running = activeSessions.filter(s => s.status === 'working');
-    const finished = activeSessions.filter(
-      s => !ATTENTION_STATUSES.includes(s.status) && s.status !== 'working'
-    );
+    const cardOptions = (session, isNew) => ({
+      animateIn: isNew,
+      expandedActivity: this.expandedActivityKeys,
+      density: this.cardDensity,
+      showModel: this.showSessionModel,
+      showCwd: this.showSessionCwd,
+      showActivity: this.showSessionActivity,
+      agentLabel: labels.get(session.id)?.agentLabel || session.agent,
+      projectLabel: labels.get(session.id)?.project || projectBase(session.cwd)
+    });
 
-    const renderGroup = (sessions, startIndex) => sessions.map((session, i) => {
-      const isNew = !prevIds.has(session.id);
-      return renderSessionCard(session, startIndex + i, {
-        animateIn: isNew,
-        expandedActivity: this.expandedActivityKeys
-      });
-    }).join('');
+    /** @type {Array<{ label: string, variant: string, sessions: object[], hint?: string }>} */
+    let groups = [];
+    const groupBy = this.sessionGroupBy;
+
+    if (groupBy === 'agent') {
+      /** @type {Map<string, object[]>} */
+      const map = new Map();
+      for (const s of filtered) {
+        const key = s.agent || 'Agent';
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(s);
+      }
+      groups = [...map.entries()].map(([key, sess]) => ({
+        label: key === 'Claude Code' ? 'Claude' : key,
+        variant: 'idle',
+        sessions: sess
+      }));
+    } else if (groupBy === 'project') {
+      /** @type {Map<string, object[]>} */
+      const map = new Map();
+      for (const s of filtered) {
+        const base = projectBase(s.cwd) || 'Unknown project';
+        if (!map.has(base)) map.set(base, []);
+        map.get(base).push(s);
+      }
+      groups = [...map.entries()]
+        .sort((a, b) => {
+          if (a[0] === 'Unknown project') return 1;
+          if (b[0] === 'Unknown project') return -1;
+          return a[0].localeCompare(b[0]);
+        })
+        .map(([key, sess]) => ({ label: key, variant: 'idle', sessions: sess }));
+    } else {
+      // status (default)
+      const needsYou = filtered.filter(s => isInAttentionQueue(s));
+      const ackedAttention = filtered.filter(
+        s => ATTENTION_STATUSES.includes(s.status) && s.attentionAcknowledged
+      );
+      const running = filtered.filter(s => s.status === 'working');
+      const finished = filtered.filter(
+        s => !ATTENTION_STATUSES.includes(s.status) && s.status !== 'working'
+      );
+      if (needsYou.length) {
+        groups.push({
+          label: 'Needs you',
+          variant: 'attention',
+          sessions: needsYou,
+          hint: needsYou.length > 1 ? 'Ctrl+] next · Ctrl+Shift+D clear' : ''
+        });
+      }
+      if (ackedAttention.length) {
+        groups.push({ label: 'Cleared', variant: 'acked', sessions: ackedAttention });
+      }
+      if (running.length) {
+        groups.push({ label: 'Running', variant: 'working', sessions: running });
+      }
+      if (finished.length) {
+        groups.push({ label: 'Finished', variant: 'idle', sessions: finished });
+      }
+    }
+
+    const showSections = groups.length > 1 ||
+      (groups[0] && groups[0].variant === 'attention' && groups[0].sessions.length > 1);
 
     let html = '';
     let idx = 0;
-    // Only show section labels when more than one group has sessions (or multi-attention)
-    const groupCount = [needsYou, ackedAttention, running, finished].filter(g => g.length > 0).length;
-    const showSections = groupCount > 1 || needsYou.length > 1;
-
-    if (needsYou.length) {
-      if (showSections) {
-        const hint = needsYou.length > 1
-          ? 'Ctrl+] next · Ctrl+Shift+D clear'
-          : '';
-        html += renderSessionSectionHeader('Needs you', needsYou.length, 'attention', { hint });
+    if (filtered.length === 0) {
+      html = `<div class="sessions-filter-empty">No sessions match this filter.</div>`;
+    } else {
+      for (const g of groups) {
+        if (showSections && g.label) {
+          html += renderSessionSectionHeader(g.label, g.sessions.length, g.variant, {
+            hint: g.hint || ''
+          });
+        }
+        html += g.sessions.map((session, i) => {
+          const isNew = !prevIds.has(session.id);
+          return renderSessionCard(session, idx + i, cardOptions(session, isNew));
+        }).join('');
+        idx += g.sessions.length;
       }
-      html += renderGroup(needsYou, idx);
-      idx += needsYou.length;
-    }
-    if (ackedAttention.length) {
-      if (showSections) {
-        html += renderSessionSectionHeader('Cleared', ackedAttention.length, 'acked');
-      }
-      html += renderGroup(ackedAttention, idx);
-      idx += ackedAttention.length;
-    }
-    if (running.length) {
-      if (showSections) html += renderSessionSectionHeader('Running', running.length, 'working');
-      html += renderGroup(running, idx);
-      idx += running.length;
-    }
-    if (finished.length) {
-      if (showSections) html += renderSessionSectionHeader('Finished', finished.length, 'idle');
-      html += renderGroup(finished, idx);
     }
 
     list.innerHTML = html;
@@ -1312,24 +1693,49 @@ class App {
     this._knownSessionIds = nextIds;
     list.dataset.bound = '1';
 
-    // Restore expanded class
+    // Restore expanded class / choose default expand
+    const pickAutoExpandId = () => {
+      // Prefer attention → working; finished only if auto-collapse is off
+      const fromFiltered = filtered.length ? filtered : activeSessions;
+      const att = fromFiltered.find((s) => isInAttentionQueue(s));
+      if (att) return att.id;
+      const work = fromFiltered.find((s) => s.status === 'working');
+      if (work) return work.id;
+      if (!this.autoCollapseFinished && fromFiltered[0]) return fromFiltered[0].id;
+      return null;
+    };
+
     if (this.expandedSessionId) {
       const card = list.querySelector(`.session-card[data-session-id="${CSS.escape(this.expandedSessionId)}"]`);
       if (card) {
         card.classList.add('expanded');
         card.setAttribute('aria-expanded', 'true');
+      } else {
+        // Filtered out or gone
+        this.expandedSessionId = pickAutoExpandId();
+        if (this.expandedSessionId) {
+          const c = list.querySelector(`.session-card[data-session-id="${CSS.escape(this.expandedSessionId)}"]`);
+          if (c) {
+            c.classList.add('expanded');
+            c.setAttribute('aria-expanded', 'true');
+          }
+        }
       }
-    } else if (activeSessions.length > 0) {
-      // Auto-expand first card if none selected
-      const firstCard = list.querySelector('.session-card');
-      if (firstCard) {
-        this.expandedSessionId = firstCard.dataset.sessionId;
-        firstCard.classList.add('expanded');
-        firstCard.setAttribute('aria-expanded', 'true');
-        // Fingerprint included expandedSessionId — keep in sync without re-render loop
-        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${this.expandedSessionId}`;
+    } else if (filtered.length > 0) {
+      const autoId = pickAutoExpandId();
+      if (autoId) {
+        this.expandedSessionId = autoId;
+        const firstCard = list.querySelector(`.session-card[data-session-id="${CSS.escape(autoId)}"]`);
+        if (firstCard) {
+          firstCard.classList.add('expanded');
+          firstCard.setAttribute('aria-expanded', 'true');
+        }
       }
     }
+
+    // Keep fingerprint in sync after auto-expand
+    this._lastSessionsFp = this._sessionFingerprint(activeSessions) +
+      `\x1d${this.expandedSessionId || ''}\x1d${appearanceKey}`;
 
     // Keep live activity feed pinned to the latest event (unless user scrolled up)
     if (this.expandedSessionId) {
@@ -1359,7 +1765,15 @@ class App {
         target.classList.add('expanded');
         target.setAttribute('aria-expanded', 'true');
         this.expandedSessionId = sessionId;
-        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + `\x1d${sessionId}`;
+        // User opened a finished card — pin so auto-collapse won't close it
+        const sess = activeSessions.find((s) => s.id === sessionId);
+        if (sess && sess.status === 'idle') {
+          this._userPinnedExpand.add(sessionId);
+        } else {
+          this._userPinnedExpand.delete(sessionId);
+        }
+        this._lastSessionsFp = this._sessionFingerprint(activeSessions) +
+          `\x1d${sessionId}\x1d${appearanceKey}`;
         // Pin live feed to latest after expand
         requestAnimationFrame(() => {
           const feed = target.querySelector('.activity-live-feed');
@@ -1367,7 +1781,9 @@ class App {
         });
       } else {
         this.expandedSessionId = null;
-        this._lastSessionsFp = this._sessionFingerprint(activeSessions) + '\x1d';
+        this._userPinnedExpand.delete(sessionId);
+        this._lastSessionsFp = this._sessionFingerprint(activeSessions) +
+          `\x1d\x1d${appearanceKey}`;
       }
     };
 
@@ -1443,7 +1859,53 @@ class App {
         const sid = btn.dataset.sessionId;
         if (sid && window.agentNotch) {
           Promise.resolve(window.agentNotch.jumpToTerminal(sid))
+            .then((res) => {
+              // Quiet on success — stickiness is the feature; only surface failures
+              if (res && res.success === false) {
+                this.showToast(res.message || 'Could not focus agent', 'error');
+              }
+            })
             .catch((err) => this.showToast(`Jump failed: ${err.message || 'main process error'}`, 'error'));
+        }
+      });
+    });
+
+    list.querySelectorAll('.btn-open-folder').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const cwd = btn.dataset.cwd;
+        if (!cwd || !window.agentNotch?.openPath) return;
+        try {
+          const res = await window.agentNotch.openPath(cwd);
+          if (res && res.success) {
+            this.showToast('Opened project folder', 'ok');
+          } else {
+            this.showToast((res && res.message) || 'Could not open folder', 'error');
+          }
+        } catch (err) {
+          this.showToast(`Open failed: ${err.message || 'error'}`, 'error');
+        }
+      });
+    });
+
+    list.querySelectorAll('.btn-copy-cwd').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const cwd = btn.dataset.cwd;
+        if (!cwd) return;
+        try {
+          if (window.agentNotch?.copyText) {
+            const res = await window.agentNotch.copyText(cwd);
+            if (res && res.success === false) {
+              this.showToast(res.message || 'Copy failed', 'error');
+              return;
+            }
+          } else if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(cwd);
+          }
+          this.showToast('Path copied', 'ok');
+        } catch (err) {
+          this.showToast(`Copy failed: ${err.message || 'error'}`, 'error');
         }
       });
     });

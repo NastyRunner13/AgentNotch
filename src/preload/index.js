@@ -60,6 +60,10 @@ contextBridge.exposeInMainWorld('agentNotch', {
   denyPermission: (sessionId) => ipcRenderer.invoke('deny-permission', sessionId),
   answerQuestion: (sessionId, answer) => ipcRenderer.invoke('answer-question', sessionId, answer),
   jumpToTerminal: (sessionId) => ipcRenderer.invoke('jump-to-terminal', sessionId),
+  /** Open a folder path in the OS file manager */
+  openPath: (targetPath) => ipcRenderer.invoke('open-path', targetPath),
+  /** Copy text to the system clipboard */
+  copyText: (text) => ipcRenderer.invoke('copy-text', text),
   dismissSession: (sessionId) => ipcRenderer.invoke('dismiss-session', sessionId),
   /** Mute sound + toast for a session: preset '15m' | '1h' | 'until-idle' */
   snoozeSession: (sessionId, preset) => ipcRenderer.invoke('snooze-session', sessionId, preset),
