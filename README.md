@@ -42,7 +42,7 @@ AgentNotch watches **6 AI coding agents** out of the box — all local, all priv
 | :--- | :--- | :--- |
 | <img src="assets/icons/claude-code.png" width="16"/> **Claude Code** | `~/.claude/projects/**/*.jsonl` | Tool execution · user-input prompts · task completion |
 | <img src="assets/icons/codex.png" width="16"/> **Codex** | `~/.codex/sessions/**/*.jsonl` | Command runs · prompt updates · rate limits |
-| <img src="assets/icons/cursor.png" width="16"/> **Cursor** | Process presence (`Cursor.exe` / `Cursor`) | Running / active state |
+| <img src="assets/icons/cursor.png" width="16"/> **Cursor** | Process presence + local composer DB (`%APPDATA%/Cursor` / `~/Library/Application Support/Cursor`) + optional `~/.cursor/projects/*/agent-transcripts` | Agent sessions · task names · working / done · project folder |
 | <img src="assets/icons/antigravity.png" width="16"/> **Antigravity** | `~/.gemini/antigravity-ide/brain/**/transcript.jsonl` | Planning phases · subagent execution · task status |
 | <img src="assets/icons/grok-build.png" width="16"/> **Grok Build** | `~/.grok/sessions/**/updates.jsonl` | Active tool names · command params · weekly credits |
 | <img src="assets/icons/opencode.png" width="16"/> **OpenCode** | `~/.local/share/opencode/opencode.db` (SQLite WAL, read-only) | Tool execution · step completion · model + token/cost |

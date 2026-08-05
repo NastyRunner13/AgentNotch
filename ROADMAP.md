@@ -2,7 +2,7 @@
 
 Strategic roadmap from product analysis: features users will most want, and settings customization worth shipping. Grounded in `PRODUCT.md`, `DESIGN.md`, and the live codebase.
 
-**Last updated:** 2026-08-01  
+**Last updated:** 2026-08-05  
 **Personality:** Calm · Precise · Unobtrusive  
 **Core job:** Never miss when an agent needs you — without alt-tabbing every tool.
 
@@ -35,6 +35,7 @@ AgentNotch is a **local-first Electron tray app**: a Mac-style top notch that wa
 |------|--------|
 | Ambient notch + autohide + pin | Done |
 | Multi-agent watchers (6 agents) | Done |
+| Deeper Cursor (composers + transcripts) | Done |
 | Claude remote approve | Done |
 | Session cards, Jump, Snooze, Dismiss | Done |
 | Session dispatch (live + new) | Done |
@@ -58,9 +59,9 @@ Ranked by **job impact** for solo multi-agent developers.
 Claude remote approve is the standout differentiator. Other agents still force Jump → native UI.
 
 Possible slices:
-- Remote or faster approve/deny where hooks/APIs exist — **open**
+- Remote or faster approve/deny where hooks/APIs exist — **open** (Codex PreToolUse is deny-only; no clean human-in-loop allow surface yet)
 - Unified **attention queue**: “N things need you” → act / jump / dismiss in order — **shipped** (see #4)
-- Deeper **Cursor** signal (today is process-only) — **open**
+- Deeper **Cursor** signal (composer DB + transcripts; not process-only) — **shipped**
 
 #### 2. Focus mode / Quiet hours — **shipped** (schedule later)
 Attention Control is granular but not situational. Deep work needs one switch: bar still truthful, sound/toast off.
@@ -234,10 +235,11 @@ Wire all interrupt delivery through `attention-policy.js`.
 |------|-----|-----------|
 | 1 | ~~**Focus mode** + **per-agent mute**~~ | **Shipped** — noise control |
 | 2 | ~~**Attention queue** / command center~~ | **Shipped** — multi-attention act path |
-| 3 | **Remote approve beyond Claude** + deeper Cursor | Remaining action-layer differentiator |
-| 4 | **Density / auto-collapse** | Drive-by when touching session cards |
-| 5 | **Appearance knobs** | Only if a11y / motion demand appears |
-| 6 | Expose reveal-on-done / start-pinned | Small Settings rows when convenient |
+| 3 | ~~**Deeper Cursor** signal~~ | **Shipped** — composers + transcripts |
+| 4 | **Remote approve beyond Claude** | Still open where hooks allow human-in-loop allow/deny |
+| 5 | **Density / auto-collapse** | Drive-by when touching session cards |
+| 6 | **Appearance knobs** | Only if a11y / motion demand appears |
+| 7 | Expose reveal-on-done / start-pinned | Small Settings rows when convenient |
 | — | New agents / heavy analytics | After action + noise feel excellent |
 
 ### Recently completed (this cycle)
@@ -247,6 +249,7 @@ Wire all interrupt delivery through `attention-policy.js`.
 3. ~~Focus mode (Settings + tray; bar chip; policy mute sound/toast)~~  
 4. ~~Per-agent mute (`mutedAgents` in Settings; policy)~~  
 5. ~~Attention command center (queue, keyboard, clear episode)~~  
+6. ~~Deeper Cursor signal (local composer DB + agent-transcripts)~~  
 
 ---
 
