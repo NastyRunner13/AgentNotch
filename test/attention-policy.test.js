@@ -16,6 +16,8 @@ const {
   normalizeMutedAgents,
   isFocusMode,
   isAgentMuted,
+  canDeliverLimitAlert,
+  filterLimitAlertsForDelivery,
   attentionRank,
   attentionEpisodeKey,
   isAttentionEpisodeAcknowledged,
@@ -275,6 +277,42 @@ describe('attention-policy', () => {
       assert.equal(isAgentMuted({ mutedAgents: ['grok'] }, 'Grok'), true);
       assert.equal(isAgentMuted({ mutedAgents: ['grok'] }, 'Codex'), false);
       assert.equal(isAgentMuted({}, 'Grok'), false);
+    });
+
+    it('canDeliverLimitAlert respects focus and per-agent mute', () => {
+      const alert = { id: 'codex', short: 'Codex', name: 'Codex', band: 'crit', usedPercent: 90 };
+      assert.equal(canDeliverLimitAlert(DEFAULT_SETTINGS, alert), true);
+      assert.equal(canDeliverLimitAlert({ ...DEFAULT_SETTINGS, focusMode: true }, alert), false);
+      assert.equal(
+        canDeliverLimitAlert({ ...DEFAULT_SETTINGS, mutedAgents: ['codex'] }, alert),
+        false
+      );
+      assert.equal(
+        canDeliverLimitAlert({ ...DEFAULT_SETTINGS, mutedAgents: ['grok'] }, alert),
+        true
+      );
+      assert.equal(canDeliverLimitAlert(DEFAULT_SETTINGS, null), false);
+    });
+
+    it('filterLimitAlertsForDelivery drops focus/muted only', () => {
+      const alerts = [
+        { id: 'codex', short: 'Codex', usedPercent: 90 },
+        { id: 'grok', short: 'Grok', usedPercent: 92 },
+        { id: 'claude', short: 'Claude', usedPercent: 88 }
+      ];
+      const muted = filterLimitAlertsForDelivery(alerts, {
+        ...DEFAULT_SETTINGS,
+        mutedAgents: ['codex', 'claude']
+      });
+      assert.deepEqual(muted.map((a) => a.id), ['grok']);
+
+      const focused = filterLimitAlertsForDelivery(alerts, {
+        ...DEFAULT_SETTINGS,
+        focusMode: true
+      });
+      assert.deepEqual(focused, []);
+
+      assert.deepEqual(filterLimitAlertsForDelivery(null, DEFAULT_SETTINGS), []);
     });
   });
 

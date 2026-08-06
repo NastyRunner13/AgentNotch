@@ -368,6 +368,35 @@ function isAgentMuted(settings, agent) {
 }
 
 /**
+ * Whether a soft usage-limit alert may deliver toast / desktop notify.
+ * Focus mode and per-agent mute silence channels only — bar chips stay via
+ * usage-update (status-before-chrome).
+ * @param {object|null|undefined} settings
+ * @param {{ id?: string, short?: string, name?: string }|null|undefined} alert
+ * @returns {boolean}
+ */
+function canDeliverLimitAlert(settings, alert) {
+  if (!alert) return false;
+  if (isFocusMode(settings)) return false;
+  // Prefer stable mute id (usage-limits agent id); fall back to display name.
+  if (isAgentMuted(settings, alert.id) || isAgentMuted(settings, alert.name) || isAgentMuted(settings, alert.short)) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Filter limit-crossing alerts to those allowed to interrupt (toast/notify).
+ * @param {Array<object>|null|undefined} alerts
+ * @param {object|null|undefined} settings
+ * @returns {object[]}
+ */
+function filterLimitAlertsForDelivery(alerts, settings) {
+  const list = Array.isArray(alerts) ? alerts : [];
+  return list.filter((a) => canDeliverLimitAlert(settings, a));
+}
+
+/**
  * @param {object} settings
  * @param {{ kind: InterruptKind, snoozed?: boolean, agent?: string }} opts
  * @returns {InterruptChannels}
@@ -531,6 +560,8 @@ module.exports = {
   normalizeMutedAgents,
   isFocusMode,
   isAgentMuted,
+  canDeliverLimitAlert,
+  filterLimitAlertsForDelivery,
   channelsForEvent,
   channelsForSessions,
   clampAutohideDelayMs,
