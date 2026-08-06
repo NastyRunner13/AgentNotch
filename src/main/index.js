@@ -6,7 +6,8 @@ const { installConsoleCapture, closeLogger } = require('./logger');
 const {
   channelsForSessions,
   clampAutohideDelayMs,
-  normalizeNotchAlign
+  normalizeNotchAlign,
+  filterLimitAlertsForDelivery
 } = require('./attention-policy');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
@@ -600,16 +601,16 @@ app.whenReady().then(() => {
 
   agentManager.on('limit-alert', (alerts) => {
     // Soft only — never open the panel. Sound is not used for limits.
-    const list = Array.isArray(alerts) ? alerts : [];
-    if (list.length === 0) return;
+    // Focus + per-agent mute silence toast/notify; bar chips stay via usage-update.
     const settings = agentManager.getSettings();
+    const list = filterLimitAlertsForDelivery(alerts, settings);
+    if (list.length === 0) return;
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('limit-alert', list);
     }
 
-    // Focus mode + master notify gate — toast only; bar truth stays
-    if (settings.focusMode) return;
+    // Master notify gate — toast only; bar truth stays
     if (settings.desktopNotifications === false) return;
     if (!Notification.isSupported()) return;
 

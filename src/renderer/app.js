@@ -135,6 +135,8 @@ class App {
     this.showLimitOnNotch = true;
     /** Focus mode — sound/toast suppressed; bar still truthful */
     this.focusMode = false;
+    /** Per-agent mute ids (sound/toast only; bar still truthful) */
+    this.mutedAgents = [];
     /** Session feed appearance (from settings) */
     this.cardDensity = 'comfortable';
     this.showSessionModel = true;
@@ -240,6 +242,7 @@ class App {
         this.applyDispatchDefaults(settings);
         this.showLimitOnNotch = settings.showLimitOnNotch !== false;
         this.focusMode = Boolean(settings.focusMode);
+        this.mutedAgents = Array.isArray(settings.mutedAgents) ? [...settings.mutedAgents] : [];
       }).catch(() => {});
     }
 
@@ -289,11 +292,13 @@ class App {
 
       if (window.agentNotch.onLimitAlert) {
         window.agentNotch.onLimitAlert((alerts) => {
-          // Focus mode suppresses interrupt toasts; limit crit chips still show on the bar
+          // Focus + per-agent mute suppress interrupt toasts; crit chips stay on the bar
           if (this.focusMode) return;
+          const muted = new Set(Array.isArray(this.mutedAgents) ? this.mutedAgents : []);
           const list = Array.isArray(alerts) ? alerts : [];
           for (const a of list) {
             if (!a) continue;
+            if (a.id && muted.has(a.id)) continue;
             const label = a.short || a.name || 'Agent';
             const band = a.band === 'crit' ? 'critical' : 'high';
             this.showToast(`${label} ${a.usedPercent}% used (${band})`, a.band === 'crit' ? 'error' : 'info');
@@ -331,10 +336,12 @@ class App {
         this.isPinned = Boolean(s && s.notchPinned);
         this.showLimitOnNotch = s?.showLimitOnNotch !== false;
         this.focusMode = Boolean(s && s.focusMode);
+        this.mutedAgents = Array.isArray(s?.mutedAgents) ? [...s.mutedAgents] : [];
       } catch {
         this.isPinned = false;
         this.showLimitOnNotch = true;
         this.focusMode = false;
+        this.mutedAgents = [];
       }
       this.updateBarControls();
       this.renderFocusChip();

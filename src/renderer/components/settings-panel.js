@@ -133,6 +133,7 @@ export function initSettings(app) {
       }
       if (Array.isArray(partial.mutedAgents)) {
         applyMutedAgents(partial.mutedAgents);
+        if (app) app.mutedAgents = [...partial.mutedAgents];
       }
       if (app) {
         if (partial.focusMode !== undefined) {
@@ -307,6 +308,7 @@ async function persistSettings(update, app) {
       if (app) {
         app.showLimitOnNotch = next.showLimitOnNotch !== false;
         app.focusMode = Boolean(next.focusMode);
+        app.mutedAgents = Array.isArray(next.mutedAgents) ? [...next.mutedAgents] : [];
         if (typeof app.applySessionAppearance === 'function') {
           app.applySessionAppearance(next);
         }
