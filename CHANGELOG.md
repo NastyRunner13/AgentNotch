@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Per-agent mute covers usage limit alerts**: muting an agent (or turning on Focus) now suppresses soft limit toasts and desktop notifications for that agent, matching attention/done interrupt policy. Critical limit chips on the bar still show (status-before-chrome).
+
 ### Added
 - **Smarter session feed density**: Compact vs comfortable cards; toggles for model / project folder / activity line; auto-collapse finished sessions; group and filter the live feed by status, agent, or project folder.
 - **Jump & project context**: Open project folder and copy cwd from each card; Jump remembers the last-focused agent window (sticky per OS); clearer agent tags when multiple sessions share a harness (`Claude · project` / `#2`).
