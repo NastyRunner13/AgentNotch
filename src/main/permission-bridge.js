@@ -28,32 +28,57 @@ function agentNotchHome() {
   return path.join(os.homedir(), '.agent-notch');
 }
 
-function permissionsRoot() {
-  return path.join(agentNotchHome(), 'permissions');
+/** Extra AgentNotch homes (e.g. `\\wsl$\Ubuntu\home\ada\.agent-notch`). Hook process ignores these. */
+let extraAgentNotchHomes = [];
+
+function setExtraAgentNotchHomes(homes) {
+  extraAgentNotchHomes = Array.isArray(homes)
+    ? homes.map((h) => String(h || '').trim()).filter(Boolean)
+    : [];
 }
 
-function pendingDir() {
-  return path.join(permissionsRoot(), 'pending');
+function allAgentNotchHomes() {
+  const seen = new Set();
+  const out = [];
+  for (const home of [agentNotchHome(), ...extraAgentNotchHomes]) {
+    const key = home.replace(/\//g, '\\').toLowerCase();
+    if (!home || seen.has(key)) continue;
+    seen.add(key);
+    out.push(home);
+  }
+  return out;
 }
 
-function decisionsDir() {
-  return path.join(permissionsRoot(), 'decisions');
+function permissionsRoot(home = agentNotchHome()) {
+  return path.join(home, 'permissions');
 }
 
-function bridgeInstallPath() {
-  return path.join(agentNotchHome(), 'bin', HOOK_MARKER);
+function pendingDir(home = agentNotchHome()) {
+  return path.join(permissionsRoot(home), 'pending');
+}
+
+function decisionsDir(home = agentNotchHome()) {
+  return path.join(permissionsRoot(home), 'decisions');
+}
+
+function bridgeInstallPath(home = agentNotchHome()) {
+  return path.join(home, 'bin', HOOK_MARKER);
+}
+
+function ensureHomeDirs(home = agentNotchHome()) {
+  for (const dir of [pendingDir(home), decisionsDir(home), path.dirname(bridgeInstallPath(home))]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      try { fs.chmodSync(dir, 0o700); } catch { /* Windows may ignore */ }
+    } catch {
+      // Extra WSL homes may be offline
+    }
+  }
 }
 
 function ensureDirs() {
-  // mode 0o700 — owner-only; pending/decision files may contain tool input / secrets.
-  // (mode only applies to newly created dirs on POSIX; no-op on Windows.)
-  for (const dir of [pendingDir(), decisionsDir(), path.dirname(bridgeInstallPath())]) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    try {
-      fs.chmodSync(dir, 0o700);
-    } catch {
-      // Windows may ignore chmod
-    }
+  for (const home of allAgentNotchHomes()) {
+    ensureHomeDirs(home);
   }
 }
 
@@ -75,6 +100,17 @@ function toNotchSessionId(claudeSessionId, transcriptPath) {
   return raw.startsWith('claude-') ? raw : `claude-${raw}`;
 }
 
+/** `claude-wsl-<uuid>` and `claude-<uuid>` are the same Claude session. */
+function canonicalClaudeSessionId(id) {
+  return String(id || '').replace(/^claude-wsl-/i, 'claude-');
+}
+
+function sessionIdsMatch(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return canonicalClaudeSessionId(a) === canonicalClaudeSessionId(b);
+}
+
 function extractFilePath(toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return '';
   return (
@@ -88,14 +124,14 @@ function extractFilePath(toolInput) {
 
 // ── Pending / decision I/O ─────────────────────────────
 
-function pendingPath(id) {
+function pendingPath(id, home = agentNotchHome()) {
   validateRequestId(id);
-  return path.join(pendingDir(), `${id}.json`);
+  return path.join(pendingDir(home), `${id}.json`);
 }
 
-function decisionPath(id) {
+function decisionPath(id, home = agentNotchHome()) {
   validateRequestId(id);
-  return path.join(decisionsDir(), `${id}.json`);
+  return path.join(decisionsDir(home), `${id}.json`);
 }
 
 /**
@@ -117,7 +153,7 @@ function readJsonSafe(filePath) {
 }
 
 function writeJsonAtomic(filePath, data) {
-  ensureDirs();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const tmp = `${filePath}.${process.pid}.tmp`;
   // mode 0o600 — owner read/write only; pending/decision files may contain tool input / secrets
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -138,18 +174,20 @@ function removeQuiet(filePath) {
  */
 function listPending() {
   ensureDirs();
-  let files;
-  try {
-    files = fs.readdirSync(pendingDir()).filter((f) => f.endsWith('.json'));
-  } catch {
-    return [];
-  }
-
   const items = [];
-  for (const file of files) {
-    const data = readJsonSafe(path.join(pendingDir(), file));
-    if (data && data.id && data.status !== 'resolved') {
-      items.push(data);
+  const seen = new Set();
+  for (const home of allAgentNotchHomes()) {
+    let files;
+    try {
+      files = fs.readdirSync(pendingDir(home)).filter((f) => f.endsWith('.json'));
+    } catch {
+      continue;
+    }
+    for (const file of files) {
+      const data = readJsonSafe(path.join(pendingDir(home), file));
+      if (!data || !data.id || data.status === 'resolved' || seen.has(data.id)) continue;
+      seen.add(data.id);
+      items.push({ ...data, _home: home });
     }
   }
   items.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -163,7 +201,7 @@ function listPending() {
 function findPendingForSession(notchSessionId) {
   if (!notchSessionId) return null;
   const all = listPending();
-  const direct = all.find((p) => p.notchSessionId === notchSessionId);
+  const direct = all.find((p) => sessionIdsMatch(p.notchSessionId, notchSessionId));
   if (direct) return direct;
 
   const pendingPrefix = 'claude-pending-';
@@ -210,17 +248,27 @@ function createPendingFromHookInput(input) {
  * @param {'allow'|'deny'} decision
  * @param {string} [source]
  */
+function findPendingRecord(requestId) {
+  if (!requestId) return null;
+  try { validateRequestId(requestId); } catch { return null; }
+  for (const home of allAgentNotchHomes()) {
+    const data = readJsonSafe(pendingPath(requestId, home));
+    if (data && data.id) return { pending: data, home };
+  }
+  return null;
+}
+
 function submitDecision(requestId, decision, source = 'agent-notch') {
   if (!requestId) {
     return { success: false, message: 'Missing request id' };
   }
   const normalized = decision === 'deny' ? 'deny' : 'allow';
-  const pending = readJsonSafe(pendingPath(requestId));
-  if (!pending) {
+  const found = findPendingRecord(requestId);
+  if (!found) {
     return { success: false, message: 'No pending permission request for this id' };
   }
 
-  writeJsonAtomic(decisionPath(requestId), {
+  writeJsonAtomic(decisionPath(requestId, found.home), {
     id: requestId,
     decision: normalized,
     decidedAt: Date.now(),
@@ -281,8 +329,10 @@ async function waitForDecision(requestId, timeoutMs = DEFAULT_TIMEOUT_MS) {
 }
 
 function cleanupRequest(requestId) {
-  removeQuiet(pendingPath(requestId));
-  removeQuiet(decisionPath(requestId));
+  for (const home of allAgentNotchHomes()) {
+    removeQuiet(pendingPath(requestId, home));
+    removeQuiet(decisionPath(requestId, home));
+  }
 }
 
 /**
@@ -418,6 +468,71 @@ function installClaudeHook() {
 }
 
 /**
+ * Install the hook into another home (WSL UNC + Linux path for the command arg).
+ * The hook process inside WSL must see a Linux path to the copied bridge script.
+ *
+ * @param {{
+ *   settingsPath: string,
+ *   bridgePath: string,
+ *   hookArgPath: string
+ * }} dest
+ */
+function installClaudeHookAt(dest) {
+  if (!dest || !dest.settingsPath || !dest.bridgePath || !dest.hookArgPath) {
+    return { success: false, message: 'Missing WSL hook destination' };
+  }
+  try {
+    fs.mkdirSync(path.dirname(dest.bridgePath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(dest.bridgePath, fs.readFileSync(__filename, 'utf8'), 'utf8');
+  } catch (err) {
+    return { success: false, message: err.message || 'Could not copy bridge into WSL' };
+  }
+
+  let settings = {};
+  try {
+    if (fs.existsSync(dest.settingsPath)) {
+      settings = JSON.parse(fs.readFileSync(dest.settingsPath, 'utf8')) || {};
+    }
+  } catch {
+    settings = {};
+  }
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+  if (!Array.isArray(settings.hooks.PermissionRequest)) settings.hooks.PermissionRequest = [];
+
+  const handler = makeHookHandler(dest.hookArgPath);
+  let foundGroup = false;
+  for (const group of settings.hooks.PermissionRequest) {
+    if (!group || typeof group !== 'object') continue;
+    if (!Array.isArray(group.hooks)) group.hooks = [];
+    const idx = group.hooks.findIndex(isOurHookHandler);
+    if (idx >= 0) {
+      group.hooks[idx] = handler;
+      foundGroup = true;
+      break;
+    }
+  }
+  if (!foundGroup) {
+    settings.hooks.PermissionRequest.push({ matcher: '*', hooks: [handler] });
+  }
+
+  try {
+    fs.mkdirSync(path.dirname(dest.settingsPath), { recursive: true });
+    const tmp = `${dest.settingsPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
+    fs.renameSync(tmp, dest.settingsPath);
+  } catch (err) {
+    return { success: false, message: err.message || 'Could not write WSL Claude settings' };
+  }
+
+  return {
+    success: true,
+    bridgePath: dest.bridgePath,
+    settingsPath: dest.settingsPath,
+    message: 'Claude remote-approve hook installed in WSL'
+  };
+}
+
+/**
  * Remove AgentNotch PermissionRequest hook handlers from Claude settings.
  * Does not delete other hooks.
  */
@@ -500,14 +615,15 @@ function mergePendingIntoSessions(sessions) {
 
   const byNotchId = new Map();
   for (const p of pending) {
-    if (p.notchSessionId && !byNotchId.has(p.notchSessionId)) {
-      byNotchId.set(p.notchSessionId, p);
-    }
+    if (!p.notchSessionId) continue;
+    const key = canonicalClaudeSessionId(p.notchSessionId);
+    if (!byNotchId.has(key)) byNotchId.set(key, p);
+    if (!byNotchId.has(p.notchSessionId)) byNotchId.set(p.notchSessionId, p);
   }
 
   const used = new Set();
   const result = sessions.map((s) => {
-    const p = byNotchId.get(s.id);
+    const p = byNotchId.get(s.id) || byNotchId.get(canonicalClaudeSessionId(s.id));
     if (!p) {
       return {
         ...s,
@@ -648,7 +764,11 @@ module.exports = {
   decisionsDir,
   bridgeInstallPath,
   ensureDirs,
+  setExtraAgentNotchHomes,
+  allAgentNotchHomes,
   toNotchSessionId,
+  canonicalClaudeSessionId,
+  sessionIdsMatch,
   listPending,
   findPendingForSession,
   createPendingFromHookInput,
@@ -660,6 +780,7 @@ module.exports = {
   pruneStalePending,
   syncBridgeScript,
   installClaudeHook,
+  installClaudeHookAt,
   uninstallClaudeHook,
   isHookInstalled,
   getHookStatus,

@@ -78,6 +78,18 @@ describe('permission-bridge', () => {
     const res = bridge.submitDecisionForSession('claude-sess-xyz', 'allow');
     assert.equal(res.success, true);
     assert.equal(res.remote, true);
+
+    const pending2 = bridge.createPendingFromHookInput({
+      session_id: 'sess-wsl',
+      transcript_path: path.join(TMP_HOME, '.claude', 'projects', 'hash', 'sess-wsl.jsonl'),
+      cwd: '/home/ada/proj',
+      tool_name: 'Read',
+      tool_input: { file_path: '/home/ada/proj/a.ts' }
+    });
+    assert.equal(pending2.notchSessionId, 'claude-sess-wsl');
+    const wslRes = bridge.submitDecisionForSession('claude-wsl-sess-wsl', 'deny');
+    assert.equal(wslRes.success, true);
+    assert.equal(wslRes.decision, 'deny');
     assert.equal(res.decision, 'allow');
 
     // Decision file exists for the waiting hook
