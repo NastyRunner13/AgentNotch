@@ -27,6 +27,17 @@ function getStatusInfo(session) {
   if (session.status === 'needs-attention') {
     return { dotClass: 'attention', textClass: 'attention', text: 'Needs attention' };
   }
+  if (session.stalled && session.status === 'working') {
+    const at = Number(session.lastActivityAt || session.lastTime);
+    const mins = Number.isFinite(at) && at > 0
+      ? Math.max(1, Math.round((Date.now() - at) / 60000))
+      : 0;
+    return {
+      dotClass: 'attention',
+      textClass: 'attention',
+      text: mins ? `No new activity · ${mins}m` : 'No new activity'
+    };
+  }
   if (session.status === 'working') {
     // Status is shown by the harness logo animation.
     // Keep a short activity hint — never raw "exec" / phase keywords.
@@ -613,6 +624,7 @@ export function getAgentBarIcon(session) {
  *   density?: 'compact'|'comfortable',
  *   showModel?: boolean,
  *   showCwd?: boolean,
+ *   showGit?: boolean,
  *   showActivity?: boolean,
  *   agentLabel?: string,
  *   projectLabel?: string
@@ -623,11 +635,12 @@ export function getAgentBarIcon(session) {
 export function renderSessionCard(session, index = 0, options = {}) {
   const agent = AGENT_COLORS[session.agent] || { main: '#60A5FA', class: 'agent-claude' };
   const statusInfo = getStatusInfo(session);
-  const isAttentionStatus = ['permission-request', 'question', 'needs-attention'].includes(session.status);
+  const isAttentionStatus = ['permission-request', 'question', 'needs-attention'].includes(session.status)
+    || Boolean(session.stalled);
   const attentionAcknowledged = Boolean(session.attentionAcknowledged);
   /** Active queue member — still needs the user and not dismissed from the queue */
   const needsAttention = isAttentionStatus && !attentionAcknowledged;
-  const isWorking = session.status === 'working';
+  const isWorking = session.status === 'working' && !session.stalled;
   const delay = index * 50;
   const animateIn = options.animateIn !== false && options.animateIn !== undefined
     ? options.animateIn
@@ -636,6 +649,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
   const density = options.density === 'compact' ? 'compact' : 'comfortable';
   const showModel = options.showModel !== false;
   const showCwd = options.showCwd !== false;
+  const showGit = options.showGit !== false;
   const showActivity = options.showActivity !== false;
   const agentLabel = options.agentLabel || session.agent;
   const projectLabel = options.projectLabel || projectBaseName(session.cwd);
@@ -744,6 +758,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
   const cwdChip = showCwd && projectLabel
     ? `<span class="session-cwd" title="${escapeHtml(session.cwd || projectLabel)}">${escapeHtml(projectLabel)}</span>`
     : '';
+  const gitChip = renderGitChip(session, showGit, density === 'compact');
 
   const statusLine = showActivity
     ? `<div class="session-status-line">
@@ -799,6 +814,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
             <span class="session-tag ${agent.class}" title="${escapeHtml(session.agent)}">${escapeHtml(agentLabel)}</span>
             ${modelChip}
             ${cwdChip}
+            ${gitChip}
             <span class="session-duration">${escapeHtml(session.durationFormatted)}</span>
             ${dismissBtn}
           </div>
@@ -814,6 +830,20 @@ export function renderSessionCard(session, index = 0, options = {}) {
 }
 
 /** @param {string|null|undefined} cwd */
+function renderGitChip(session, showGit, compact) {
+  if (!showGit || !session.git || !session.git.branch) return '';
+  const branch = String(session.git.branch);
+  const pr = session.git.pr ? `#${session.git.pr}` : '';
+  const label = compact || !pr ? branch : `${branch} · ${pr}`;
+  const tipParts = [
+    branch,
+    session.git.worktree ? `worktree ${session.git.worktree}` : '',
+    pr,
+    session.cwd || ''
+  ].filter(Boolean);
+  return `<span class="session-git" title="${escapeHtml(tipParts.join(' · '))}">${escapeHtml(label)}</span>`;
+}
+
 function projectBaseName(cwd) {
   if (!cwd) return '';
   const parts = String(cwd).split(/[/\\]/).filter(Boolean);
@@ -826,8 +856,9 @@ function projectBaseName(cwd) {
 function renderCwdActions(session) {
   const cwd = String(session.cwd || '');
   if (!cwd) return '';
+  const openCwd = String(session.cwdResolved || cwd);
   return `
-    <button type="button" class="btn-open-folder" data-session-id="${escapeHtml(session.id)}" data-cwd="${escapeHtml(cwd)}" title="Open project folder">
+    <button type="button" class="btn-open-folder" data-session-id="${escapeHtml(session.id)}" data-cwd="${escapeHtml(openCwd)}" title="Open project folder">
       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/></svg>
       Folder
     </button>
@@ -998,8 +1029,21 @@ function renderInlineApproval(session, pr) {
         <button class="btn-deny" data-session-id="${escapeHtml(session.id)}" title="${denyTitle}">Deny <kbd>Ctrl+N</kbd></button>
         <button class="btn-allow" data-session-id="${escapeHtml(session.id)}" title="${allowTitle}">Allow <kbd>Ctrl+Y</kbd></button>
       </div>
+      ${remote ? renderAlwaysAllow(session, pr) : ''}
       <p class="approval-hint">${hint}</p>
     </div>`;
+}
+
+function renderAlwaysAllow(session, pr) {
+  const tool = String(pr.tool || 'tool').trim() || 'tool';
+  const project = projectBaseName(session.cwd);
+  if (!project) return '';
+  const label = `Always allow ${tool} in ${project}`;
+  return `<button type="button" class="btn-always-allow"
+      data-session-id="${escapeHtml(session.id)}"
+      title="${escapeHtml(label)}">
+      ${escapeHtml(label)}
+    </button>`;
 }
 
 function renderInlineQuestion(session) {

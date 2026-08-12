@@ -82,7 +82,7 @@ const ATTENTION_STATUSES = ['permission-request', 'question', 'needs-attention']
 function isInAttentionQueue(session) {
   return Boolean(
     session &&
-    ATTENTION_STATUSES.includes(session.status) &&
+    (ATTENTION_STATUSES.includes(session.status) || session.stalled) &&
     !session.attentionAcknowledged
   );
 }
@@ -141,6 +141,7 @@ class App {
     this.cardDensity = 'comfortable';
     this.showSessionModel = true;
     this.showSessionCwd = true;
+    this.showSessionGit = true;
     this.showSessionActivity = true;
     this.autoCollapseFinished = true;
     this.sessionGroupBy = 'status';
@@ -601,9 +602,27 @@ class App {
       const res = await window.agentNotch.answerQuestion(sessionId, answer);
       if (res && !res.success) {
         this.showToast(res.message || 'Answer failed', 'error');
+      } else if (res?.remote) {
+        this.showToast(res.message || 'Answered', 'ok');
+      } else if (res?.message) {
+        this.showToast(res.message, 'info');
       }
     } catch (err) {
       this.showToast(`Answer failed: ${err.message || 'main process error'}`, 'error');
+    }
+  }
+
+  async handleAlwaysAllow(sessionId) {
+    if (!window.agentNotch?.rememberAlwaysAllow) return;
+    try {
+      const res = await window.agentNotch.rememberAlwaysAllow(sessionId);
+      if (res && !res.success) {
+        this.showToast(res.message || 'Could not remember', 'error');
+      } else if (res?.message) {
+        this.showToast(res.message, 'ok');
+      }
+    } catch (err) {
+      this.showToast(`Always-allow failed: ${err.message || 'main process error'}`, 'error');
     }
   }
 
@@ -839,6 +858,9 @@ class App {
     }
     if (partial.showSessionCwd !== undefined) {
       this.showSessionCwd = partial.showSessionCwd !== false;
+    }
+    if (partial.showSessionGit !== undefined) {
+      this.showSessionGit = partial.showSessionGit !== false;
     }
     if (partial.showSessionActivity !== undefined) {
       this.showSessionActivity = partial.showSessionActivity !== false;
@@ -1231,6 +1253,11 @@ class App {
         s.question?.prompt || s.question?.text || '',
         snoozeKey,
         s.attentionAcknowledged ? '1' : '0',
+        s.stalled ? '1' : '0',
+        s.stalled && s.lastActivityAt
+          ? String(Math.round((Date.now() - Number(s.lastActivityAt)) / 60000))
+          : '0',
+        s.git?.branch || '',
         s.queueIndex || 0,
         s.queueTotal || 0
       ].join('\x1f');
@@ -1247,6 +1274,10 @@ class App {
       String(s.lastMessage || '').slice(0, 80),
       s.snoozed ? '1' : '0',
       s.attentionAcknowledged ? '1' : '0',
+      s.stalled ? '1' : '0',
+      s.stalled && s.lastActivityAt
+        ? String(Math.round((Date.now() - Number(s.lastActivityAt)) / 60000))
+        : '0',
       s.queueIndex || 0
     ].join('\x1f')).join('\x1e');
   }
@@ -1396,6 +1427,12 @@ class App {
               detail = `${agent} needs permission`;
             } else if (needsAttention.status === 'question') {
               detail = `${agent} asks a question`;
+            } else if (needsAttention.stalled) {
+              const at = Number(needsAttention.lastActivityAt || needsAttention.lastTime);
+              const mins = Number.isFinite(at) && at > 0
+                ? Math.max(1, Math.round((Date.now() - at) / 60000))
+                : 0;
+              detail = mins ? `stalled · ${agent} · ${mins}m` : `stalled · ${agent}`;
             } else {
               detail = `${agent} needs you`;
             }
@@ -1522,6 +1559,7 @@ class App {
       this.cardDensity,
       this.showSessionModel ? '1' : '0',
       this.showSessionCwd ? '1' : '0',
+      this.showSessionGit ? '1' : '0',
       this.showSessionActivity ? '1' : '0',
       this.autoCollapseFinished ? '1' : '0',
       this.sessionGroupBy,
@@ -1607,6 +1645,7 @@ class App {
       density: this.cardDensity,
       showModel: this.showSessionModel,
       showCwd: this.showSessionCwd,
+      showGit: this.showSessionGit,
       showActivity: this.showSessionActivity,
       agentLabel: labels.get(session.id)?.agentLabel || session.agent,
       projectLabel: labels.get(session.id)?.project || projectBase(session.cwd)
@@ -1848,6 +1887,14 @@ class App {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleDeny(sid);
+      });
+    });
+
+    list.querySelectorAll('.btn-always-allow').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        if (sid) this.handleAlwaysAllow(sid);
       });
     });
 

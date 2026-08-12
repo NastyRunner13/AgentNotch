@@ -318,7 +318,8 @@
   letter-spacing: -0.01em;
 }
 
-.session-cwd {
+.session-cwd,
+.session-git {
   display: inline-flex;
   align-items: center;
   padding: 1px 6px;
@@ -334,6 +335,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
   letter-spacing: -0.01em;
+}
+
+.session-git {
+  max-width: 140px;
 }
 
 /* Compact density — denser header, shorter name, quieter chips */
@@ -361,7 +366,8 @@
 }
 
 .session-card.density-compact .session-model,
-.session-card.density-compact .session-cwd {
+.session-card.density-compact .session-cwd,
+.session-card.density-compact .session-git {
   max-width: 80px;
   padding: 0 5px;
 }
@@ -1394,6 +1400,25 @@
   background: var(--bg-input);
   color: inherit;
   opacity: 0.75;
+}
+
+.btn-always-allow {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 4px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.btn-always-allow:hover {
+  color: var(--text-secondary);
 }
 
 /* ── Inline Ask (inside session card) ─────────────────── */

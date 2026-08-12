@@ -371,6 +371,10 @@
               <input type="checkbox" id="set-show-cwd" class="toggle" checked>
             </label>
             <label class="setting-row">
+              <span class="setting-label">Show git branch</span>
+              <input type="checkbox" id="set-show-git" class="toggle" checked>
+            </label>
+            <label class="setting-row">
               <span class="setting-label">Show activity line</span>
               <input type="checkbox" id="set-show-activity" class="toggle" checked>
             </label>
@@ -379,6 +383,16 @@
               <input type="checkbox" id="set-auto-collapse" class="toggle" checked>
             </label>
             <p class="settings-hint settings-hint-block">Finished sessions stay collapsed unless you open them.</p>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Stall after</span>
+              <select id="set-stall-after" class="setting-select" aria-label="Treat a working session as stalled after">
+                <option value="300000">5 minutes</option>
+                <option value="600000" selected>10 minutes</option>
+                <option value="900000">15 minutes</option>
+                <option value="0">Off</option>
+              </select>
+            </label>
+            <p class="settings-hint settings-hint-block">Working with no new activity becomes a quiet attention item. Sound stays off.</p>
 
             <h3 class="settings-heading">Dispatch</h3>
             <p class="settings-hint settings-hint-block">Defaults when starting a new session from the bar.</p>
@@ -422,6 +436,60 @@
               </div>
             </div>
             <p class="settings-hint" id="claude-hook-detail"></p>
+
+            <h3 class="settings-heading">Always-allow</h3>
+            <p class="settings-hint settings-hint-block">Remember Allow for the same Claude tool in the same project. Auto-allow is silent — the bar stays truthful.</p>
+            <label class="setting-row">
+              <span class="setting-label">Remember Allow for this tool + project</span>
+              <input type="checkbox" id="set-always-allow" class="toggle" checked>
+            </label>
+            <div class="setting-row setting-row-actions">
+              <span class="setting-label" id="always-allow-count">No remembered tools</span>
+              <div class="setting-actions">
+                <button type="button" id="btn-clear-always-allow" class="btn-settings-action secondary">Clear list</button>
+              </div>
+            </div>
+
+            <h3 class="settings-heading">Advanced</h3>
+            <p class="settings-hint settings-hint-block">Data roots and WSL. Empty path = platform default. WSL sessions are watched, answered, and dispatched via wsl.exe.</p>
+            <label class="setting-row" id="row-watch-wsl">
+              <span class="setting-label">Watch WSL home</span>
+              <input type="checkbox" id="set-watch-wsl" class="toggle" checked>
+            </label>
+            <label class="setting-row setting-row-control" id="row-wsl-distro">
+              <span class="setting-label">WSL distro</span>
+              <input type="text" id="set-wsl-distro" class="setting-text" placeholder="First usable distro…" aria-label="WSL distro name" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Claude data</span>
+              <input type="text" id="set-root-claude" class="setting-text" placeholder="~/.claude" aria-label="Claude data directory" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Codex data</span>
+              <input type="text" id="set-root-codex" class="setting-text" placeholder="~/.codex" aria-label="Codex data directory" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Grok data</span>
+              <input type="text" id="set-root-grok" class="setting-text" placeholder="~/.grok" aria-label="Grok data directory" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Antigravity data</span>
+              <input type="text" id="set-root-antigravity" class="setting-text" placeholder="~/.gemini" aria-label="Antigravity data directory" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">Cursor user data</span>
+              <input type="text" id="set-root-cursor" class="setting-text" placeholder="Cursor user data" aria-label="Cursor user data directory" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">OpenCode database</span>
+              <input type="text" id="set-root-opencode" class="setting-text" placeholder="opencode.db" aria-label="OpenCode database path" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="setting-row setting-row-actions">
+              <span class="setting-label">Reset data paths</span>
+              <div class="setting-actions">
+                <button type="button" id="btn-reset-roots" class="btn-settings-action secondary">Reset</button>
+              </div>
+            </div>
 
             <div class="settings-footer">
               <img class="settings-brand" src="../../assets/icons/agent-notch-mark.png" alt="" draggable="false" />

@@ -77,6 +77,9 @@ contextBridge.exposeInMainWorld('agentNotch', {
   installClaudePermissionHook: () => ipcRenderer.invoke('install-claude-permission-hook'),
   uninstallClaudePermissionHook: () => ipcRenderer.invoke('uninstall-claude-permission-hook'),
   getClaudePermissionHookStatus: () => ipcRenderer.invoke('get-claude-permission-hook-status'),
+  rememberAlwaysAllow: (sessionId) => ipcRenderer.invoke('remember-always-allow', sessionId),
+  getPermissionMemory: () => ipcRenderer.invoke('get-permission-memory'),
+  clearPermissionMemory: () => ipcRenderer.invoke('clear-permission-memory'),
 
   // Platform / app info
   getPlatform: () => ipcRenderer.invoke('get-platform'),

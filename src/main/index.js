@@ -9,6 +9,7 @@ const {
   normalizeNotchAlign,
   filterLimitAlertsForDelivery
 } = require('./attention-policy');
+const { notificationActionsFor } = require('./notification-actions');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
 installConsoleCapture();
@@ -439,6 +440,34 @@ function playAttentionAlert() {
   }
 }
 
+function handleNotificationAction(action, session) {
+  if (!agentManager || !action || !session || !session.id) return;
+  // Allow / Deny / Snooze / Answer / Jump must not expand the panel.
+  // `open` is an explicit user "open the notch" action.
+  switch (action.id) {
+    case 'allow':
+      Promise.resolve(agentManager.approvePermission(session.id)).catch(() => {});
+      break;
+    case 'deny':
+      Promise.resolve(agentManager.denyPermission(session.id)).catch(() => {});
+      break;
+    case 'snooze':
+      agentManager.snoozeSession(session.id, '15m');
+      break;
+    case 'jump':
+      Promise.resolve(agentManager.jumpToTerminal(session.id)).catch(() => {});
+      break;
+    case 'answer':
+      Promise.resolve(agentManager.answerQuestion(session.id, action.answer)).catch(() => {});
+      break;
+    case 'open':
+      showAndExpand();
+      break;
+    default:
+      break;
+  }
+}
+
 function showAttentionNotification(sessions) {
   if (!Notification.isSupported()) return;
   const first = sessions[0];
@@ -448,15 +477,23 @@ function showAttentionNotification(sessions) {
     ? `${first.agent} needs permission`
     : first.status === 'question'
       ? `${first.agent} has a question`
-      : `${first.agent} needs attention`;
+      : first.stalled
+        ? `${first.agent} looks stalled`
+        : `${first.agent} needs attention`;
 
+  const actions = notificationActionsFor(first);
   const n = new Notification({
     title: 'AgentNotch',
     body: `${title}: ${first.taskName || 'Session'}`,
-    silent: true // we handle sound separately
+    silent: true, // we handle sound separately
+    actions: actions.map((a) => ({ type: 'button', text: a.text }))
   });
   n.on('click', () => {
     showAndExpand();
+  });
+  n.on('action', (_event, index) => {
+    const action = actions[index];
+    if (action) handleNotificationAction(action, first);
   });
   n.show();
 }
@@ -537,7 +574,8 @@ app.whenReady().then(() => {
     const hasAttention = sessions.some(s =>
       s.status === 'needs-attention' ||
       s.status === 'permission-request' ||
-      s.status === 'question'
+      s.status === 'question' ||
+      s.stalled
     );
     const hasWorking = sessions.some(s => s.status === 'working');
     const activeCount = sessions.filter(s => s.status !== 'stopped').length;
@@ -811,6 +849,19 @@ app.whenReady().then(() => {
 
   ipcMain.handle('get-claude-permission-hook-status', () => {
     return agentManager.getClaudePermissionHookStatus();
+  });
+
+  ipcMain.handle('remember-always-allow', (_, sessionId) => {
+    validateSessionId(sessionId);
+    return agentManager.rememberAlwaysAllow(sessionId);
+  });
+
+  ipcMain.handle('get-permission-memory', () => {
+    return agentManager.getPermissionMemory();
+  });
+
+  ipcMain.handle('clear-permission-memory', () => {
+    return agentManager.clearPermissionMemory();
   });
 
   ipcMain.handle('get-platform', () => {

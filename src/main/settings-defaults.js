@@ -53,9 +53,30 @@ const DEFAULT_SETTINGS = {
   cardDensity: 'comfortable', // 'compact' | 'comfortable'
   showSessionModel: true,
   showSessionCwd: true,
+  showSessionGit: true, // branch / worktree chip
   showSessionActivity: true, // status/activity line on the collapsed card
   autoCollapseFinished: true, // keep finished sessions collapsed by default
   sessionGroupBy: 'status', // 'status' | 'agent' | 'project'
+
+  // Always-allow remembered Claude tool+project pairs
+  alwaysAllowEnabled: true,
+
+  // Custom agent data roots ('' = platform default)
+  agentRoots: {
+    claude: '',
+    codex: '',
+    cursor: '',
+    antigravity: '',
+    grok: '',
+    opencode: ''
+  },
+
+  // WSL (Windows): also watch \\\\wsl$\\<distro>\\home\\... when present
+  watchWsl: true,
+  wslDistro: '', // '' = first non-docker distro from wsl.exe -l -q
+
+  // Stall: working with no new activity → soft attention. 0 = off.
+  stallAfterMs: 600000,
 
   // Dispatch defaults for "new session"
   defaultDispatchAgent: '', // '' = auto, else 'Claude Code' | 'Codex' | 'Grok' | 'OpenCode'

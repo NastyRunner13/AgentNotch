@@ -18,9 +18,23 @@ const MASTER_TOGGLES = {
   'set-limit-notify-crit': 'notifyOnLimitCrit',
   'set-show-model': 'showSessionModel',
   'set-show-cwd': 'showSessionCwd',
+  'set-show-git': 'showSessionGit',
   'set-show-activity': 'showSessionActivity',
-  'set-auto-collapse': 'autoCollapseFinished'
+  'set-auto-collapse': 'autoCollapseFinished',
+  'set-always-allow': 'alwaysAllowEnabled',
+  'set-watch-wsl': 'watchWsl'
 };
+
+const ROOT_FIELDS = {
+  'set-root-claude': 'claude',
+  'set-root-codex': 'codex',
+  'set-root-cursor': 'cursor',
+  'set-root-antigravity': 'antigravity',
+  'set-root-grok': 'grok',
+  'set-root-opencode': 'opencode'
+};
+
+const STALL_PRESETS = [0, 300000, 600000, 900000];
 
 /** Element id → mute agent id (settings.mutedAgents) */
 const MUTE_TOGGLES = {
@@ -72,8 +86,10 @@ export function initSettings(app) {
     }).catch(() => {});
 
     refreshClaudeHookStatus();
+    refreshAlwaysAllowCount();
     refreshDisplays();
     refreshHotkeyInfo();
+    hideWslRowsIfNeeded();
 
     if (window.agentNotch.onDisplaysChanged) {
       window.agentNotch.onDisplaysChanged(() => refreshDisplays());
@@ -285,6 +301,79 @@ export function initSettings(app) {
       }
     });
   }
+
+  const stallEl = document.getElementById('set-stall-after');
+  if (stallEl) {
+    stallEl.addEventListener('change', () => {
+      persistSettings({ stallAfterMs: Number(stallEl.value) || 0 }, app);
+    });
+  }
+
+  const wslDistroEl = document.getElementById('set-wsl-distro');
+  if (wslDistroEl) {
+    let t = null;
+    const save = () => persistSettings({ wslDistro: String(wslDistroEl.value || '').trim() }, app);
+    wslDistroEl.addEventListener('change', save);
+    wslDistroEl.addEventListener('blur', save);
+    wslDistroEl.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(save, 700);
+    });
+  }
+
+  for (const [elId, rootKey] of Object.entries(ROOT_FIELDS)) {
+    const el = document.getElementById(elId);
+    if (!el) continue;
+    let t = null;
+    const save = async () => {
+      const current = await window.agentNotch.getSettings().catch(() => null);
+      const roots = { ...(current?.agentRoots || {}) };
+      roots[rootKey] = String(el.value || '').trim();
+      persistSettings({ agentRoots: roots }, app);
+    };
+    el.addEventListener('change', save);
+    el.addEventListener('blur', save);
+    el.addEventListener('input', () => {
+      clearTimeout(t);
+      t = setTimeout(save, 700);
+    });
+  }
+
+  const resetRootsBtn = document.getElementById('btn-reset-roots');
+  if (resetRootsBtn) {
+    resetRootsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      persistSettings({
+        agentRoots: {
+          claude: '',
+          codex: '',
+          cursor: '',
+          antigravity: '',
+          grok: '',
+          opencode: ''
+        }
+      }, app).then(() => {
+        if (app?.showToast) app.showToast('Data paths reset', 'ok');
+      });
+    });
+  }
+
+  const clearAllowBtn = document.getElementById('btn-clear-always-allow');
+  if (clearAllowBtn) {
+    clearAllowBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (!window.agentNotch?.clearPermissionMemory) return;
+      try {
+        const res = await window.agentNotch.clearPermissionMemory();
+        await refreshAlwaysAllowCount();
+        if (app?.showToast) {
+          app.showToast(res?.message || 'Always-allow list cleared', 'ok');
+        }
+      } catch (err) {
+        if (app?.showToast) app.showToast(err.message || 'Clear failed', 'error');
+      }
+    });
+  }
 }
 
 export function openSettingsView(app) {
@@ -292,6 +381,7 @@ export function openSettingsView(app) {
   app.switchView('settings');
   document.querySelectorAll('.ntab:not(.ntab-icon)').forEach((t) => t.classList.remove('active'));
   refreshClaudeHookStatus();
+  refreshAlwaysAllowCount();
   refreshDisplays();
   refreshHotkeyInfo();
   if (window.agentNotch) {
@@ -416,6 +506,34 @@ function applySettings(settings) {
   const defCwdEl = document.getElementById('set-default-project-cwd');
   if (defCwdEl && settings.defaultProjectCwd !== undefined) {
     defCwdEl.value = settings.defaultProjectCwd || '';
+  }
+
+  const stallEl = document.getElementById('set-stall-after');
+  if (stallEl && settings.stallAfterMs != null) {
+    const ms = Number(settings.stallAfterMs);
+    let best = 600000;
+    let bestDiff = Infinity;
+    for (const p of STALL_PRESETS) {
+      const d = Math.abs(p - ms);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = p;
+      }
+    }
+    stallEl.value = String(best);
+  }
+
+  const wslDistroEl = document.getElementById('set-wsl-distro');
+  if (wslDistroEl && settings.wslDistro !== undefined) {
+    wslDistroEl.value = settings.wslDistro || '';
+  }
+
+  const roots = settings.agentRoots && typeof settings.agentRoots === 'object'
+    ? settings.agentRoots
+    : {};
+  for (const [elId, rootKey] of Object.entries(ROOT_FIELDS)) {
+    const el = document.getElementById(elId);
+    if (el) el.value = roots[rootKey] || '';
   }
 
   // Dim matrix when masters off
@@ -638,5 +756,35 @@ async function refreshClaudeHookStatus() {
   } catch {
     statusEl.textContent = 'Could not read hook status';
     statusEl.dataset.state = 'off';
+  }
+}
+
+async function refreshAlwaysAllowCount() {
+  const el = document.getElementById('always-allow-count');
+  if (!el || !window.agentNotch?.getPermissionMemory) return;
+  try {
+    const mem = await window.agentNotch.getPermissionMemory();
+    const n = Number(mem?.count) || 0;
+    el.textContent = n === 0
+      ? 'No remembered tools'
+      : n === 1
+        ? '1 remembered tool'
+        : `${n} remembered tools`;
+  } catch {
+    el.textContent = 'No remembered tools';
+  }
+}
+
+async function hideWslRowsIfNeeded() {
+  if (!window.agentNotch?.getPlatform) return;
+  try {
+    const platform = await window.agentNotch.getPlatform();
+    const hide = platform !== 'win32';
+    for (const id of ['row-watch-wsl', 'row-wsl-distro']) {
+      const el = document.getElementById(id);
+      if (el) el.hidden = hide;
+    }
+  } catch {
+    // keep visible
   }
 }
