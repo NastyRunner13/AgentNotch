@@ -21,13 +21,28 @@ const { UsageTracker, dayKey } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
 const { buildInsights } = require('./insights');
 const permissionBridge = require('./permission-bridge');
+const permissionMemory = require('./permission-memory');
+const {
+  normalizeAgentRoots,
+  probeWsl,
+  resolveAgentWatchTargets,
+  wslUncPath,
+  toWindowsReadablePath,
+  toLinuxCwd,
+  isLinuxCwd,
+  isWslBackedSession
+} = require('./agent-paths');
+const { readGitContext } = require('./git-context');
+const { parseTaggedSessionId } = require('./watchers/session-utils');
 const {
   normalizeNotchAlign,
   clampAutohideDelayMs,
   createSnoozeEntry,
   isSnoozeActive,
   normalizeMutedAgents,
-  isAttentionStatus,
+  isSessionAttention,
+  isStalled,
+  normalizeStallAfterMs,
   attentionEpisodeKey,
   isAttentionEpisodeAcknowledged,
   compareSessionsByAttention,
@@ -92,15 +107,11 @@ class AgentManager extends EventEmitter {
     this._migrateAttentionSettings();
     this._normalizeNotchSettings();
 
-    const poll = this.settings.pollInterval || 3000;
-    this.watchers = {
-      claude: new ClaudeWatcher({ pollInterval: poll }),
-      codex: new CodexWatcher({ pollInterval: poll }),
-      cursor: new CursorWatcher({ pollInterval: Math.max(poll, 5000) }),
-      antigravity: new AntigravityWatcher({ pollInterval: poll }),
-      grok: new GrokWatcher({ pollInterval: poll }),
-      opencode: new OpencodeWatcher({ pollInterval: poll })
-    };
+    /** @type {{ distro: string, linuxHome: string }|null} */
+    this._wslInfo = null;
+    this._wslProbed = false;
+    this.watchers = {};
+    this._createWatchers();
 
     // Session history
     this._historyPath = path.join(os.homedir(), '.agent-notch', 'history.json');
@@ -143,8 +154,103 @@ class AgentManager extends EventEmitter {
     this._permissionWatcher = null;
     /** @type {Set<string>} pending request ids already used for attention emit */
     this._knownPendingIds = new Set();
+    this._permissionMemoryPath = permissionMemory.defaultMemoryPath();
+  }
 
-    // Forward session updates from all watchers
+  _probeWslCached() {
+    if (this._wslProbed) return this._wslInfo;
+    this._wslProbed = true;
+    if (process.platform !== 'win32' || this.settings.watchWsl === false) {
+      this._wslInfo = null;
+      this._configurePermissionRoots();
+      return null;
+    }
+    this._wslInfo = probeWsl({ preferred: this.settings.wslDistro });
+    this._configurePermissionRoots();
+    return this._wslInfo;
+  }
+
+  /** Watch Windows + WSL `~/.agent-notch/permissions` so WSL Claude Allow works. */
+  _configurePermissionRoots() {
+    const extra = [];
+    const wsl = this._wslInfo;
+    if (wsl && wsl.distro && wsl.linuxHome) {
+      extra.push(wslUncPath(wsl.distro, wsl.linuxHome, '.agent-notch'));
+    }
+    permissionBridge.setExtraAgentNotchHomes(extra);
+  }
+
+  /**
+   * Build / rebuild watcher instances from settings (custom roots + WSL extra).
+   * Extra WSL watchers use sourceTag `wsl` so session ids do not collide.
+   */
+  _createWatchers() {
+    if (this.watchers) {
+      for (const watcher of Object.values(this.watchers)) {
+        try { watcher.stop(); } catch { /* ignore */ }
+        try { watcher.removeAllListeners(); } catch { /* ignore */ }
+      }
+    }
+
+    const poll = this.settings.pollInterval || 3000;
+    const resolved = resolveAgentWatchTargets(this.settings, {
+      wsl: this._probeWslCached()
+    });
+    const t = resolved.targets;
+    const home = os.homedir();
+
+    const cursorUserData = t.cursor.primary;
+    const cursorPaths = {
+      globalDb: path.join(cursorUserData, 'User', 'globalStorage', 'state.vscdb'),
+      workspaceRoot: path.join(cursorUserData, 'User', 'workspaceStorage'),
+      projectsRoot: path.join(home, '.cursor', 'projects')
+    };
+
+    this.watchers = {
+      claude: new ClaudeWatcher({ pollInterval: poll, claudeDir: t.claude.primary }),
+      codex: new CodexWatcher({ pollInterval: poll, codexDir: t.codex.primary }),
+      cursor: new CursorWatcher({ pollInterval: Math.max(poll, 5000), paths: cursorPaths }),
+      antigravity: new AntigravityWatcher({ pollInterval: poll, geminiDir: t.antigravity.primary }),
+      grok: new GrokWatcher({ pollInterval: poll, grokDir: t.grok.primary }),
+      opencode: new OpencodeWatcher({ pollInterval: poll, dbPath: t.opencode.primary })
+    };
+
+    if (t.claude.extra[0]) {
+      this.watchers.claudeWsl = new ClaudeWatcher({
+        pollInterval: poll,
+        claudeDir: t.claude.extra[0],
+        sourceTag: 'wsl'
+      });
+    }
+    if (t.codex.extra[0]) {
+      this.watchers.codexWsl = new CodexWatcher({
+        pollInterval: poll,
+        codexDir: t.codex.extra[0],
+        sourceTag: 'wsl'
+      });
+    }
+    if (t.grok.extra[0]) {
+      this.watchers.grokWsl = new GrokWatcher({
+        pollInterval: poll,
+        grokDir: t.grok.extra[0],
+        sourceTag: 'wsl'
+      });
+    }
+    if (t.antigravity.extra[0]) {
+      this.watchers.antigravityWsl = new AntigravityWatcher({
+        pollInterval: poll,
+        geminiDir: t.antigravity.extra[0],
+        sourceTag: 'wsl'
+      });
+    }
+    if (t.opencode.extra[0]) {
+      this.watchers.opencodeWsl = new OpencodeWatcher({
+        pollInterval: poll,
+        dbPath: t.opencode.extra[0],
+        sourceTag: 'wsl'
+      });
+    }
+
     for (const watcher of Object.values(this.watchers)) {
       watcher.on('session-update', () => {
         this._scheduleEmit();
@@ -152,13 +258,27 @@ class AgentManager extends EventEmitter {
     }
   }
 
+  _applyWatcherEnabled() {
+    const map = {
+      enableClaude: ['claude', 'claudeWsl'],
+      enableCodex: ['codex', 'codexWsl'],
+      enableCursor: ['cursor'],
+      enableAntigravity: ['antigravity', 'antigravityWsl'],
+      enableGrok: ['grok', 'grokWsl'],
+      enableOpencode: ['opencode', 'opencodeWsl']
+    };
+    for (const [setting, keys] of Object.entries(map)) {
+      for (const key of keys) {
+        const watcher = this.watchers[key];
+        if (!watcher) continue;
+        if (this.settings[setting]) watcher.start();
+        else watcher.stop();
+      }
+    }
+  }
+
   start() {
-    if (this.settings.enableClaude) this.watchers.claude.start();
-    if (this.settings.enableCodex) this.watchers.codex.start();
-    if (this.settings.enableCursor) this.watchers.cursor.start();
-    if (this.settings.enableAntigravity) this.watchers.antigravity.start();
-    if (this.settings.enableGrok) this.watchers.grok.start();
-    if (this.settings.enableOpencode) this.watchers.opencode.start();
+    this._applyWatcherEnabled();
 
     // Keep bridge script fresh for Claude PermissionRequest hooks
     try {
@@ -177,6 +297,8 @@ class AgentManager extends EventEmitter {
 
     // Periodically archive stale sessions to history
     this._archiveTimer = setInterval(() => this._archiveStale(), 30000);
+    // Re-annotate stall even when watchers have nothing new to emit
+    this._stallTimer = setInterval(() => this._scheduleEmit(), 15000);
     // Usage limits refresh (local file reads)
     this._usageTimer = setInterval(() => this._refreshUsageLimits(), 15000);
     // One-shot usage backfill from on-disk session files (dashboard history)
@@ -239,6 +361,10 @@ class AgentManager extends EventEmitter {
       clearInterval(this._usageTimer);
       this._usageTimer = null;
     }
+    if (this._stallTimer) {
+      clearInterval(this._stallTimer);
+      this._stallTimer = null;
+    }
     if (this._backfillTimer) {
       clearTimeout(this._backfillTimer);
       this._backfillTimer = null;
@@ -255,9 +381,15 @@ class AgentManager extends EventEmitter {
   _startPermissionWatcher() {
     this._stopPermissionWatcher();
     try {
+      this._configurePermissionRoots();
       permissionBridge.ensureDirs();
-      const dir = permissionBridge.pendingDir();
-      this._permissionWatcher = chokidar.watch(dir, {
+      const dirs = permissionBridge.allAgentNotchHomes()
+        .map((home) => permissionBridge.pendingDir(home))
+        .filter((dir) => {
+          try { return fs.existsSync(dir); } catch { return false; }
+        });
+      if (dirs.length === 0) dirs.push(permissionBridge.pendingDir());
+      this._permissionWatcher = chokidar.watch(dirs, {
         ignoreInitial: false,
         depth: 0,
         awaitWriteFinish: { stabilityThreshold: 80, pollInterval: 50 }
@@ -294,18 +426,23 @@ class AgentManager extends EventEmitter {
     }
 
     const newly = pending.filter((p) => !this._knownPendingIds.has(p.id));
+    const stillNew = [];
     for (const p of newly) {
       this._knownPendingIds.add(p.id);
+      if (this.settings.alwaysAllowEnabled !== false && this._autoAllowPending(p)) {
+        continue;
+      }
+      stillNew.push(p);
     }
 
     this._scheduleEmit();
 
-    if (newly.length > 0) {
+    if (stillNew.length > 0) {
       // Build lightweight session-shaped objects for notifications
       const sessions = this.getSessions().filter((s) => s.remoteApprove && s.status === 'permission-request');
       const attention = sessions.length
-        ? sessions.filter((s) => newly.some((p) => p.notchSessionId === s.id || s.permissionRequest?.requestId === p.id))
-        : newly.map((p) => ({
+        ? sessions.filter((s) => stillNew.some((p) => p.notchSessionId === s.id || s.permissionRequest?.requestId === p.id))
+        : stillNew.map((p) => ({
           id: p.notchSessionId || `claude-pending-${p.id}`,
           agent: 'Claude Code',
           taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
@@ -351,7 +488,7 @@ class AgentManager extends EventEmitter {
       seen.add(session.id);
       const prev = this._prevStatus.get(session.id);
 
-      if (isAttentionStatus(session.status)) {
+      if (isSessionAttention(session)) {
         const key = attentionEpisodeKey(session) || session.status;
         currentEpisodes.set(session.id, key);
         // Interrupt only for unacked queue items; keep episode map when
@@ -571,11 +708,86 @@ class AgentManager extends EventEmitter {
     // Merge Claude PermissionRequest hook pendings (true remote approve)
     const merged = permissionBridge.mergePendingIntoSessions(all);
 
-    // Annotate snooze + attention-ack, then sort (active queue first)
-    const annotated = merged.map((session) => this._withAttentionMeta(this._withSnooze(session)));
+    // Annotate snooze + stall + git + attention-ack, then sort (active queue first)
+    const now = Date.now();
+    const stallAfter = this.settings.stallAfterMs;
+    const annotated = merged.map((session) => {
+      let s = this._withSnooze(session);
+      s = { ...s, stalled: isStalled(s, now, stallAfter) };
+      if (s.cwd) {
+        const resolved = toWindowsReadablePath(s.cwd, this._wslInfo);
+        if (resolved && resolved !== s.cwd) {
+          s = { ...s, cwdResolved: resolved };
+        }
+        const git = readGitContext(resolved || s.cwd);
+        if (git) s = { ...s, git };
+      }
+      return this._withAttentionMeta(s);
+    });
     annotated.sort(compareSessionsByAttention);
     annotateAttentionQueue(annotated);
     return annotated;
+  }
+
+  _autoAllowPending(pending) {
+    try {
+      const store = permissionMemory.load(this._permissionMemoryPath);
+      const hit = permissionMemory.matches(store, {
+        agent: 'claude',
+        tool: pending.tool,
+        cwd: pending.cwd
+      });
+      if (!hit) return false;
+      const res = permissionBridge.submitDecision(pending.id, 'allow', 'always-allow');
+      return Boolean(res && res.success);
+    } catch {
+      return false;
+    }
+  }
+
+  rememberAlwaysAllow(sessionId) {
+    const session = this.getSessions().find((s) => s.id === sessionId);
+    if (!session) return { success: false, message: 'Session not found' };
+    const pr = session.permissionRequest;
+    if (!pr || !session.remoteApprove) {
+      return { success: false, message: 'No remote permission to remember' };
+    }
+    const entry = permissionMemory.normalizeEntry({
+      agent: session.agent,
+      tool: pr.tool,
+      cwd: session.cwd || pr.filePath
+    });
+    if (!entry) {
+      return { success: false, message: 'Need a tool and project folder to remember' };
+    }
+    const store = permissionMemory.remember(
+      permissionMemory.load(this._permissionMemoryPath),
+      entry
+    );
+    permissionMemory.save(store, this._permissionMemoryPath);
+    const allowed = this.approvePermission(sessionId);
+    return {
+      success: Boolean(allowed && allowed.success),
+      remote: Boolean(allowed && allowed.remote),
+      remembered: true,
+      message: allowed && allowed.success
+        ? `Always allow ${pr.tool} in ${entry.project}`
+        : (allowed && allowed.message) || 'Remembered — approve failed',
+      entry
+    };
+  }
+
+  getPermissionMemory() {
+    const store = permissionMemory.load(this._permissionMemoryPath);
+    return {
+      count: store.entries.length,
+      entries: store.entries
+    };
+  }
+
+  clearPermissionMemory() {
+    permissionMemory.save(permissionMemory.clearAll(), this._permissionMemoryPath);
+    return { success: true, message: 'Always-allow list cleared', count: 0 };
   }
 
   /**
@@ -590,7 +802,7 @@ class AgentManager extends EventEmitter {
     const key = attentionEpisodeKey(session);
     const ackedKey = this._attentionAcks.get(session.id);
 
-    if (!isAttentionStatus(session.status)) {
+    if (!isSessionAttention(session)) {
       if (ackedKey != null) this._attentionAcks.delete(session.id);
       if (session.attentionAcknowledged || session.attentionEpisodeKey != null) {
         return {
@@ -726,7 +938,7 @@ class AgentManager extends EventEmitter {
     if (!session) {
       return { success: false, message: 'Session not found' };
     }
-    if (!isAttentionStatus(session.status)) {
+    if (!isSessionAttention(session)) {
       return { success: false, message: 'Session is not waiting for you' };
     }
     const key = attentionEpisodeKey(session);
@@ -829,8 +1041,18 @@ class AgentManager extends EventEmitter {
     this.settings.sessionGroupBy = ['status', 'agent', 'project'].includes(groupBy) ? groupBy : 'status';
     this.settings.showSessionModel = this.settings.showSessionModel !== false;
     this.settings.showSessionCwd = this.settings.showSessionCwd !== false;
+    this.settings.showSessionGit = this.settings.showSessionGit !== false;
     this.settings.showSessionActivity = this.settings.showSessionActivity !== false;
     this.settings.autoCollapseFinished = this.settings.autoCollapseFinished !== false;
+    this.settings.alwaysAllowEnabled = this.settings.alwaysAllowEnabled !== false;
+    this.settings.agentRoots = normalizeAgentRoots(this.settings.agentRoots);
+    this.settings.watchWsl = this.settings.watchWsl !== false;
+    if (typeof this.settings.wslDistro !== 'string') {
+      this.settings.wslDistro = '';
+    } else {
+      this.settings.wslDistro = this.settings.wslDistro.trim().slice(0, 64);
+    }
+    this.settings.stallAfterMs = normalizeStallAfterMs(this.settings.stallAfterMs);
 
     // Dispatch defaults
     const allowedAgents = new Set(['', 'Claude Code', 'Codex', 'Grok', 'OpenCode']);
@@ -857,22 +1079,28 @@ class AgentManager extends EventEmitter {
    * Which agent data roots exist on disk (for empty-state / settings UI).
    */
   getAgentDetection() {
-    const home = os.homedir();
     const exists = (p) => {
       try { return fs.existsSync(p); } catch { return false; }
     };
-    const opencodeDbPaths = [
-      path.join(home, '.local', 'share', 'opencode', 'opencode.db'),
-      process.env.APPDATA ? path.join(process.env.APPDATA, 'opencode', 'opencode.db') : null,
-      process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'opencode', 'opencode.db') : null
-    ].filter(Boolean);
+    const resolved = resolveAgentWatchTargets(this.settings, {
+      exists,
+      wsl: this._probeWslCached()
+    });
+    const t = resolved.targets;
+    const any = (...parts) => parts.filter(Boolean).some(exists);
     return {
-      claude: exists(path.join(home, '.claude', 'projects')),
-      codex: exists(path.join(home, '.codex', 'sessions')),
-      cursor: true, // process + local composer DB / transcripts
-      antigravity: exists(path.join(home, '.gemini', 'antigravity-ide', 'brain')),
-      grok: exists(path.join(home, '.grok', 'sessions')),
-      opencode: opencodeDbPaths.some(exists)
+      claude: any(t.claude.primary, path.join(t.claude.primary, 'projects'), ...t.claude.extra),
+      codex: any(t.codex.primary, path.join(t.codex.primary, 'sessions'), ...t.codex.extra),
+      cursor: true,
+      antigravity: any(
+        t.antigravity.primary,
+        path.join(t.antigravity.primary, 'antigravity-ide', 'brain'),
+        ...t.antigravity.extra
+      ),
+      grok: any(t.grok.primary, path.join(t.grok.primary, 'sessions'), ...t.grok.extra),
+      opencode: any(t.opencode.primary, ...t.opencode.extra),
+      wsl: Boolean(resolved.wslDistro),
+      wslDistro: resolved.wslDistro || ''
     };
   }
 
@@ -889,6 +1117,11 @@ class AgentManager extends EventEmitter {
       if (key === 'mutedAgents') {
         if (!Array.isArray(newSettings[key])) continue;
         safeUpdate[key] = normalizeMutedAgents(newSettings[key]);
+        continue;
+      }
+      if (key === 'agentRoots') {
+        if (!newSettings[key] || typeof newSettings[key] !== 'object' || Array.isArray(newSettings[key])) continue;
+        safeUpdate[key] = normalizeAgentRoots(newSettings[key]);
         continue;
       }
       if (typeof newSettings[key] !== typeof DEFAULT_SETTINGS[key]) continue;
@@ -922,23 +1155,15 @@ class AgentManager extends EventEmitter {
     this._normalizeNotchSettings();
     this._persistSettings();
 
-    // Toggle watchers based on settings
-    const watcherMap = {
-      enableClaude: 'claude',
-      enableCodex: 'codex',
-      enableCursor: 'cursor',
-      enableAntigravity: 'antigravity',
-      enableGrok: 'grok',
-      enableOpencode: 'opencode'
-    };
-
-    for (const [setting, watcherKey] of Object.entries(watcherMap)) {
-      if (this.settings[setting]) {
-        this.watchers[watcherKey].start();
-      } else {
-        this.watchers[watcherKey].stop();
-      }
+    const pathKeys = ['agentRoots', 'watchWsl', 'wslDistro'];
+    const pathsChanged = pathKeys.some((k) => Object.prototype.hasOwnProperty.call(safeUpdate, k));
+    if (pathsChanged) {
+      this._wslProbed = false;
+      this._createWatchers();
+      this._startPermissionWatcher();
     }
+
+    this._applyWatcherEnabled();
 
     // Apply poll interval to all watchers
     if (newSettings.pollInterval !== undefined) {
@@ -1086,8 +1311,8 @@ class AgentManager extends EventEmitter {
         cwd: entry.cwd,
         resumeId: entry.resumeId || null
       };
-      const cmd = buildResumeCommand(sessionLike, text);
-      if (!cmd || !cmd.cwd || !isDirectory(cmd.cwd)) {
+      const cmd = planDispatchCommand(buildResumeCommand(sessionLike, text), sessionLike, this._wslInfo);
+      if (!canRunDispatch(cmd)) {
         target = resolveHistoryResumeTarget(entry, {
           liveIds,
           isDirectory,
@@ -1134,7 +1359,7 @@ class AgentManager extends EventEmitter {
 
     // focus
     try {
-      const focused = await focusAgentApp(entry.agent);
+      const focused = await focusAgentApp(entry.agent, this._focusOpts(entry));
       return {
         success: focused,
         message: focused
@@ -1297,10 +1522,33 @@ class AgentManager extends EventEmitter {
 
   installClaudePermissionHook() {
     try {
-      return permissionBridge.installClaudeHook();
+      this._configurePermissionRoots();
+      const local = permissionBridge.installClaudeHook();
+      const wsl = this._installWslClaudeHook();
+      if (wsl && wsl.success) {
+        return {
+          ...local,
+          wsl: true,
+          message: `${local.message} Also installed in WSL (${this._wslInfo.distro}).`
+        };
+      }
+      return local;
     } catch (err) {
       return { success: false, message: err.message || 'Install failed' };
     }
+  }
+
+  _installWslClaudeHook() {
+    const wsl = this._probeWslCached();
+    if (!wsl || process.platform !== 'win32') return null;
+    const homeUnc = wslUncPath(wsl.distro, wsl.linuxHome);
+    if (!homeUnc) return null;
+    const posix = path.posix;
+    return permissionBridge.installClaudeHookAt({
+      settingsPath: path.join(homeUnc, '.claude', 'settings.json'),
+      bridgePath: path.join(homeUnc, '.agent-notch', 'bin', permissionBridge.HOOK_MARKER),
+      hookArgPath: posix.join(wsl.linuxHome, '.agent-notch', 'bin', permissionBridge.HOOK_MARKER)
+    });
   }
 
   uninstallClaudePermissionHook() {
@@ -1327,14 +1575,60 @@ class AgentManager extends EventEmitter {
   }
 
   async answerQuestion(sessionId, answer) {
+    const text = String(answer || '').trim();
+    if (!text) {
+      return { success: false, message: 'Answer is empty' };
+    }
+
+    const session = this.getSessions().find((s) => s.id === sessionId);
+    if (!session) {
+      return { success: false, message: 'Session not found — it may have already ended.' };
+    }
+
+    const cmd = planDispatchCommand(buildResumeCommand(session, text), session, this._wslInfo);
+    if (canRunDispatch(cmd)) {
+      try {
+        await runHeadlessResume(cmd);
+        this._scheduleEmit();
+        const agentShort = session.agent === 'Claude Code' ? 'Claude' : session.agent;
+        const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
+        const shortTask = task.length > 36 ? `${task.slice(0, 35)}…` : task;
+        return {
+          success: true,
+          message: `Answered · ${agentShort} · ${shortTask}`,
+          remote: true,
+          landed: true,
+          sessionId: session.id,
+          answer: text
+        };
+      } catch (err) {
+        return {
+          success: false,
+          message: err.message || `Failed to answer ${session.agent}`,
+          remote: false,
+          answer: text
+        };
+      }
+    }
+
     const result = await this.jumpToTerminal(sessionId);
     return {
       success: result.success,
       message: result.success
-        ? `Opened agent — answer there${answer ? ` (suggested: ${String(answer).slice(0, 80)})` : ''}. Remote answer is not supported yet.`
+        ? `Opened agent — answer there${text ? ` (suggested: ${text.slice(0, 80)})` : ''}.`
         : result.message,
       focused: result.success,
-      answer
+      remote: false,
+      answer: text
+    };
+  }
+
+  _focusOpts(session) {
+    const wsl = this._wslInfo;
+    const linux = Boolean(session && isLinuxCwd(session.cwd));
+    return {
+      linuxCwd: linux,
+      wslDistro: linux && wsl ? wsl.distro : ''
     };
   }
 
@@ -1343,7 +1637,7 @@ class AgentManager extends EventEmitter {
     if (!session) return { success: false, message: 'Session not found' };
 
     try {
-      const focused = await focusAgentApp(session.agent);
+      const focused = await focusAgentApp(session.agent, this._focusOpts(session));
       if (focused) {
         return { success: true, message: `Focused ${session.agent}` };
       }
@@ -1381,14 +1675,14 @@ class AgentManager extends EventEmitter {
       return { success: false, message: 'Session not found — it may have already ended.' };
     }
 
-    const cmd = buildResumeCommand(session, text);
+    const cmd = planDispatchCommand(buildResumeCommand(session, text), session, this._wslInfo);
     if (!cmd) {
       return {
         success: false,
         message: `${session.agent} sessions can't receive dispatched messages.`
       };
     }
-    if (!cmd.cwd || !isDirectory(cmd.cwd)) {
+    if (!canRunDispatch(cmd)) {
       return {
         success: false,
         message: 'Session directory unknown — cannot resume this session yet.'
@@ -1494,12 +1788,14 @@ const lastFocusedByAgent = new Map();
  * @param {string} agentName
  * @returns {Promise<boolean>}
  */
-function focusAgentApp(agentName) {
+function focusAgentApp(agentName, opts = {}) {
   return new Promise((resolve) => {
     const mapping = AGENT_APP_MAP[agentName];
     const platform = process.platform;
     const remembered = lastFocusedByAgent.get(agentName);
     const prefPid = remembered && Number.isFinite(remembered.pid) ? remembered.pid : 0;
+    const wslDistro = opts && opts.wslDistro;
+    const linuxCwd = Boolean(opts && opts.linuxCwd);
 
     if (platform === 'win32') {
       const processNames = (mapping && mapping.processNames) || [agentName];
@@ -1545,11 +1841,21 @@ function focusAgentApp(agentName) {
         if (code === 0) {
           rememberFocusedFromStdout(agentName, stdout);
           resolve(true);
-        } else {
-          resolve(false);
+          return;
         }
+        if (linuxCwd && wslDistro) {
+          tryFocusWslProfile(wslDistro).then(resolve);
+          return;
+        }
+        resolve(false);
       });
-      child.on('error', () => resolve(false));
+      child.on('error', () => {
+        if (linuxCwd && wslDistro) {
+          tryFocusWslProfile(wslDistro).then(resolve);
+          return;
+        }
+        resolve(false);
+      });
       return;
     }
 
@@ -1629,6 +1935,46 @@ function focusAgentApp(agentName) {
  * @param {string} agentName
  * @param {string} stdout
  */
+/**
+ * Fallback when Jump cannot find a window: open Windows Terminal's WSL profile
+ * (or `wsl.exe -d`) so we do not pretend a Windows `C:\` folder is the project.
+ * @param {string} distro
+ * @returns {Promise<boolean>}
+ */
+function tryFocusWslProfile(distro) {
+  const name = String(distro || '').trim();
+  if (!name) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      resolve(Boolean(ok));
+    };
+    try {
+      const wt = spawn('wt.exe', ['-p', name], { detached: true, stdio: 'ignore' });
+      wt.on('error', () => {
+        try {
+          const wsl = spawn('wsl.exe', ['-d', name], { detached: true, stdio: 'ignore' });
+          wsl.on('error', () => done(false));
+          wsl.on('spawn', () => {
+            try { wsl.unref(); } catch { /* ignore */ }
+            done(true);
+          });
+        } catch {
+          done(false);
+        }
+      });
+      wt.on('spawn', () => {
+        try { wt.unref(); } catch { /* ignore */ }
+        done(true);
+      });
+    } catch {
+      done(false);
+    }
+  });
+}
+
 function rememberFocusedFromStdout(agentName, stdout) {
   const line = String(stdout || '').trim().split(/\r?\n/).filter(Boolean).pop() || '';
   const m = line.match(/^ok:(\d+):(.*)$/);
@@ -1701,22 +2047,60 @@ const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
  * @param {string} text    — message to deliver
  * @returns {{bin:string, args:string[], cwd:string}|null}
  */
+function nativeIdFromSession(session, spec) {
+  if (session.resumeId && NATIVE_ID_RE.test(session.resumeId)) {
+    return session.resumeId;
+  }
+  const prefixName = spec.prefix.replace(/-$/, '');
+  const parsed = parseTaggedSessionId(session.id, prefixName);
+  let nativeId = parsed.nativeId || session.id.slice(spec.prefix.length);
+  if (session.agent === 'Codex') {
+    const m = String(nativeId).match(UUID_RE);
+    if (m) nativeId = m[0];
+  }
+  if (!nativeId || !NATIVE_ID_RE.test(nativeId)) return null;
+  return nativeId;
+}
+
 function buildResumeCommand(session, text) {
   if (!session || typeof session.id !== 'string') return null;
   const spec = DISPATCH_AGENTS[session.agent];
   if (!spec || !session.id.startsWith(spec.prefix)) return null;
 
-  // Codex rollout filenames are `rollout-<ts>-<uuid>`; the resume id is the
-  // UUID — prefer the exact id captured from session_meta when available.
-  let nativeId = session.resumeId || session.id.slice(spec.prefix.length);
-  if (session.agent === 'Codex' && !session.resumeId) {
-    const m = nativeId.match(UUID_RE);
-    if (m) nativeId = m[0];
-  }
-  if (!nativeId || !NATIVE_ID_RE.test(nativeId)) return null;
+  const nativeId = nativeIdFromSession(session, spec);
+  if (!nativeId) return null;
 
   const cwd = typeof session.cwd === 'string' ? session.cwd.trim() : '';
   return { bin: spec.bin, args: spec.args(nativeId, text), cwd };
+}
+
+/**
+ * Wrap a local resume command in `wsl.exe` when the session lives in WSL.
+ * Pure enough for tests — pass probed `{ distro, linuxHome }`.
+ *
+ * @param {{bin:string, args:string[], cwd:string}|null} cmd
+ * @param {object|null|undefined} session
+ * @param {{ distro: string, linuxHome?: string }|null} [wslInfo]
+ */
+function planDispatchCommand(cmd, session, wslInfo) {
+  if (!cmd) return null;
+  if (process.platform !== 'win32' || !wslInfo || !wslInfo.distro) return cmd;
+  if (!isWslBackedSession(session)) return cmd;
+  const linuxCwd = toLinuxCwd(session && session.cwd, wslInfo);
+  if (!linuxCwd || !linuxCwd.startsWith('/')) return cmd;
+  return {
+    bin: 'wsl.exe',
+    args: ['-d', wslInfo.distro, '--cd', linuxCwd, '--', cmd.bin, ...cmd.args],
+    cwd: os.homedir(),
+    viaWsl: true,
+    wsl: { distro: wslInfo.distro, linuxCwd }
+  };
+}
+
+function canRunDispatch(cmd) {
+  if (!cmd) return false;
+  if (cmd.viaWsl) return Boolean(cmd.wsl && cmd.wsl.linuxCwd);
+  return Boolean(cmd.cwd && isDirectory(cmd.cwd));
 }
 
 /**
@@ -1818,11 +2202,19 @@ function readLogTail(logPath, max = 600) {
  */
 function runHeadlessResume(cmd) {
   return new Promise((resolve, reject) => {
-    const cli = resolveCli(cmd.bin);
-    const { logPath, fd } = openDispatchLog(cmd.bin);
+    const { logPath, fd } = openDispatchLog(cmd.viaWsl ? 'wsl' : cmd.bin);
 
-    const file = cli.viaCmd ? (process.env.ComSpec || 'cmd.exe') : cli.file;
-    const args = cli.viaCmd ? ['/d', '/s', '/c', cli.file, ...cmd.args] : cmd.args;
+    let file;
+    let args;
+    if (cmd.viaWsl) {
+      // Linux CLIs live inside the distro — do not resolve Windows .cmd shims.
+      file = 'wsl.exe';
+      args = cmd.args;
+    } else {
+      const cli = resolveCli(cmd.bin);
+      file = cli.viaCmd ? (process.env.ComSpec || 'cmd.exe') : cli.file;
+      args = cli.viaCmd ? ['/d', '/s', '/c', cli.file, ...cmd.args] : cmd.args;
+    }
 
     let child;
     let graceTimer = null;
@@ -1875,4 +2267,11 @@ function runHeadlessResume(cmd) {
   });
 }
 
-module.exports = { AgentManager, buildResumeCommand, buildNewSessionCommand, DISPATCH_AGENT_NAMES };
+module.exports = {
+  AgentManager,
+  buildResumeCommand,
+  buildNewSessionCommand,
+  planDispatchCommand,
+  canRunDispatch,
+  DISPATCH_AGENT_NAMES
+};

@@ -12,7 +12,7 @@ const {
   fileUrlToPath
 } = require('../src/main/watchers/cursor-watcher');
 const { extractTaskName, parseJSONL, formatDuration } = require('../src/main/watchers/base-watcher');
-const { getText, normalizePlan } = require('../src/main/watchers/session-utils');
+const { getText, normalizePlan, parseTaggedSessionId, canonicalSessionId } = require('../src/main/watchers/session-utils');
 const { collectUsageLimits } = require('../src/main/usage-limits');
 const fs = require('fs');
 const os = require('os');
@@ -43,6 +43,19 @@ describe('base helpers', () => {
       { step: 'step one', status: 'pending' },
       { step: 'two', status: 'completed' }
     ]);
+  });
+
+  it('parseTaggedSessionId strips the wsl source tag', () => {
+    assert.deepEqual(parseTaggedSessionId('claude-wsl-abc-uuid', 'claude'), {
+      nativeId: 'abc-uuid',
+      sourceTag: 'wsl'
+    });
+    assert.deepEqual(parseTaggedSessionId('claude-abc-uuid', 'claude'), {
+      nativeId: 'abc-uuid',
+      sourceTag: ''
+    });
+    assert.equal(canonicalSessionId('claude-wsl-abc-uuid', 'claude'), 'claude-abc-uuid');
+    assert.equal(canonicalSessionId('codex-wsl-rollout-1'), 'codex-rollout-1');
   });
 });
 
@@ -437,7 +450,7 @@ describe('Grok events analyzer', () => {
     assert.equal(merged.status, 'needs-attention');
   });
 
-  it('settles a stale waiting-for-model (working) session to idle', () => {
+  it('keeps a stale waiting-for-model session working so stall can fire', () => {
     const merged = mergeGrokStatus({
       eventState: {
         status: 'working',
@@ -453,8 +466,8 @@ describe('Grok events analyzer', () => {
       },
       isActive: false
     });
-    assert.equal(merged.status, 'idle');
-    assert.equal(merged.currentTool, null);
+    assert.equal(merged.status, 'working');
+    assert.equal(merged.currentTool, 'Waiting for model…');
   });
 });
 
@@ -647,14 +660,13 @@ describe('Cursor analyzer', () => {
     assert.equal(result.status, 'working');
   });
 
-  it('analyzeCursorTranscript settles to idle when mtime is stale', () => {
+  it('analyzeCursorTranscript keeps working when mtime is stale', () => {
     const now = 1_000_000;
     const result = analyzeCursorTranscript(
       'user:\nhello\nA:\n[Tool call] Shell\n  command: ls\n',
       { mtime: now - 200_000, now }
     );
-    assert.equal(result.status, 'idle');
-    assert.equal(result.currentTool, null);
+    assert.equal(result.status, 'working');
   });
 
   it('fileUrlToPath decodes Windows file URIs', () => {
@@ -981,7 +993,7 @@ describe('OpenCode analyzer', () => {
     assert.equal(result.lastMessage, 'All tests pass now.');
   });
 
-  it('demotes working to idle when update is stale', () => {
+  it('keeps working when the last DB update is stale (stall owns quiet work)', () => {
     const staleMs = 5_000;
     const staleNow = now + 10_000; // simulate 10s passing after last update
     const parts = [
@@ -993,6 +1005,7 @@ describe('OpenCode analyzer', () => {
       }
     ];
     const result = analyzeOpencodeSession(baseSession, [], parts, staleNow, staleMs);
-    assert.equal(result.status, 'idle', 'should demote working to idle when stale');
+    assert.equal(result.status, 'working');
+    assert.equal(result.resumeId, baseSession.id);
   });
 });

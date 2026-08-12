@@ -1,7 +1,12 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const os = require('os');
-const { buildResumeCommand, buildNewSessionCommand, DISPATCH_AGENT_NAMES } = require('../src/main/agent-manager');
+const {
+  buildResumeCommand,
+  buildNewSessionCommand,
+  planDispatchCommand,
+  DISPATCH_AGENT_NAMES
+} = require('../src/main/agent-manager');
 const { analyzeClaudeEntries } = require('../src/main/watchers/claude-watcher');
 const { analyzeCodexEntries } = require('../src/main/watchers/codex-watcher');
 const { analyzeOpencodeSession } = require('../src/main/watchers/opencode-watcher');
@@ -94,6 +99,71 @@ describe('buildResumeCommand', () => {
   it('returns an empty cwd when the session directory is unknown', () => {
     const cmd = buildResumeCommand({ id: `claude-${UUID}`, agent: 'Claude Code' }, 'hi');
     assert.equal(cmd.cwd, '');
+  });
+
+  it('in-place answers reuse the same resume command (prompt is the answer)', () => {
+    const answer = 'Use the first approach';
+    const cmd = buildResumeCommand({
+      id: `claude-${UUID}`,
+      agent: 'Claude Code',
+      cwd: 'C:\\dev\\proj'
+    }, answer);
+    assert.equal(cmd.args[cmd.args.length - 1], answer);
+    assert.deepEqual(cmd.args.slice(0, 3), ['-p', '--resume', UUID]);
+  });
+
+  it('strips a wsl source tag so the native resume id is the uuid', () => {
+    const cmd = buildResumeCommand({
+      id: `claude-wsl-${UUID}`,
+      agent: 'Claude Code',
+      cwd: '/home/ada/proj',
+      sourceTag: 'wsl'
+    }, 'yes');
+    assert.deepEqual(cmd.args, ['-p', '--resume', UUID, 'yes']);
+  });
+
+  it('prefers resumeId over a tagged session id', () => {
+    const cmd = buildResumeCommand({
+      id: `codex-wsl-rollout-2026-07-20T10-00-00-${UUID}`,
+      agent: 'Codex',
+      resumeId: UUID,
+      cwd: '/tmp/proj'
+    }, 'go');
+    assert.deepEqual(cmd.args, ['exec', '--skip-git-repo-check', 'resume', UUID, 'go']);
+  });
+});
+
+describe('planDispatchCommand', () => {
+  it('wraps WSL-backed sessions in wsl.exe --cd', () => {
+    const session = {
+      id: `claude-wsl-${UUID}`,
+      agent: 'Claude Code',
+      cwd: '/home/ada/proj',
+      sourceTag: 'wsl'
+    };
+    const cmd = buildResumeCommand(session, 'hi');
+    const planned = planDispatchCommand(cmd, session, { distro: 'Ubuntu', linuxHome: '/home/ada' });
+    if (process.platform === 'win32') {
+      assert.equal(planned.viaWsl, true);
+      assert.equal(planned.bin, 'wsl.exe');
+      assert.deepEqual(planned.args.slice(0, 5), ['-d', 'Ubuntu', '--cd', '/home/ada/proj', '--']);
+      assert.deepEqual(planned.args.slice(5), ['claude', '-p', '--resume', UUID, 'hi']);
+    } else {
+      assert.equal(planned.viaWsl, undefined);
+      assert.equal(planned.bin, 'claude');
+    }
+  });
+
+  it('leaves Windows-home sessions on the local CLI', () => {
+    const session = {
+      id: `claude-${UUID}`,
+      agent: 'Claude Code',
+      cwd: 'C:\\dev\\proj'
+    };
+    const cmd = buildResumeCommand(session, 'hi');
+    const planned = planDispatchCommand(cmd, session, { distro: 'Ubuntu', linuxHome: '/home/ada' });
+    assert.equal(planned.bin, 'claude');
+    assert.equal(planned.viaWsl, undefined);
   });
 });
 
