@@ -27,10 +27,15 @@ const ATTENTION_PRIORITY = Object.freeze({
   'permission-request': 0,
   'question': 1,
   'needs-attention': 2,
+  stalled: 2.5, // working + no new activity — between question and working
   'working': 3,
   'idle': 4,
   'stopped': 5
 });
+
+/** Stall presets: off / 5m / 10m / 15m */
+const STALL_PRESETS_MS = Object.freeze([0, 5 * 60 * 1000, 10 * 60 * 1000, 15 * 60 * 1000]);
+const DEFAULT_STALL_AFTER_MS = 10 * 60 * 1000;
 
 const SNOOZE_PRESETS = Object.freeze({
   '15m': 15 * 60 * 1000,
@@ -81,11 +86,76 @@ function isAttentionStatus(status) {
 }
 
 /**
+ * Working session with no new activity for `stallAfterMs`.
+ * Watcher status stays `working`; callers annotate `session.stalled`.
+ * @param {object|null|undefined} session
+ * @param {number} [now]
+ * @param {number} [stallAfterMs]
+ * @returns {boolean}
+ */
+function isStalled(session, now = Date.now(), stallAfterMs = DEFAULT_STALL_AFTER_MS) {
+  if (!session || session.status !== 'working') return false;
+  const after = Number(stallAfterMs);
+  if (!Number.isFinite(after) || after <= 0) return false;
+  const at = Number(session.lastActivityAt || session.lastTime);
+  if (!Number.isFinite(at) || at <= 0) return false;
+  return (Number(now) - at) >= after;
+}
+
+/**
+ * Snap stall delay to a preset. 0 = off.
+ * @param {unknown} ms
+ * @returns {number}
+ */
+function normalizeStallAfterMs(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  let best = STALL_PRESETS_MS[2];
+  let bestDiff = Infinity;
+  for (const p of STALL_PRESETS_MS) {
+    if (p === 0) continue;
+    const d = Math.abs(p - n);
+    if (d < bestDiff) {
+      bestDiff = d;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
+ * Compact age label for a stalled session (`12m`).
+ * @param {object|null|undefined} session
+ * @param {number} [now]
+ * @returns {string}
+ */
+function formatStallAge(session, now = Date.now()) {
+  const at = Number(session && (session.lastActivityAt || session.lastTime));
+  if (!Number.isFinite(at) || at <= 0) return '';
+  const mins = Math.max(1, Math.round((Number(now) - at) / 60000));
+  return `${mins}m`;
+}
+
+/**
+ * Human-needed: attention status **or** stalled working.
+ * @param {object|null|undefined} session
+ * @returns {boolean}
+ */
+function isSessionAttention(session) {
+  if (!session) return false;
+  if (isAttentionStatus(session.status)) return true;
+  return Boolean(session.stalled);
+}
+
+/**
  * Sort rank for session status (lower first). Unknown statuses sort like idle.
  * @param {string} [status]
  * @returns {number}
  */
-function attentionRank(status) {
+function attentionRank(status, session) {
+  if (session && session.stalled && status === 'working') {
+    return ATTENTION_PRIORITY.stalled;
+  }
   if (status != null && Object.prototype.hasOwnProperty.call(ATTENTION_PRIORITY, status)) {
     return ATTENTION_PRIORITY[status];
   }
@@ -100,7 +170,12 @@ function attentionRank(status) {
  * @returns {string|null}
  */
 function attentionEpisodeKey(session) {
-  if (!session || !isAttentionStatus(session.status)) return null;
+  if (!session) return null;
+  if (session.stalled && session.status === 'working') {
+    // Pin to lastActivityAt so the episode fires once; new activity changes the key.
+    return `stall:${session.lastActivityAt || session.lastTime || 0}`;
+  }
+  if (!isAttentionStatus(session.status)) return null;
   const status = session.status;
   if (status === 'permission-request') {
     const pr = session.permissionRequest || {};
@@ -141,8 +216,8 @@ function isAttentionEpisodeAcknowledged(session, ackedKey) {
  * @returns {number}
  */
 function compareSessionsByAttention(a, b) {
-  const aAtt = isAttentionStatus(a && a.status);
-  const bAtt = isAttentionStatus(b && b.status);
+  const aAtt = isSessionAttention(a);
+  const bAtt = isSessionAttention(b);
   const aAck = Boolean(a && a.attentionAcknowledged);
   const bAck = Boolean(b && b.attentionAcknowledged);
 
@@ -156,8 +231,8 @@ function compareSessionsByAttention(a, b) {
   const bSoft = bAtt && bAck;
   if (aSoft !== bSoft) return aSoft ? -1 : 1;
 
-  const ra = attentionRank(a && a.status);
-  const rb = attentionRank(b && b.status);
+  const ra = attentionRank(a && a.status, a);
+  const rb = attentionRank(b && b.status, b);
   if (ra !== rb) return ra - rb;
 
   return (Number(b && b.lastTime) || 0) - (Number(a && a.lastTime) || 0);
@@ -172,7 +247,7 @@ function compareSessionsByAttention(a, b) {
 function buildAttentionQueue(sessions) {
   const list = Array.isArray(sessions) ? sessions : [];
   return list.filter(
-    (s) => s && isAttentionStatus(s.status) && !s.attentionAcknowledged && s.status !== 'stopped'
+    (s) => s && isSessionAttention(s) && !s.attentionAcknowledged && s.status !== 'stopped'
   );
 }
 
@@ -213,6 +288,10 @@ function formatAttentionStatusLine(session, shortName) {
   const agent = nameFn(session.agent);
   if (session.status === 'permission-request') return `${agent} needs permission`;
   if (session.status === 'question') return `${agent} asks a question`;
+  if (session.stalled) {
+    const age = formatStallAge(session);
+    return age ? `stalled · ${agent} · ${age}` : `stalled · ${agent}`;
+  }
   return `${agent} needs you`;
 }
 
@@ -500,7 +579,11 @@ function channelsForSessions(settings, sessions, forceKind, opts = {}) {
   if (list.length === 0) return acc;
 
   for (const session of list) {
-    const kind = kindFromStatus(session && session.status);
+    const stalledWorking = Boolean(
+      session && session.stalled && session.status === 'working'
+    );
+    let kind = kindFromStatus(session && session.status);
+    if (!kind && stalledWorking) kind = 'needs-attention';
     if (!kind) continue;
     const snoozed = isSessionSnoozed(session, { now });
     const ch = channelsForEvent(settings, {
@@ -508,7 +591,8 @@ function channelsForSessions(settings, sessions, forceKind, opts = {}) {
       snoozed,
       agent: session && session.agent
     });
-    acc.sound = acc.sound || ch.sound;
+    // Stall is quiet: notify + reveal, never sound (even if needs-attention beeps).
+    if (!stalledWorking) acc.sound = acc.sound || ch.sound;
     acc.notify = acc.notify || ch.notify;
     acc.reveal = acc.reveal || ch.reveal;
   }
@@ -540,10 +624,16 @@ module.exports = {
   ATTENTION_STATUSES,
   ATTENTION_PRIORITY,
   SNOOZE_PRESETS,
+  STALL_PRESETS_MS,
+  DEFAULT_STALL_AFTER_MS,
   MUTE_AGENT_IDS,
   AGENT_NAME_TO_ID,
   kindFromStatus,
   isAttentionStatus,
+  isStalled,
+  normalizeStallAfterMs,
+  formatStallAge,
+  isSessionAttention,
   attentionRank,
   attentionEpisodeKey,
   isAttentionEpisodeAcknowledged,

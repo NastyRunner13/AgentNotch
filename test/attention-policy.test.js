@@ -24,7 +24,11 @@ const {
   compareSessionsByAttention,
   buildAttentionQueue,
   annotateAttentionQueue,
-  formatAttentionStatusLine
+  formatAttentionStatusLine,
+  isStalled,
+  isSessionAttention,
+  normalizeStallAfterMs,
+  formatStallAge
 } = require('../src/main/attention-policy');
 const { DEFAULT_SETTINGS } = require('../src/main/settings-defaults');
 
@@ -506,6 +510,71 @@ describe('attention-policy', () => {
         formatAttentionStatusLine({ agent: 'Grok', status: 'needs-attention' }),
         'Grok needs you'
       );
+      assert.equal(
+        formatAttentionStatusLine({
+          agent: 'Claude Code',
+          status: 'working',
+          stalled: true,
+          lastActivityAt: Date.now() - 12 * 60 * 1000
+        }, (a) => (a === 'Claude Code' ? 'Claude' : a)),
+        'stalled · Claude · 12m'
+      );
+    });
+  });
+
+  describe('stall detection', () => {
+    const now = 1_000_000;
+
+    it('isStalled after the threshold on working sessions', () => {
+      assert.equal(isStalled({ status: 'working', lastActivityAt: now - 9 * 60 * 1000 }, now, 600000), false);
+      assert.equal(isStalled({ status: 'working', lastActivityAt: now - 10 * 60 * 1000 }, now, 600000), true);
+      assert.equal(isStalled({ status: 'idle', lastActivityAt: now - 20 * 60 * 1000 }, now, 600000), false);
+      assert.equal(isStalled({ status: 'working', lastActivityAt: now - 20 * 60 * 1000 }, now, 0), false);
+    });
+
+    it('isSessionAttention includes stalled working', () => {
+      assert.equal(isSessionAttention({ status: 'working', stalled: true }), true);
+      assert.equal(isSessionAttention({ status: 'working', stalled: false }), false);
+      assert.equal(isSessionAttention({ status: 'question' }), true);
+    });
+
+    it('attentionEpisodeKey is stable per lastActivityAt for stalls', () => {
+      const s = { status: 'working', stalled: true, lastActivityAt: 42 };
+      assert.equal(attentionEpisodeKey(s), 'stall:42');
+    });
+
+    it('stalled sessions enter the attention queue and sort between question and working', () => {
+      const list = [
+        { id: 'w', status: 'working', lastTime: 3 },
+        { id: 's', status: 'working', stalled: true, lastTime: 2 },
+        { id: 'q', status: 'question', lastTime: 1 }
+      ];
+      list.sort(compareSessionsByAttention);
+      assert.deepEqual(list.map((s) => s.id), ['q', 's', 'w']);
+      const q = buildAttentionQueue(list);
+      assert.deepEqual(q.map((s) => s.id), ['q', 's']);
+    });
+
+    it('normalizeStallAfterMs snaps to presets', () => {
+      assert.equal(normalizeStallAfterMs(0), 0);
+      assert.equal(normalizeStallAfterMs(-1), 0);
+      assert.equal(normalizeStallAfterMs(280000), 300000);
+      assert.equal(normalizeStallAfterMs(620000), 600000);
+    });
+
+    it('formatStallAge', () => {
+      assert.equal(formatStallAge({ lastActivityAt: now - 12 * 60 * 1000 }, now), '12m');
+    });
+
+    it('stall notify is on and sound stays off', () => {
+      const ch = channelsForSessions(DEFAULT_SETTINGS, [{
+        status: 'working',
+        stalled: true,
+        agent: 'Claude Code'
+      }]);
+      assert.equal(ch.sound, false);
+      assert.equal(ch.notify, true);
+      assert.equal(ch.reveal, true);
     });
   });
 });
