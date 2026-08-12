@@ -10,7 +10,7 @@ const {
   isFileActive,
   readJsonlEfficient
 } = require('./base-watcher');
-const { buildActivity, classifyActivityTool } = require('./session-utils');
+const { buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
 
 /**
  * Watches Claude Code session JSONL files for real-time status.
@@ -23,6 +23,7 @@ class ClaudeWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('Claude Code', { pollInterval: 2000, ...options });
     this.claudeDir = options.claudeDir || path.join(os.homedir(), '.claude');
+    this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this._lastFileSize = new Map();
     this._sessionFilePath = new Map();
     this._missingLogged = false;
@@ -70,14 +71,15 @@ class ClaudeWatcher extends BaseWatcher {
 
             for (const file of sessionFiles) {
               const filePath = path.join(sessionsDir, file);
-              const sessionId = `claude-${path.basename(file, '.jsonl')}`;
+              const nativeId = path.basename(file, '.jsonl');
+              const sessionId = taggedSessionId('claude', nativeId, this.sourceTag);
 
               if (!isFileActive(filePath, 12 * 60 * 60 * 1000)) continue;
 
               activeFiles.add(sessionId);
 
               try {
-                await this._processSessionFile(filePath, sessionId, project.name);
+                await this._processSessionFile(filePath, sessionId, project.name, nativeId);
               } catch {
                 // Skip individual file errors
               }
@@ -98,7 +100,7 @@ class ClaudeWatcher extends BaseWatcher {
     }
   }
 
-  async _processSessionFile(filePath, sessionId, projectHash) {
+  async _processSessionFile(filePath, sessionId, projectHash, nativeId) {
     let stat;
     try {
       stat = fs.statSync(filePath);
@@ -107,11 +109,8 @@ class ClaudeWatcher extends BaseWatcher {
     const lastSize = this._lastFileSize.get(filePath) || 0;
 
     if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      const existing = this.sessions.get(sessionId);
-      const isActive = isFileActive(filePath, 60000);
-      if (!isActive && existing.status === 'working') {
-        this._updateSession(sessionId, { ...existing, status: 'idle', currentTool: null, isActive: false });
-      }
+      // Keep last analyzer status. A quiet working session is stalled by
+      // AgentManager — do not lie that the turn finished.
       return;
     }
 
@@ -125,7 +124,11 @@ class ClaudeWatcher extends BaseWatcher {
 
     const fileTimes = getDurationFromFile(filePath);
     const sessionData = this._analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes);
-    this._updateSession(sessionId, sessionData);
+    this._updateSession(sessionId, {
+      ...sessionData,
+      resumeId: nativeId || sessionData.resumeId || '',
+      sourceTag: this.sourceTag || ''
+    });
   }
 
   _onSessionRemoved(id) {
@@ -307,12 +310,9 @@ class ClaudeWatcher extends BaseWatcher {
       }
     }
 
-    // Empty filePath (e.g. unit tests) treats session as active
+    // File freshness is for isActive only — do not demote working→idle.
+    // Stall detection owns "no new activity" while the last event still says working.
     const isActive = filePath ? isFileActive(filePath, 60000) : true;
-
-    if (!isActive && status === 'working') {
-      status = 'idle';
-    }
 
     if (!startTime) startTime = fileTimes.startTime;
     if (!lastTime) lastTime = fileTimes.lastTime;

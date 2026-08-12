@@ -10,7 +10,7 @@ const {
   isFileActive,
   readJsonlEfficient
 } = require('./base-watcher');
-const { getText, normalizePlan, buildActivity, classifyActivityTool } = require('./session-utils');
+const { getText, normalizePlan, buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
 
 /**
  * Watches OpenAI Codex CLI session JSONL files.
@@ -22,6 +22,7 @@ class CodexWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('Codex', { pollInterval: 3000, ...options });
     this.codexDir = options.codexDir || path.join(os.homedir(), '.codex');
+    this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this._lastFileSize = new Map();
     this._sessionFilePath = new Map();
   }
@@ -72,7 +73,7 @@ class CodexWatcher extends BaseWatcher {
         } else if (entry.name.endsWith('.jsonl')) {
           if (!isFileActive(fullPath, 12 * 60 * 60 * 1000)) continue;
 
-          const sessionId = `codex-${path.basename(entry.name, '.jsonl')}`;
+          const sessionId = taggedSessionId('codex', path.basename(entry.name, '.jsonl'), this.sourceTag);
           activeFiles.add(sessionId);
 
           try {
@@ -96,11 +97,7 @@ class CodexWatcher extends BaseWatcher {
     const lastSize = this._lastFileSize.get(filePath) || 0;
 
     if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      const existing = this.sessions.get(sessionId);
-      const isActive = isFileActive(filePath, 60000);
-      if (!isActive && existing.status === 'working') {
-        this._updateSession(sessionId, { ...existing, status: 'idle', currentTool: null, isActive: false });
-      }
+      // Keep last analyzer status; stall detection owns quiet working sessions.
       return;
     }
 
@@ -115,7 +112,10 @@ class CodexWatcher extends BaseWatcher {
     const fileTimes = getDurationFromFile(filePath);
     const sessionData = analyzeCodexEntries(entries, sessionId, filePath, fileTimes);
 
-    this._updateSession(sessionId, sessionData);
+    this._updateSession(sessionId, {
+      ...sessionData,
+      sourceTag: this.sourceTag || ''
+    });
   }
 
   _onSessionRemoved(id) {
@@ -347,9 +347,6 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
   }
 
   const isActive = filePath ? isFileActive(filePath, 60000) : true;
-  if (!isActive && status === 'working') {
-    status = 'idle';
-  }
 
   if (!startTime) startTime = fileTimes.startTime;
   if (!lastTime) lastTime = fileTimes.lastTime;

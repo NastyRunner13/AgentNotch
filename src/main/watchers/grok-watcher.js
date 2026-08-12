@@ -10,7 +10,7 @@ const {
   isFileActive,
   readJsonlEfficient
 } = require('./base-watcher');
-const { getText, normalizePlan, buildActivity } = require('./session-utils');
+const { getText, normalizePlan, buildActivity, taggedSessionId } = require('./session-utils');
 
 /**
  * Watches xAI Grok Build CLI session files.
@@ -27,6 +27,7 @@ class GrokWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('Grok', { pollInterval: 2000, ...options });
     this.grokDir = options.grokDir || path.join(os.homedir(), '.grok');
+    this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     /** @type {Map<string, { updates?: number, events?: number }>} */
     this._lastFileSize = new Map();
   }
@@ -102,7 +103,7 @@ class GrokWatcher extends BaseWatcher {
         if (!signalFile) continue;
         if (!isFileActive(signalFile, 12 * 60 * 60 * 1000)) continue;
 
-        const sessionId = `grok-${sessionEntry.name}`;
+        const sessionId = taggedSessionId('grok', sessionEntry.name, this.sourceTag);
         activeFiles.add(sessionId);
 
         try {
@@ -137,9 +138,10 @@ class GrokWatcher extends BaseWatcher {
       const existing = this.sessions.get(sessionId);
       const signalFile = fs.existsSync(eventsFile) ? eventsFile : updatesFile;
       const isActive = isFileActive(signalFile, 90000);
-      // Stale sessions must settle to idle — including errored (needs-attention)
-      // ones, otherwise a crashed/hung turn sticks in the notch forever.
-      if (!isActive && ['working', 'permission-request', 'question', 'needs-attention'].includes(existing.status)) {
+      // Working stays working so stall detection can fire.
+      // Errored (needs-attention) still settles so a hung model wait does not
+      // pin the notch forever after the files go cold.
+      if (!isActive && existing.status === 'needs-attention') {
         this._updateSession(sessionId, {
           ...existing,
           status: 'idle',
@@ -341,7 +343,9 @@ class GrokWatcher extends BaseWatcher {
       plan: (planFromFile.length ? planFromFile : updateState.plan) || [],
       isActive: status === 'working' || status === 'permission-request' || status === 'question',
       cwd: cwd || (summary && summary.info && summary.info.cwd) || null,
-      model: model || null
+      model: model || null,
+      resumeId: path.basename(sessionPath),
+      sourceTag: this.sourceTag || ''
     });
   }
 }
@@ -432,10 +436,9 @@ function mergeGrokStatus({ eventState, updateState, isActive }) {
     currentTool = null;
   }
 
-  // Stale files: if nothing has been written recently, force idle — this also
-  // settles needs-attention (errored/hung turns e.g. stuck "waiting for model")
-  // so the session can be archived instead of pinning the notch forever.
-  if (!isActive && ['working', 'permission-request', 'question', 'needs-attention'].includes(status)) {
+  // Stale files: settle errored turns so they can archive. Working stays
+  // working — AgentManager annotates stall after the quiet threshold.
+  if (!isActive && status === 'needs-attention') {
     status = 'idle';
     currentTool = null;
     permissionRequest = null;
@@ -765,9 +768,6 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
 
   const isActive = filePath ? isFileActive(filePath, 90000) : true;
   if (turnComplete) {
-    status = 'idle';
-    currentTool = null;
-  } else if (!isActive && status === 'working') {
     status = 'idle';
     currentTool = null;
   }

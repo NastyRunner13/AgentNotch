@@ -541,11 +541,7 @@ function analyzeCursorTranscript(content, opts = {}) {
         }
       }
 
-      // Stale transcript → idle
-      if (now - mtime > LIVE_WRITE_MS) {
-        status = 'idle';
-        currentTool = null;
-      }
+      // Keep last transcript status. Quiet working is a stall, not Finished.
 
       return {
         status,
@@ -625,10 +621,7 @@ function analyzeCursorTranscript(content, opts = {}) {
   }
   flush();
 
-  if (now - mtime > LIVE_WRITE_MS) {
-    status = 'idle';
-    currentTool = null;
-  } else if (toolCalls.length || lastMessage) {
+  if (toolCalls.length || lastMessage) {
     status = 'working';
   }
 

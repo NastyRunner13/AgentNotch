@@ -2,7 +2,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const { BaseWatcher, formatDuration, extractTaskName } = require('./base-watcher');
-const { classifyActivityTool } = require('./session-utils');
+const { classifyActivityTool, taggedSessionId } = require('./session-utils');
 
 /**
  * OpencodeWatcher — monitors OpenCode sessions via its SQLite WAL database.
@@ -88,10 +88,10 @@ function labelFromPart(data) {
  * @param {object[]} messages   — rows from `message` table for this session
  * @param {object[]} parts      — rows from `part` table for this session
  * @param {number} now          — Date.now()
- * @param {number} staleMs      — threshold to demote working→idle (default 60s)
+ * @param {number} [_staleMs]   — unused; kept for call-site compat. Stall owns quiet working.
  * @returns {object}            — session state object
  */
-function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_000) {
+function analyzeOpencodeSession(sessionRow, messages, parts, now, _staleMs = 60_000) {
   const sessionId = `opencode-${sessionRow.id}`;
   const startTime = Number(sessionRow.time_created) || now;
   const lastTime = Number(sessionRow.time_updated) || startTime;
@@ -231,12 +231,7 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
     }
   }
 
-  // Staleness demote: if the last DB update was too long ago, demote working → idle
-  const msSinceUpdate = now - lastTime;
-  if (status === 'working' && msSinceUpdate > staleMs) {
-    status = 'idle';
-    currentTool = null;
-  }
+  // Do not demote working→idle on a quiet DB row — stall detection owns that.
 
   // Task name: OpenCode auto-title, else first user message, else generic
   const taskName = (sessionRow.title && sessionRow.title.trim())
@@ -287,7 +282,8 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, staleMs = 60_0
     model,
     tokens,
     cost,
-    cwd: typeof sessionRow.directory === 'string' ? sessionRow.directory : ''
+    cwd: typeof sessionRow.directory === 'string' ? sessionRow.directory : '',
+    resumeId: String(sessionRow.id || '')
   };
 }
 
@@ -295,6 +291,7 @@ class OpencodeWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('OpenCode', { pollInterval: 3000, ...options });
     this.dbPath = options.dbPath || resolveDbPath();
+    this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this._lastChangeToken = '';
   }
 
@@ -389,7 +386,7 @@ class OpencodeWatcher extends BaseWatcher {
       const activeIds = new Set();
 
       for (const row of sessionRows) {
-        const sessionId = `opencode-${row.id}`;
+        const sessionId = taggedSessionId('opencode', row.id, this.sourceTag);
         activeIds.add(sessionId);
 
         try {
@@ -407,7 +404,10 @@ class OpencodeWatcher extends BaseWatcher {
           } catch { /* no part table */ }
 
           const sessionData = analyzeOpencodeSession(row, messages, parts, now);
-          this._updateSession(sessionId, sessionData);
+          this._updateSession(sessionId, {
+            ...sessionData,
+            sourceTag: this.sourceTag || ''
+          });
         } catch (err) {
           console.warn(`[OpenCode] Failed to process session ${row.id}:`, err.message);
         }

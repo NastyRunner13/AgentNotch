@@ -10,6 +10,7 @@ const {
   isFileActive,
   readJsonlEfficient
 } = require('./base-watcher');
+const { taggedSessionId } = require('./session-utils');
 
 /**
  * Watches Antigravity (Google DeepMind) IDE sessions.
@@ -21,6 +22,7 @@ class AntigravityWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('Antigravity', { pollInterval: 3000, ...options });
     this.geminiDir = options.geminiDir || path.join(os.homedir(), '.gemini');
+    this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this.brainDir = path.join(this.geminiDir, 'antigravity-ide', 'brain');
     this._lastFileSize = new Map();
     this._sessionFilePath = new Map();
@@ -57,7 +59,7 @@ class AntigravityWatcher extends BaseWatcher {
 
         if (!fs.existsSync(transcriptPath)) continue;
 
-        const sessionId = `antigravity-${conv.name}`;
+        const sessionId = taggedSessionId('antigravity', conv.name, this.sourceTag);
 
         if (!isFileActive(transcriptPath, 12 * 60 * 60 * 1000)) continue;
 
@@ -89,11 +91,7 @@ class AntigravityWatcher extends BaseWatcher {
     const lastSize = this._lastFileSize.get(filePath) || 0;
 
     if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      const existing = this.sessions.get(sessionId);
-      const isActive = isFileActive(filePath, 60000);
-      if (!isActive && existing.status === 'working') {
-        this._updateSession(sessionId, { ...existing, status: 'idle', currentTool: null });
-      }
+      // Keep last analyzer status; stall detection owns quiet working sessions.
       return;
     }
 
@@ -108,7 +106,10 @@ class AntigravityWatcher extends BaseWatcher {
     const fileTimes = getDurationFromFile(filePath);
     const sessionData = analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes);
 
-    this._updateSession(sessionId, sessionData);
+    this._updateSession(sessionId, {
+      ...sessionData,
+      sourceTag: this.sourceTag || ''
+    });
   }
 
   _onSessionRemoved(id) {
@@ -221,10 +222,6 @@ function analyzeAntigravityEntries(entries, sessionId, conversationId, filePath,
   }
 
   const isActive = filePath ? isFileActive(filePath, 60000) : true;
-
-  if (!isActive && status === 'working') {
-    status = 'idle';
-  }
 
   if (!startTime) startTime = fileTimes.startTime;
   if (!lastTime) lastTime = fileTimes.lastTime;

@@ -90,11 +90,72 @@ function classifyActivityTool(label) {
   return 'tool';
 }
 
+/** Source tags inserted between agent prefix and native id (`claude-wsl-<uuid>`). */
+const KNOWN_SOURCE_TAGS = Object.freeze(['wsl']);
+
+/**
+ * Session id with optional source tag (e.g. WSL extra watcher).
+ * `claude` + `abc` + `wsl` → `claude-wsl-abc`
+ * @param {string} prefix
+ * @param {string} basename
+ * @param {string} [sourceTag]
+ */
+function taggedSessionId(prefix, basename, sourceTag) {
+  const base = String(basename || '').replace(/\.jsonl$/i, '');
+  const tag = typeof sourceTag === 'string'
+    ? sourceTag.replace(/[^a-z0-9]/gi, '').toLowerCase()
+    : '';
+  if (tag) return `${prefix}-${tag}-${base}`;
+  return `${prefix}-${base}`;
+}
+
+/**
+ * Split `claude-wsl-<native>` / `claude-<native>` into native id + source tag.
+ * @param {string} sessionId
+ * @param {string} agentPrefix — `claude` or `claude-`
+ * @returns {{ nativeId: string, sourceTag: string }}
+ */
+function parseTaggedSessionId(sessionId, agentPrefix) {
+  const id = String(sessionId || '');
+  const prefix = String(agentPrefix || '').replace(/-$/, '');
+  const p = prefix ? `${prefix}-` : '';
+  if (!p || !id.startsWith(p)) return { nativeId: '', sourceTag: '' };
+  const rest = id.slice(p.length);
+  for (const tag of KNOWN_SOURCE_TAGS) {
+    if (rest.startsWith(`${tag}-`)) {
+      return { nativeId: rest.slice(tag.length + 1), sourceTag: tag };
+    }
+  }
+  return { nativeId: rest, sourceTag: '' };
+}
+
+/**
+ * Drop a source tag so `claude-wsl-<uuid>` matches `claude-<uuid>`.
+ * @param {string} sessionId
+ * @param {string} [agentPrefix]
+ */
+function canonicalSessionId(sessionId, agentPrefix) {
+  const id = String(sessionId || '');
+  if (agentPrefix) {
+    const prefix = String(agentPrefix).replace(/-$/, '');
+    const parsed = parseTaggedSessionId(id, prefix);
+    return parsed.nativeId ? `${prefix}-${parsed.nativeId}` : id;
+  }
+  return id.replace(
+    /^(claude|codex|grok|antigravity|opencode|cursor)-wsl-/i,
+    '$1-'
+  );
+}
+
 module.exports = {
+  KNOWN_SOURCE_TAGS,
   getText,
   normalizePlan,
   buildActivity,
   classifyActivityTool,
+  taggedSessionId,
+  parseTaggedSessionId,
+  canonicalSessionId,
   parseJSONL,
   formatDuration,
   getDurationFromFile,
