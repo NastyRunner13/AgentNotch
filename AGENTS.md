@@ -1,5 +1,9 @@
 # AgentNotch — Agent Notes
 
+## Active work
+
+**[TIER1.md](./TIER1.md)** is the current implementation brief. Next session: start there — do not re-discover. Do not start Tier 2/3 until those four bets ship.
+
 ## Design Context
 
 Strategic and visual design context for UI work lives at the project root:

@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **In-notch answers**: choosing a question option delivers the answer into the same live session via headless resume (Claude, Codex, Grok, OpenCode). Cursor / Antigravity still Jump.
+- **Notification actions**: attention toasts expose Allow / Deny / Snooze, Jump, or short question options. Actions do not open the panel; click-on-body still does.
+- **Always-allow**: remember Claude Allow for a tool + project (`~/.agent-notch/permission-memory.json`). Matching requests auto-allow without sound/toast. Settings: toggle + clear list.
+- **Custom agent data paths + WSL**: Settings → Advanced for per-agent roots; on Windows, Watch WSL home merges `\\wsl$\…` sessions. Headless answer/dispatch into WSL runs via `wsl.exe`. Linux cwds map to UNC for git chips and Folder; Jump prefers Windows Terminal / the WSL profile.
+- **Git identity chips**: local branch / worktree / PR# on session cards (file reads only, including WSL UNC). Toggle under Sessions.
+- **Stall detection**: working with no new activity (default 10m) becomes a quiet attention episode (`stalled · Agent · 12m`). Sound stays off; notify + strip stay. Presets 5 / 10 / 15 / off.
+
+### Notes
+- **Grok remote approve**: Grok Build has blocking `PreToolUse` (deny or fail-open) and a non-blocking `Notification`/`permission_prompt`. There is no PermissionRequest-style hook that replaces the TUI prompt. In-notch Allow stays Claude-only; Grok remains Jump.
+
 ### Fixed
 - **Per-agent mute covers usage limit alerts**: muting an agent (or turning on Focus) now suppresses soft limit toasts and desktop notifications for that agent, matching attention/done interrupt policy. Critical limit chips on the bar still show (status-before-chrome).
 
