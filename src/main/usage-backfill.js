@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { dayKey } = require('./usage-stats');
+const { dayKey, ACTIVE_GAP_CAP_MS } = require('./usage-stats');
+const { scanGrokLog } = require('./grok-usage');
 
 let sqlite = null;
 try {
@@ -24,8 +25,9 @@ try {
  *     deltas are attributed to the event's own day
  *   OpenCode    — opencode.db session rows (cumulative token columns + cost)
  *     attributed to the time_updated day (no per-day breakdown available)
+ *   Grok        — ~/.grok/logs/unified.jsonl inference_done turns
  *
- * Grok / Cursor / Antigravity expose no local token data — nothing to scan.
+ * Cursor exposes no reliable cumulative token data — nothing to scan.
  *
  * Every record carries the same session id the live watcher uses, so the
  * tracker's high-water marks line up between backfill and live ingestion.
@@ -66,7 +68,7 @@ function newRecord(id, agent) {
     agent,
     /** Map `${day}|${model}` → { day, model, tokens, cost } */
     days: new Map(),
-    /** Map day → { min, max } entry timestamps for session-time spans */
+    /** Map day → { last, ms } running active-time (idle gaps capped) */
     spans: new Map()
   };
 }
@@ -74,12 +76,12 @@ function newRecord(id, agent) {
 function bumpSpan(rec, day, ts) {
   let s = rec.spans.get(day);
   if (!s) {
-    s = { min: ts, max: ts };
-    rec.spans.set(day, s);
-  } else {
-    if (ts < s.min) s.min = ts;
-    if (ts > s.max) s.max = ts;
+    rec.spans.set(day, { last: ts, ms: 0 });
+    return;
   }
+  const gap = ts - s.last;
+  if (gap > 0) s.ms += Math.min(gap, ACTIVE_GAP_CAP_MS);
+  if (ts > s.last) s.last = ts;
 }
 
 function bankTokens(rec, day, model, tokens, cost = 0) {
@@ -97,7 +99,7 @@ function bankTokens(rec, day, model, tokens, cost = 0) {
 function finalizeRecord(rec) {
   const msByDay = {};
   for (const [day, s] of rec.spans) {
-    if (s.max > s.min) msByDay[day] = s.max - s.min;
+    if (s.ms > 0) msByDay[day] = s.ms;
   }
   return {
     id: rec.id,
@@ -341,7 +343,8 @@ function* walkJsonl(rootDir, depth = 0) {
  * Scan all known agent data roots. Injectable paths for tests.
  *
  * @param {{ claudeProjectsDir?: string, codexSessionsDir?: string,
- *   antigravityBrainDir?: string, opencodeDbPaths?: string[] }} [opts]
+ *   antigravityBrainDir?: string, opencodeDbPaths?: string[],
+ *   grokLogPath?: string }} [opts]
  * @returns {{ records: Array<object>, files: number, errors: number }}
  */
 function scanUsageHistory(opts = {}) {
@@ -350,6 +353,7 @@ function scanUsageHistory(opts = {}) {
   const codexSessionsDir = opts.codexSessionsDir || path.join(home, '.codex', 'sessions');
   const antigravityBrainDir = opts.antigravityBrainDir ||
     path.join(home, '.gemini', 'antigravity-ide', 'brain');
+  const grokLogPath = opts.grokLogPath || path.join(home, '.grok', 'logs', 'unified.jsonl');
   const opencodeDbPaths = opts.opencodeDbPaths || [
     path.join(home, '.local', 'share', 'opencode', 'opencode.db'),
     process.env.APPDATA ? path.join(process.env.APPDATA, 'opencode', 'opencode.db') : null,
@@ -374,6 +378,17 @@ function scanUsageHistory(opts = {}) {
   for (const filePath of walkJsonl(codexSessionsDir)) collect(filePath, scanCodexFile);
   for (const filePath of walkJsonl(antigravityBrainDir)) collect(filePath, scanAntigravityFile);
 
+  try {
+    if (fs.existsSync(grokLogPath)) {
+      files++;
+      for (const rec of scanGrokLog(grokLogPath)) {
+        if (rec && !byId.has(rec.id)) byId.set(rec.id, rec);
+      }
+    }
+  } catch {
+    errors++;
+  }
+
   for (const dbPath of opencodeDbPaths) {
     try {
       if (!fs.existsSync(dbPath)) continue;
@@ -394,5 +409,6 @@ module.exports = {
   scanCodexFile,
   scanAntigravityFile,
   scanOpencodeDb,
-  mapCodexUsage
+  mapCodexUsage,
+  scanGrokLog
 };

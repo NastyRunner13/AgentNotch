@@ -9,7 +9,8 @@ const {
   scanCodexFile,
   scanAntigravityFile,
   scanUsageHistory,
-  mapCodexUsage
+  mapCodexUsage,
+  scanGrokLog
 } = require('../src/main/usage-backfill');
 
 const NOW = new Date('2026-07-27T12:00:00').getTime();
@@ -343,7 +344,8 @@ describe('usage-backfill scanners', () => {
       claudeProjectsDir: claudeRoot,
       codexSessionsDir: codexRoot,
       antigravityBrainDir: antigravityRoot,
-      opencodeDbPaths: [path.join(dir, 'missing.db')]
+      opencodeDbPaths: [path.join(dir, 'missing.db')],
+      grokLogPath: path.join(dir, 'missing-grok.jsonl')
     });
 
     assert.equal(files, 3);
@@ -358,5 +360,34 @@ describe('usage-backfill scanners', () => {
     const { buckets, sessionDays } = t.getStats();
     assert.equal(buckets.length, 2);
     assert.ok(sessionDays.some(d => d.agent === 'Antigravity'));
+  });
+
+  it('scanGrokLog sums per-turn inference_done tokens by session and day', () => {
+    const log = path.join(dir, 'unified.jsonl');
+    const sid = '019f605c-de86-7a71-b98f-3c36f1f8ee90';
+    fs.writeFileSync(log, [
+      JSON.stringify({
+        ts: ISO_YESTERDAY, msg: 'shell.turn.inference_done', sid,
+        ctx: { prompt_tokens: 13409, cached_prompt_tokens: 11264, completion_tokens: 252, reasoning_tokens: 77 }
+      }),
+      JSON.stringify({
+        ts: ISO_TODAY, msg: 'shell.turn.inference_done', sid,
+        ctx: { prompt_tokens: 18259, cached_prompt_tokens: 13312, completion_tokens: 558, reasoning_tokens: 341 }
+      }),
+      JSON.stringify({ ts: ISO_TODAY, msg: 'unrelated', sid })
+    ].join('\n'));
+
+    const recs = scanGrokLog(log);
+    assert.equal(recs.length, 1);
+    assert.equal(recs[0].id, `grok-${sid}`);
+    assert.equal(recs[0].agent, 'Grok');
+    const yest = recs[0].days.find(d => d.day === YESTERDAY);
+    const today = recs[0].days.find(d => d.day === TODAY);
+    assert.equal(yest.tokens.input, 13409 - 11264);
+    assert.equal(yest.tokens.cacheRead, 11264);
+    assert.equal(yest.tokens.output, 252 - 77);
+    assert.equal(yest.tokens.reasoning, 77);
+    assert.equal(today.tokens.input, 18259 - 13312);
+    assert.equal(today.tokens.cacheRead, 13312);
   });
 });
