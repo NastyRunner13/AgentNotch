@@ -3,7 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { UsageTracker, estimateCost, findPricing, dayKey } = require('../src/main/usage-stats');
+const {
+  UsageTracker, estimateCost, findPricing, dayKey,
+  activeMsFromTimestamps, sessionActiveMs, LONE_GAP_CAP_MS, ACTIVE_GAP_CAP_MS
+} = require('../src/main/usage-stats');
 
 const NOW = new Date('2026-07-27T12:00:00').getTime();
 const TODAY = dayKey(NOW);
@@ -129,6 +132,42 @@ describe('UsageTracker', () => {
     assert.equal(buckets[0].total, 2000);
   });
 
+  it('does not dump an older session\'s cumulative tokens into today', () => {
+    const yesterday = NOW - 86400000;
+    const changed = ctx.tracker.ingest([
+      claudeSession('claude-old', { input: 5000, output: 200 }, {
+        startTime: yesterday,
+        lastTime: yesterday + 60_000
+      })
+    ]);
+    assert.equal(changed, true);
+    assert.equal(ctx.tracker.getStats().buckets.length, 0);
+
+    // Later live delta on that session banks only the new tokens onto event day
+    ctx.tracker.ingest([
+      claudeSession('claude-old', { input: 5200, output: 250 }, {
+        startTime: yesterday,
+        lastTime: NOW
+      })
+    ]);
+    const { buckets } = ctx.tracker.getStats();
+    assert.equal(buckets.length, 1);
+    assert.equal(buckets[0].day, TODAY);
+    assert.equal(buckets[0].total, 250);
+  });
+
+  it('skips last-turn (non-cumulative) token snapshots', () => {
+    const changed = ctx.tracker.ingest([
+      claudeSession('cursor-1', { input: 100, output: 20 }, {
+        agent: 'Cursor',
+        model: 'gpt-5',
+        tokensCumulative: false
+      })
+    ]);
+    assert.equal(changed, false);
+    assert.equal(ctx.tracker.getStats().buckets.length, 0);
+  });
+
   it('skips sessions with no usage signal (Grok/Cursor presence-only)', () => {
     const changed = ctx.tracker.ingest([
       { id: 'grok-1', agent: 'Grok', tokens: { input: 0, output: 0 } },
@@ -176,10 +215,13 @@ describe('UsageTracker', () => {
 });
 
 describe('estimateCost / findPricing', () => {
-  it('matches models case-insensitively by substring, specific first', () => {
+  it('matches models case-insensitively by longest version-aware id', () => {
     assert.equal(findPricing('Claude-Opus-4-20250514').match, 'claude-opus-4');
     assert.equal(findPricing('gpt-5-codex').match, 'gpt-5-codex');
+    assert.equal(findPricing('gpt-5.5').match, 'gpt-5.5');
+    assert.equal(findPricing('gpt-5.6-terra').match, 'gpt-5.6-terra');
     assert.equal(findPricing('some-random-model'), null);
+    assert.equal(findPricing('grok-4.6'), null); // subscription — not gpt-5/grok-4 cousin
   });
 
   it('bills reasoning tokens as output', () => {
@@ -190,5 +232,34 @@ describe('estimateCost / findPricing', () => {
 
   it('returns null for unpriced models', () => {
     assert.equal(estimateCost('nope-model', { input: 1e6, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }), null);
+  });
+});
+
+describe('active session time', () => {
+  it('caps a lone overnight gap at 2h', () => {
+    const start = NOW;
+    const end = NOW + 48 * 3600_000;
+    assert.equal(activeMsFromTimestamps([start, end]), LONE_GAP_CAP_MS);
+  });
+
+  it('sums many events with a 15m idle cap', () => {
+    const t0 = NOW;
+    const times = [t0, t0 + 60_000, t0 + 120_000, t0 + 120_000 + 60 * 60_000];
+    // 1m + 1m + 15m cap (not the 60m idle)
+    assert.equal(activeMsFromTimestamps(times), 60_000 + 60_000 + ACTIVE_GAP_CAP_MS);
+  });
+
+  it('sessionActiveMs uses activity timestamps over wall duration', () => {
+    const ms = sessionActiveMs({
+      startTime: NOW,
+      lastTime: NOW + 10 * 60_000,
+      duration: 3 * 3600_000,
+      activity: [
+        { at: NOW },
+        { at: NOW + 5 * 60_000 },
+        { at: NOW + 10 * 60_000 }
+      ]
+    });
+    assert.equal(ms, 10 * 60_000);
   });
 });

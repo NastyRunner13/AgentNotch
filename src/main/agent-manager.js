@@ -17,7 +17,7 @@ const {
   ATTENTION_SOUND_KEYS
 } = require('./settings-defaults');
 const { collectUsageLimits, detectLimitCrossings } = require('./usage-limits');
-const { UsageTracker, dayKey } = require('./usage-stats');
+const { UsageTracker, dayKey, sessionActiveMs } = require('./usage-stats');
 const { scanUsageHistory } = require('./usage-backfill');
 const { buildInsights } = require('./insights');
 const permissionBridge = require('./permission-bridge');
@@ -56,7 +56,7 @@ const {
   DEFAULT_CONTINUE_PROMPT
 } = require('./history-utils');
 
-const USAGE_BACKFILL_VERSION = 2; // v2 adds Antigravity session-time history
+const USAGE_BACKFILL_VERSION = 3; // v3: Grok tokens + active-span session time
 
 /**
  * @typedef {Object} AgentSession
@@ -610,16 +610,8 @@ class AgentManager extends EventEmitter {
       entry.sessions += 1;
       entry.ms += ms;
     };
-    const durationOf = (s) => {
-      if (Number.isFinite(s.duration) && s.duration > 0) return s.duration;
-      if (Number.isFinite(s.startTime) && Number.isFinite(s.lastTime) && s.lastTime > s.startTime) {
-        return s.lastTime - s.startTime;
-      }
-      return 0;
-    };
-
     for (const h of this._history) {
-      addTime(h.agent, h.lastTime || h.archivedAt, durationOf(h));
+      addTime(h.agent, h.lastTime || h.archivedAt, sessionActiveMs(h));
     }
 
     // Live sessions not yet archived count toward today; skip ids already in
@@ -627,10 +619,7 @@ class AgentManager extends EventEmitter {
     const now = Date.now();
     for (const s of live) {
       if (!s || s.status === 'stopped' || inHistory.has(s.id)) continue;
-      const ms = Number.isFinite(s.duration) && s.duration > 0
-        ? s.duration
-        : (Number.isFinite(s.startTime) ? Math.max(0, now - s.startTime) : 0);
-      addTime(s.agent, s.startTime || now, ms);
+      addTime(s.agent, s.startTime || now, sessionActiveMs(s, now, true));
     }
 
     // Backfilled historical session time (per day+agent, ids already excluded)
@@ -1190,6 +1179,7 @@ class AgentManager extends EventEmitter {
           if (Number.isFinite(entry.dismissedMarker)) {
             this._dismissed.set(entry.id, entry.dismissedMarker);
           }
+          this._ingestHistoryUsage(entry);
         }
       }
     } catch (err) {
@@ -1241,8 +1231,32 @@ class AgentManager extends EventEmitter {
       this._history.push(snapshot);
     }
 
+    this._ingestHistoryUsage(snapshot);
     this._saveHistory();
     this._scheduleEmit();
+  }
+
+  /**
+   * Bank tokens persisted on a history snapshot so Usage survives after
+   * the live watcher (or OpenCode DB) is gone. High-water marks keep this
+   * idempotent with live ingest and backfill.
+   */
+  _ingestHistoryUsage(entry) {
+    if (!entry || !entry.id || !entry.agent || !entry.tokens) return;
+    try {
+      this._usageTracker.ingestHistorical({
+        id: entry.id,
+        agent: entry.agent,
+        days: [{
+          day: dayKey(entry.lastTime || entry.archivedAt || Date.now()),
+          model: entry.model || null,
+          tokens: entry.tokens,
+          cost: Number(entry.cost) || 0
+        }]
+      });
+    } catch (err) {
+      console.warn('[AgentManager] history usage ingest failed:', err.message);
+    }
   }
 
   getHistory() {

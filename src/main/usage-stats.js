@@ -10,8 +10,8 @@ const os = require('os');
  *   Claude Code — message.usage on transcript entries (summed by the watcher)
  *   Codex       — token_count info.total_token_usage (cumulative per session)
  *   OpenCode    — session row token columns + actual cost (SQLite)
- *   Grok / Cursor / Antigravity expose no local token data, so they never
- *   appear here — the dashboard only shows what agents actually report.
+ *   Grok         — per-turn inference_done lines in ~/.grok/logs/unified.jsonl
+ *   Cursor / Antigravity expose no reliable cumulative token data.
  *
  * Watchers re-parse sessions continuously, so totals arrive as cumulative
  * snapshots. The tracker stores a high-water mark per session and only banks
@@ -44,6 +44,10 @@ const MODEL_PRICING = [
   { match: 'haiku', input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
   { match: 'gpt-5-pro', input: 15, output: 120 },
   { match: 'gpt-5-codex', input: 1.25, output: 10, cacheRead: 0.125 },
+  { match: 'gpt-5.6-terra', input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
+  { match: 'gpt-5.6-sol', input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+  { match: 'gpt-5.6-luna', input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
+  { match: 'gpt-5.5', input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
   { match: 'gpt-5', input: 1.25, output: 10, cacheRead: 0.125 },
   { match: 'codex-mini', input: 1.5, output: 6, cacheRead: 0.375 },
   { match: 'o4-mini', input: 1.1, output: 4.4, cacheRead: 0.275 },
@@ -55,13 +59,38 @@ const MODEL_PRICING = [
   { match: 'grok-3', input: 3, output: 15 }
 ];
 
+/**
+ * Substring match that does not treat `gpt-5` as a hit inside `gpt-5.5`.
+ * A needle ending in a digit must not be followed by `.` + digit.
+ */
+function modelContains(haystack, needle) {
+  let from = 0;
+  while (from <= haystack.length) {
+    const i = haystack.indexOf(needle, from);
+    if (i === -1) return false;
+    const after = haystack[i + needle.length] || '';
+    const next = haystack[i + needle.length + 1] || '';
+    if (/[0-9]$/.test(needle) && after === '.' && /[0-9]/.test(next)) {
+      from = i + 1;
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
 function findPricing(model) {
   if (!model) return null;
   const m = String(model).toLowerCase();
+  let best = null;
+  let bestLen = -1;
   for (const p of MODEL_PRICING) {
-    if (m.includes(p.match)) return p;
+    if (p.match.length > bestLen && modelContains(m, p.match)) {
+      best = p;
+      bestLen = p.match.length;
+    }
   }
-  return null;
+  return best;
 }
 
 function num(v) {
@@ -94,6 +123,60 @@ function dayKey(ts) {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${d.getFullYear()}-${m}-${day}`;
+}
+
+/** Cap a single inter-event idle gap when summing active time. */
+const ACTIVE_GAP_CAP_MS = 15 * 60 * 1000;
+/** When only start+end exist, do not treat a 2-day idle as session time. */
+const LONE_GAP_CAP_MS = 2 * 60 * 60 * 1000;
+
+/**
+ * Wall-clock gaps between events, capped so overnight idle is not billed.
+ * Two timestamps only → lone-gap cap (2h). Three or more → 15m per gap.
+ */
+function activeMsFromTimestamps(times) {
+  const sorted = [...new Set(
+    (Array.isArray(times) ? times : []).filter(t => Number.isFinite(t) && t > 0)
+  )].sort((a, b) => a - b);
+  if (sorted.length < 2) return 0;
+  if (sorted.length === 2) return Math.min(sorted[1] - sorted[0], LONE_GAP_CAP_MS);
+  let ms = 0;
+  for (let i = 1; i < sorted.length; i++) {
+    ms += Math.min(sorted[i] - sorted[i - 1], ACTIVE_GAP_CAP_MS);
+  }
+  return ms;
+}
+
+function sessionTimestamps(session, extraNow) {
+  const times = [];
+  if (!session || typeof session !== 'object') return times;
+  if (Number.isFinite(session.startTime) && session.startTime > 0) times.push(session.startTime);
+  for (const a of session.activity || []) {
+    if (a && Number.isFinite(a.at) && a.at > 0) times.push(a.at);
+  }
+  if (Number.isFinite(session.lastTime) && session.lastTime > 0) times.push(session.lastTime);
+  if (Number.isFinite(session.lastActivityAt) && session.lastActivityAt > 0) {
+    times.push(session.lastActivityAt);
+  }
+  if (Number.isFinite(extraNow) && extraNow > 0) times.push(extraNow);
+  return times;
+}
+
+/**
+ * Active session time from event timestamps; falls back to a 2h-capped wall duration.
+ * @param {object} session
+ * @param {number} [now]
+ * @param {boolean} [live] — when true and the session is still working, include `now`
+ */
+function sessionActiveMs(session, now, live) {
+  const extra = live && session && session.status
+    && session.status !== 'idle' && session.status !== 'stopped'
+    ? now : null;
+  const ms = activeMsFromTimestamps(sessionTimestamps(session, extra));
+  if (ms > 0) return ms;
+  const wall = Number(session && session.duration);
+  if (Number.isFinite(wall) && wall > 0) return Math.min(wall, LONE_GAP_CAP_MS);
+  return 0;
 }
 
 /**
@@ -196,19 +279,27 @@ class UsageTracker {
 
     for (const s of sessions) {
       if (!s || !s.id || !s.agent) continue;
+      // Last-turn snapshots (Cursor bubbles) are not cumulative — never bank.
+      if (s.tokensCumulative === false) continue;
       const totals = normalizeTokens(s.tokens);
       const cost = num(s.cost);
-      // Sessions without any usage signal contribute nothing (Grok/Cursor/…)
       if (!totalsPositive(totals) && cost <= 0) continue;
 
       const prev = this._snapshots.get(s.id);
       const model = typeof s.model === 'string' && s.model ? s.model : (prev?.model ?? null);
+      const eventDay = dayKey(s.lastTime || s.startTime || now);
+      const startDay = dayKey(s.startTime || now);
 
       if (!prev) {
-        // First sighting: bank the full cumulative snapshot.
-        const snap = { day: today, agent: s.agent, model, totals, cost, seenAt: now };
+        // First sighting of a session that started today: bank the snapshot
+        // onto the event day. Older sessions only raise the high-water mark —
+        // backfill / history own the historical tokens so they are not dumped
+        // into "today".
+        const snap = { day: eventDay, agent: s.agent, model, totals, cost, seenAt: now };
         this._snapshots.set(s.id, snap);
-        this._bank(today, s.agent, model, totals, cost, s.id);
+        if (startDay === today) {
+          this._bank(eventDay, s.agent, model, totals, cost, s.id);
+        }
         changed = true;
         continue;
       }
@@ -236,7 +327,7 @@ class UsageTracker {
       if (model) prev.model = model;
 
       if (any) {
-        this._bank(today, s.agent, prev.model, delta, Math.max(0, costDelta), s.id);
+        this._bank(eventDay, s.agent, prev.model, delta, Math.max(0, costDelta), s.id);
         changed = true;
       }
     }
@@ -513,5 +604,10 @@ module.exports = {
   estimateCost,
   findPricing,
   dayKey,
-  MODEL_PRICING
+  MODEL_PRICING,
+  activeMsFromTimestamps,
+  sessionTimestamps,
+  sessionActiveMs,
+  ACTIVE_GAP_CAP_MS,
+  LONE_GAP_CAP_MS
 };
