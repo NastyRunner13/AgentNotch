@@ -1,5 +1,6 @@
 const EventEmitter = require('events');
 const fs = require('fs');
+const { cleanPrompt } = require('../prompt-clean');
 
 /**
  * Base class for all agent watchers.
@@ -196,8 +197,8 @@ function parseJSONL(content) {
  */
 function extractTaskName(text, maxLen = 40) {
   if (!text) return 'Untitled session';
-  // Strip XML-like tags (e.g., <USER_REQUEST>)
-  let clean = text.replace(/<[^>]+>/g, '').trim();
+  let clean = cleanPrompt(text);
+  if (!clean) return 'Untitled session';
   // Take first line, trim, truncate
   let name = clean.split('\n')[0].trim();
   if (name.length > maxLen) {

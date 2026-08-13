@@ -12,6 +12,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { buildActivity, classifyActivityTool } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
 
 const execFileAsync = promisify(execFile);
 
@@ -333,8 +334,8 @@ function analyzeCursorComposer(composer, meta = {}) {
     const tool = toolLabelFromBubble(b);
     const at = Number(b.createdAt) || lastTime;
 
-    if (b.type === 1 && text && !userPrompt) {
-      userPrompt = text;
+    if (b.type === 1 && text) {
+      userPrompt = preferUserPrompt(userPrompt, text);
     }
     if (b.type === 2 && text) {
       lastMessage = text;
@@ -359,7 +360,7 @@ function analyzeCursorComposer(composer, meta = {}) {
   // Transcript overlay (optional richer tool stream)
   const tr = meta.transcript;
   if (tr) {
-    if (!userPrompt && tr.userPrompt) userPrompt = tr.userPrompt;
+    if (tr.userPrompt) userPrompt = preferUserPrompt(userPrompt, tr.userPrompt);
     if (tr.lastMessage) lastMessage = tr.lastMessage;
     for (const t of tr.toolCalls || []) {
       if (t) toolCalls.push(t);
@@ -448,6 +449,7 @@ function analyzeCursorComposer(composer, meta = {}) {
     rateLimit: null,
     cwd,
     tokens,
+    tokensCumulative: false,
     resumeId: composerId,
     unifiedMode: composer.unifiedMode || null,
     filesChangedCount: filesChanged,
@@ -502,8 +504,8 @@ function analyzeCursorTranscript(content, opts = {}) {
                 ? entry.message
                 : '';
 
-        if ((role === 'user' || role === 'human' || entry.type === 1) && text && !userPrompt) {
-          userPrompt = text.trim();
+        if ((role === 'user' || role === 'human' || entry.type === 1) && text) {
+          userPrompt = preferUserPrompt(userPrompt, text.trim());
         }
         if ((role === 'assistant' || role === 'ai' || entry.type === 2) && text) {
           lastMessage = text.trim();
@@ -569,9 +571,9 @@ function analyzeCursorTranscript(content, opts = {}) {
     const block = buf.join('\n').trim();
     buf = [];
     if (!block) return;
-    if (mode === 'user' && !userPrompt) {
+    if (mode === 'user') {
       const q = block.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i);
-      userPrompt = (q ? q[1] : block).trim();
+      userPrompt = preferUserPrompt(userPrompt, (q ? q[1] : block).trim());
     } else if (mode === 'assistant') {
       lastMessage = block;
       // Tool calls embedded in assistant block

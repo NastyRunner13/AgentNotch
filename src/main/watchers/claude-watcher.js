@@ -11,6 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
 
 /**
  * Watches Claude Code session JSONL files for real-time status.
@@ -193,9 +194,9 @@ class ClaudeWatcher extends BaseWatcher {
           ? entry.message
           : (entry.message?.content || entry.content || '');
         const text = typeof content === 'string' ? content : '';
-        if (!userPrompt && text) {
-          userPrompt = text;
-          taskName = extractTaskName(text);
+        if (text) {
+          userPrompt = preferUserPrompt(userPrompt, text);
+          if (userPrompt) taskName = extractTaskName(userPrompt);
         }
       }
 

@@ -3,6 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const { BaseWatcher, formatDuration, extractTaskName } = require('./base-watcher');
 const { classifyActivityTool, taggedSessionId } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
 
 /**
  * OpencodeWatcher — monitors OpenCode sessions via its SQLite WAL database.
@@ -211,8 +212,8 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, _staleMs = 60_
     if (type === 'text' || type === 'reasoning') {
       const text = typeof data.text === 'string' ? data.text : '';
       if (text.trim()) {
-        if (type === 'text' && role === 'user' && !firstUserText) {
-          firstUserText = text.trim();
+        if (type === 'text' && role === 'user') {
+          firstUserText = preferUserPrompt(firstUserText, text.trim());
         }
         if (type === 'text' && role === 'assistant') {
           lastAssistantText = text.trim();
@@ -269,7 +270,7 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, _staleMs = 60_
     status,
     currentTool,
     lastMessage,
-    userPrompt: '',
+    userPrompt: firstUserText ? firstUserText.substring(0, 600) : '',
     duration,
     durationFormatted: formatDuration(duration),
     startTime,

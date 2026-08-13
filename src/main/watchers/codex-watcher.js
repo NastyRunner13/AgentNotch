@@ -11,6 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { getText, normalizePlan, buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
 
 /**
  * Watches OpenAI Codex CLI session JSONL files.
@@ -235,17 +236,17 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
 
     if (payload.role === 'user' || entry.role === 'user' || entry.type === 'user' || entry.type === 'human') {
       const content = getText(payload.content || entry.content || payload.message || entry.message);
-      if (!userPrompt && content) {
-        userPrompt = content;
-        taskName = extractTaskName(content);
+      if (content) {
+        userPrompt = preferUserPrompt(userPrompt, content);
+        if (userPrompt) taskName = extractTaskName(userPrompt);
       }
     }
 
     if (payload.type === 'user_message' && payload.message) {
       const content = getText(payload.message);
-      if (!userPrompt && content) {
-        userPrompt = content;
-        taskName = extractTaskName(content);
+      if (content) {
+        userPrompt = preferUserPrompt(userPrompt, content);
+        if (userPrompt) taskName = extractTaskName(userPrompt);
       }
     }
 

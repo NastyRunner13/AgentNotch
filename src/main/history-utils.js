@@ -108,6 +108,11 @@ function buildArchiveSnapshot(session, previous = null, now = Date.now()) {
     cwd: s.cwd || null,
     resumeId: s.resumeId || (prev && prev.resumeId) || null,
     model: s.model || (prev && prev.model) || null,
+    tokens: pickArchiveTokens(s, prev),
+    cost: pickArchiveCost(s, prev),
+    tokensCumulative: s.tokensCumulative !== undefined
+      ? s.tokensCumulative
+      : (prev && prev.tokensCumulative),
     archivedAt: now,
     pinned: false,
     pinnedAt: null
@@ -133,6 +138,26 @@ function buildArchiveSnapshot(session, previous = null, now = Date.now()) {
  * @param {number} [now]
  * @returns {object}
  */
+function tokenSum(t) {
+  if (!t || typeof t !== 'object') return 0;
+  return (Number(t.input) || 0) + (Number(t.output) || 0)
+    + (Number(t.reasoning) || 0) + (Number(t.cacheRead) || 0)
+    + (Number(t.cacheWrite) || 0);
+}
+
+function pickArchiveTokens(session, prev) {
+  if (tokenSum(session && session.tokens) > 0) return session.tokens;
+  if (tokenSum(prev && prev.tokens) > 0) return prev.tokens;
+  return null;
+}
+
+function pickArchiveCost(session, prev) {
+  const live = Number(session && session.cost);
+  if (Number.isFinite(live) && live > 0) return live;
+  const was = Number(prev && prev.cost);
+  return Number.isFinite(was) && was > 0 ? was : 0;
+}
+
 function applyHistoryPin(entry, pinned, now = Date.now()) {
   if (!entry || typeof entry !== 'object') return entry;
   const next = { ...entry };

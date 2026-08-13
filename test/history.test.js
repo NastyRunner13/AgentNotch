@@ -27,6 +27,8 @@ function entry(overrides = {}) {
     archivedAt: 1_000,
     pinned: false,
     pinnedAt: null,
+    tokens: null,
+    cost: 0,
     ...overrides
   };
 }
@@ -119,6 +121,22 @@ describe('buildArchiveSnapshot', () => {
     const snap = buildArchiveSnapshot({ id: 'claude-x', agent: 'Claude Code' });
     assert.equal(snap.pinned, false);
     assert.equal(snap.pinnedAt, null);
+  });
+
+  it('persists tokens and cost, keeping previous when live has none', () => {
+    const session = {
+      id: 'opencode-1',
+      agent: 'OpenCode',
+      tokens: { input: 100, output: 20, reasoning: 0, cacheRead: 5, cacheWrite: 0 },
+      cost: 0.12
+    };
+    const snap = buildArchiveSnapshot(session);
+    assert.equal(snap.tokens.input, 100);
+    assert.equal(snap.cost, 0.12);
+
+    const revived = buildArchiveSnapshot({ id: 'opencode-1', agent: 'OpenCode' }, snap);
+    assert.equal(revived.tokens.input, 100);
+    assert.equal(revived.cost, 0.12);
   });
 });
 

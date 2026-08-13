@@ -11,6 +11,8 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { getText, normalizePlan, buildActivity, taggedSessionId } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
+const { GrokLogTokenIndex } = require('../grok-usage');
 
 /**
  * Watches xAI Grok Build CLI session files.
@@ -30,6 +32,7 @@ class GrokWatcher extends BaseWatcher {
     this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     /** @type {Map<string, { updates?: number, events?: number }>} */
     this._lastFileSize = new Map();
+    this._tokenIndex = options.tokenIndex || new GrokLogTokenIndex();
   }
 
   _start() {
@@ -49,6 +52,7 @@ class GrokWatcher extends BaseWatcher {
   }
 
   async _poll() {
+    this._tokenIndex.update(path.join(this.grokDir, 'logs', 'unified.jsonl'));
     const sessionsDir = path.join(this.grokDir, 'sessions');
     if (!fs.existsSync(sessionsDir)) return;
 
@@ -136,6 +140,14 @@ class GrokWatcher extends BaseWatcher {
 
     if (unchanged) {
       const existing = this.sessions.get(sessionId);
+      const grokTok = this._tokenIndex.get(path.basename(sessionPath));
+      if (grokTok && grokTok.tokens) {
+        this._updateSession(sessionId, {
+          ...existing,
+          tokens: grokTok.tokens,
+          model: existing.model || grokTok.model || null
+        });
+      }
       const signalFile = fs.existsSync(eventsFile) ? eventsFile : updatesFile;
       const isActive = isFileActive(signalFile, 90000);
       // Working stays working so stall detection can fire.
@@ -313,6 +325,7 @@ class GrokWatcher extends BaseWatcher {
       at: fileTimes.lastTime
     });
 
+    const grokTok = this._tokenIndex.get(path.basename(sessionPath));
     const startTime = updateState.startTime || fileTimes.startTime ||
       (summary && summary.created_at ? Date.parse(summary.created_at) : null);
     const lastTime = fileTimes.lastTime || updateState.lastTime;
@@ -343,7 +356,8 @@ class GrokWatcher extends BaseWatcher {
       plan: (planFromFile.length ? planFromFile : updateState.plan) || [],
       isActive: status === 'working' || status === 'permission-request' || status === 'question',
       cwd: cwd || (summary && summary.info && summary.info.cwd) || null,
-      model: model || null,
+      model: model || (grokTok && grokTok.model) || null,
+      tokens: (grokTok && grokTok.tokens) || null,
       resumeId: path.basename(sessionPath),
       sourceTag: this.sourceTag || ''
     });
@@ -516,8 +530,8 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
           // New user turn — previous turn is no longer complete
           turnComplete = false;
           userBuf += text;
-          userPrompt = userBuf;
-          if (!taskName) taskName = extractTaskName(userPrompt);
+          userPrompt = preferUserPrompt(userPrompt, userBuf);
+          if (userPrompt && !taskName) taskName = extractTaskName(userPrompt);
           status = 'working';
         }
         continue;
@@ -674,9 +688,9 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
 
     if (role === 'user' || entryType === 'user' || entryType === 'human' || entryType === 'user_message') {
       const content = getText(payload.content || entry.content || payload.message || entry.message);
-      if (!userPrompt && content) {
-        userPrompt = content;
-        if (!taskName) taskName = extractTaskName(content);
+      if (content) {
+        userPrompt = preferUserPrompt(userPrompt, content);
+        if (userPrompt && !taskName) taskName = extractTaskName(userPrompt);
       }
     }
 
@@ -1297,15 +1311,14 @@ function analyzeChatHistory(entries) {
       // Prefer explicit user_query blocks; skip system reminders / user_info
       const queryMatch = text.match(/<user_query>\s*([\s\S]*?)\s*<\/user_query>/i);
       if (queryMatch && queryMatch[1].trim()) {
-        userPrompt = queryMatch[1].trim();
+        userPrompt = preferUserPrompt(userPrompt, queryMatch[1].trim());
       } else if (
-        !userPrompt &&
         !text.includes('<system-reminder>') &&
         !text.includes('<user_info>') &&
         !text.includes('<agent_skills>') &&
         text.trim().length > 0
       ) {
-        userPrompt = text.trim();
+        userPrompt = preferUserPrompt(userPrompt, text.trim());
       }
       continue;
     }

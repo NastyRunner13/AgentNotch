@@ -11,6 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { taggedSessionId } = require('./session-utils');
+const { preferUserPrompt } = require('../prompt-clean');
 
 /**
  * Watches Antigravity (Google DeepMind) IDE sessions.
@@ -154,10 +155,8 @@ function analyzeAntigravityEntries(entries, sessionId, conversationId, filePath,
         ? entry.content
         : (entry.message || '');
       if (content) {
-        if (!userPrompt) {
-          userPrompt = content;
-          taskName = extractTaskName(content);
-        }
+        userPrompt = preferUserPrompt(userPrompt, content);
+        if (userPrompt) taskName = extractTaskName(userPrompt);
       }
     }
 
