@@ -104,6 +104,7 @@ export function buildInsightsModel(data, rangeDays) {
   let complexitySum = 0;
   let specificitySum = 0;
   let wordsSum = 0;
+  let lowConfidence = 0;
 
   for (const r of ranged) {
     const cat = CATEGORY_META[r.category] ? r.category : 'general';
@@ -119,6 +120,7 @@ export function buildInsightsModel(data, rangeDays) {
     specificitySum += Number(r.specificity) || 0;
     wordsSum += Number(r.words) || 0;
     if (r.agent) agents.add(r.agent);
+    if (r.confidence === 'low') lowConfidence += 1;
   }
 
   const total = ranged.length;
@@ -169,6 +171,7 @@ export function buildInsightsModel(data, rangeDays) {
     topCategory: categories[0] || null,
     topArea: areas[0] || null,
     vagueShare: total ? specificity.vague / total : 0,
+    lowConfidence,
     empty: total === 0
   };
 }
@@ -281,7 +284,10 @@ export function renderInsightsView(data, rangeDays) {
     ? ` <span class="insight-tip">— name files, expected behavior, and constraints to raise it</span>`
     : '';
 
-  const footnote = `<p class="usage-footnote">Classified on-device from prompts, tool calls, and session time — nothing leaves this machine. Sessions without prompts are excluded.</p>`;
+  const lowNote = model.lowConfidence
+    ? ` ${model.lowConfidence} classified with low confidence.`
+    : '';
+  const footnote = `<p class="usage-footnote">Classified on-device from prompts, tool calls, and session time — nothing leaves this machine. Sessions without prompts are excluded.${lowNote}</p>`;
 
   return `${rangeToggle}
     ${renderSummary(model)}

@@ -133,7 +133,7 @@ export function buildUsageModel(stats, rangeDays) {
   const agentsMap = new Map(); // agent → aggregate
   const totals = {
     tokens: 0, cost: 0, costKnown: false, estimated: false, partial: false,
-    sessions: 0, ms: 0,
+    sessions: 0, pricedSessions: 0, tokenSessions: 0, ms: 0,
     split: { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
   };
 
@@ -192,6 +192,8 @@ export function buildUsageModel(stats, rangeDays) {
     totals.tokens += tokens;
     totals.cost += cost;
     totals.costKnown = totals.costKnown || known;
+    if (known && sess > 0) totals.pricedSessions += sess;
+    if (tokens > 0 && sess > 0) totals.tokenSessions += sess;
     if (known && !b.costActual) totals.estimated = true;
     if (!known && tokens > 0) totals.partial = true;
   }
@@ -223,8 +225,8 @@ export function buildUsageModel(stats, rangeDays) {
 
   totals.agents = agents.length;
   totals.activeDays = days.length;
-  totals.avgCostPerSession = totals.costKnown && totals.sessions > 0
-    ? totals.cost / totals.sessions : null;
+  totals.avgCostPerSession = totals.costKnown && totals.pricedSessions > 0
+    ? totals.cost / totals.pricedSessions : null;
   totals.avgSessionMs = totals.sessions > 0 ? totals.ms / totals.sessions : 0;
   totals.cacheShare = totals.tokens > 0 ? totals.split.cacheRead / totals.tokens : 0;
   totals.dailyAvgCost = totals.costKnown && totals.activeDays > 0
@@ -482,7 +484,8 @@ function renderSummary(totals) {
   const secondary = [
     {
       value: totals.avgCostPerSession != null ? fmtCost(totals.avgCostPerSession) : '—',
-      label: '$ / session'
+      label: '$ / priced',
+      title: 'Average cost over sessions with priced token data — not all sessions'
     },
     { value: fmtMs(totals.avgSessionMs), label: 'Avg session' },
     {
@@ -659,7 +662,7 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLim
   </div>` : '';
 
   const footnote = model.totals.costKnown
-    ? `<p class="usage-footnote">${model.totals.estimated ? 'Costs estimated at list prices — actual billing may differ. ' : ''}${model.totals.partial ? 'Some token usage has no known price and is excluded from cost. ' : ''}Local data only.</p>`
+    ? `<p class="usage-footnote">${model.totals.estimated ? 'Costs estimated at list prices — actual billing may differ. ' : ''}${model.totals.partial ? 'Some token usage has no known price and is excluded from cost. ' : ''}$ / priced uses token sessions with a known price, not all sessions. Local data only.</p>`
     : `<p class="usage-footnote">No priced token data in this range — costs appear when an agent reports tokens for a known model. Local data only.</p>`;
 
   return `${rangeToggle}

@@ -87,6 +87,7 @@ describe('insights-view model', async () => {
     assert.ok(html.includes('data-insight-range'));
     assert.ok(html.includes('Bug fixes'));
     assert.ok(html.includes('Classified on-device'));
+    assert.ok(!html.includes('low confidence'));
   });
 
   it('renders a quiet empty state when there is nothing to show', () => {
@@ -100,6 +101,11 @@ describe('insights-view model', async () => {
     assert.ok(renderInsightsView(vague, 0).includes('insight-tip'));
     const sharp = { records: [rec(0, { specificity: 90 }), rec(1, { specificity: 85 }), rec(2, { specificity: 70 })] };
     assert.ok(!renderInsightsView(sharp, 0).includes('insight-tip'));
+  });
+
+  it('notes low-confidence records in the footnote', () => {
+    const data = { records: [rec(0, { confidence: 'low' }), rec(1, { confidence: 'high' })] };
+    assert.ok(renderInsightsView(data, 0).includes('1 classified with low confidence'));
   });
 
   it('fingerprint is stable per model and differs across ranges', () => {

@@ -71,7 +71,9 @@ describe('usage-view model + charts', async () => {
     assert.equal(m.totals.split.cacheRead, Math.round(2430000 * 0.6));
     assert.ok(m.totals.cacheShare > 0.55 && m.totals.cacheShare < 0.65);
     assert.ok(m.totals.avgSessionMs > 0);
-    assert.ok(Math.abs(m.totals.avgCostPerSession - (9.58 / 6)) < 1e-9);
+    // $ / priced uses token-bearing priced sessions (5), not all sessions (6)
+    assert.equal(m.totals.pricedSessions, 5);
+    assert.ok(Math.abs(m.totals.avgCostPerSession - (9.58 / 5)) < 1e-9);
     assert.equal(m.totals.estimated, true);  // some list-price estimates
     assert.equal(m.totals.partial, false);   // unpriced bucket is out of range
   });

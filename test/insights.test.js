@@ -268,6 +268,26 @@ describe('insights: record building', () => {
     assert.equal(rec.category, 'refactor');
   });
 
+  it('skips Codex plugin-catalog dumps instead of classifying them as data', () => {
+    assert.equal(buildInsightRecord({
+      id: 'codex-1',
+      agent: 'Codex',
+      userPrompt: '<recommended_plugins> Here is a list of plugins that are available but not installed. If the user query would benefit'
+    }), null);
+  });
+
+  it('marks thin-margin / injected prompts as low confidence', () => {
+    const rec = buildInsightRecord({
+      id: 'ag-1',
+      agent: 'Antigravity',
+      userPrompt: '<USER_REQUEST>can you review my project</USER_REQUEST> <ADDITIONAL_METADATA>open files: a.ts b.ts c.test.js</ADDITIONAL_METADATA>'
+    });
+    assert.ok(rec);
+    assert.equal(rec.category, 'review');
+    assert.equal(rec.confidence, 'low');
+    assert.equal(rec.injected, true);
+  });
+
   it('buildInsights sorts newest first and tolerates bad entries', () => {
     const { records } = buildInsights([
       { id: 'a', agent: 'Codex', userPrompt: 'add tests', lastTime: 1000 },

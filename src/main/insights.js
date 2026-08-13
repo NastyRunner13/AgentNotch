@@ -1,4 +1,5 @@
 const { dayKey } = require('./usage-stats');
+const { cleanPrompt, isSubstantive, promptWasInjected } = require('./prompt-clean');
 
 /**
  * Conversation Insights — local, heuristic classification of agent sessions.
@@ -213,20 +214,7 @@ const EXPECTATION_RE = /\b(should|expected|expect|instead|currently|actually|act
 
 /* ── Helpers ──────────────────────────────────────────── */
 
-/** Harness-injected blocks that follow the real user text (IDE state, open
- *  documents, timestamps). They are not user intent and must not feed the
- *  classifier — a `.test.js` path here would flip anything to "testing". */
-const METADATA_CUT_RE = /<(additional_metadata|system-reminder|metadata|environment_context|user_state|context|active_editor|ide_state)\b/i;
 
-function cleanPrompt(prompt) {
-  let text = String(prompt || '');
-  const cut = text.search(METADATA_CUT_RE);
-  if (cut !== -1) text = text.slice(0, cut);
-  return text
-    .replace(/<\/?[a-z_ -]+>/gi, ' ') // strip <user_request>-style wrappers
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function wordCount(text) {
   if (!text) return 0;
@@ -305,15 +293,22 @@ function classifyIntent(prompt, taskName = '', toolCalls = []) {
 
   let best = FALLBACK_CATEGORY;
   let bestScore = 0;
+  let secondScore = 0;
   for (const def of CATEGORY_DEFS) {
     const s = scores[def.id] || 0;
     if (s > bestScore) {
+      secondScore = bestScore;
       best = def.id;
       bestScore = s;
+    } else if (s > secondScore) {
+      secondScore = s;
     }
   }
+  const margin = bestScore - secondScore;
   if (bestScore < CATEGORY_THRESHOLD) best = FALLBACK_CATEGORY;
-  return { category: best, scores };
+  const confidence = (best === FALLBACK_CATEGORY || margin < 1.5 || bestScore < 3)
+    ? 'low' : 'high';
+  return { category: best, scores, confidence, margin, bestScore };
 }
 
 /**
@@ -477,12 +472,15 @@ function bandFor(score, bands) {
  */
 function buildInsightRecord(session) {
   if (!session || !session.id) return null;
-  const prompt = cleanPrompt(session.userPrompt);
-  if (!prompt) return null;
+  const rawPrompt = session.userPrompt;
+  const prompt = cleanPrompt(rawPrompt);
+  if (!prompt || !isSubstantive(prompt)) return null;
 
   const toolCalls = Array.isArray(session.toolCalls) ? session.toolCalls : [];
   const taskName = String(session.taskName || '').trim();
-  const { category } = classifyIntent(prompt, taskName, toolCalls);
+  const injected = promptWasInjected(rawPrompt);
+  const { category, confidence, bestScore } = classifyIntent(prompt, taskName, toolCalls);
+  const finalConfidence = injected && confidence === 'high' ? 'low' : confidence;
   const { area, langs } = detectWorkType(toolCalls, `${prompt} ${taskName}`);
   const complexity = scoreComplexity(session, toolCalls, prompt);
   const specificity = scoreSpecificity(prompt);
@@ -504,7 +502,10 @@ function buildInsightRecord(session) {
     specificity,
     words: wordCount(prompt),
     tools: toolCalls.length,
-    durationMs: Math.max(0, Math.round(durationMs))
+    durationMs: Math.max(0, Math.round(durationMs)),
+    confidence: finalConfidence,
+    score: bestScore,
+    injected
   };
 }
 
