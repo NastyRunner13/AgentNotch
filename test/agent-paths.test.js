@@ -74,7 +74,11 @@ describe('agent-paths', () => {
   });
 
   it('resolveAgentWatchTargets: custom wins; WSL extra when both exist', () => {
-    const exists = (p) => p === 'C:\\Users\\ada\\.claude' || p === '\\\\wsl$\\Ubuntu\\home\\ada\\.claude';
+    // defaultAgentRoots uses the host path.join, so the exists mock must use
+    // the same form (POSIX hosts produce C:\Users\ada/.claude, not '\').
+    const localClaude = path.join('C:\\Users\\ada', '.claude');
+    const wslClaude = '\\\\wsl$\\Ubuntu\\home\\ada\\.claude';
+    const exists = (p) => p === localClaude || p === wslClaude;
     const resolved = resolveAgentWatchTargets(
       { watchWsl: true, agentRoots: {} },
       {
@@ -85,8 +89,8 @@ describe('agent-paths', () => {
         wsl: { distro: 'Ubuntu', linuxHome: '/home/ada' }
       }
     );
-    assert.equal(resolved.targets.claude.primary, path.join('C:\\Users\\ada', '.claude'));
-    assert.deepEqual(resolved.targets.claude.extra, ['\\\\wsl$\\Ubuntu\\home\\ada\\.claude']);
+    assert.equal(resolved.targets.claude.primary, localClaude);
+    assert.deepEqual(resolved.targets.claude.extra, [wslClaude]);
   });
 
   it('resolveAgentWatchTargets: WSL becomes primary when Windows home missing', () => {
