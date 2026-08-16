@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Electron shell**: sandbox + `webSecurity` explicit; deny foreign navigation, `window.open`, `<webview>`, renderer downloads, and extra Chromium permissions. IPC invokes must come from the notch window.
+- **Dispatch / open-path**: Windows `.cmd` shims no longer concatenate the user prompt through `cmd.exe`; folder open refuses files so a poisoned cwd cannot execute. Settings paths, WSL distro, hotkey, and poll interval are sanitized.
+- **Local-first renderer**: Inter / JetBrains Mono are bundled; CSP no longer allows Google Fonts. History, logs, and permission files use owner-only modes; hook input is size-capped and refuses symlink overwrites.
+- **Packaging**: Electron 41.10.x (patched Chromium/Electron advisories) and fuses (`runAsNode` off, ASAR integrity on). `electron-builder` 26.15.x (AppImage search-path fix). Production `npm audit` in CI. Windows login-item path is quoted.
+
 ### Added
 - **In-notch answers**: choosing a question option delivers the answer into the same live session via headless resume (Claude, Codex, Grok, OpenCode). Cursor / Antigravity still Jump.
 - **Notification actions**: attention toasts expose Allow / Deny / Snooze, Jump, or short question options. Actions do not open the panel; click-on-body still does.

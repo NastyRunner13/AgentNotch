@@ -14,7 +14,7 @@
   <a href="https://github.com/NastyRunner13/AgentNotch/releases"><img src="https://img.shields.io/github/v/release/NastyRunner13/AgentNotch?color=%234ADE80&label=release" alt="Latest Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <a href="https://github.com/NastyRunner13/AgentNotch/releases"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-8a8a8a" alt="Platform"></a>
-  <img src="https://img.shields.io/badge/electron-36-47848f" alt="Electron">
+  <img src="https://img.shields.io/badge/electron-41-47848f" alt="Electron">
   <img src="https://img.shields.io/badge/node-%E2%89%A5%2020-339933" alt="Node">
 </p>
 
@@ -124,9 +124,10 @@ npm install
 npm run dev
 ```
 
-Run the test suite (146 tests across 25 suites):
+Run the test suite:
 ```bash
 npm test
+npm run audit:prod
 ```
 
 ## 📦 Production Builds
@@ -150,6 +151,7 @@ agent-notch/
 ├── src/
 │   ├── main/                          # Electron main process
 │   │   ├── index.js                   # Entry point, window management, IPC
+│   │   ├── security.js                # IPC / path / dispatch / navigation hardening
 │   │   ├── agent-manager.js           # Multi-agent lifecycle orchestration
 │   │   ├── tray.js                    # OS tray icon, status colors, context menu
 │   │   ├── store.js                   # Settings & session state (electron-store)
@@ -221,10 +223,10 @@ agent-notch/
 
 AgentNotch is **local-first and private by design.**
 
-- ✅ **Zero telemetry** — no cloud dashboards, no accounts, no analytics
+- ✅ **Zero telemetry** — no cloud dashboards, no accounts, no analytics, no remote fonts
 - ✅ **Read-only inspection** — agent logs are parsed directly, never modified
 - ✅ **On-device only** — settings and history never leave your machine (`~/.agent-notch/`)
-- ✅ **Secure IPC** — renderer communicates through Electron's `contextBridge` only
+- ✅ **Hardened Electron** — sandboxed renderer, contextBridge-only IPC, folder-only `openPath`, argv-safe dispatch
 
 For responsible security disclosures, see [SECURITY.md](SECURITY.md).
 
