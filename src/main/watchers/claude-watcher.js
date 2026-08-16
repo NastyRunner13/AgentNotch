@@ -11,7 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
-const { preferUserPrompt } = require('../prompt-clean');
+const { preferUserPrompt } = require('../lib/prompt-clean');
 
 /**
  * Watches Claude Code session JSONL files for real-time status.

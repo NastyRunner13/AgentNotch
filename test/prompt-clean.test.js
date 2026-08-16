@@ -5,7 +5,7 @@ const {
   isSubstantive,
   preferUserPrompt,
   promptWasInjected
-} = require('../src/main/prompt-clean');
+} = require('../src/main/lib/prompt-clean');
 
 describe('prompt-clean', () => {
   it('extracts USER_REQUEST / user_query inner text', () => {

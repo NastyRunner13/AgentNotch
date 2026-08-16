@@ -3,7 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const { BaseWatcher, formatDuration, extractTaskName } = require('./base-watcher');
 const { classifyActivityTool, taggedSessionId } = require('./session-utils');
-const { preferUserPrompt } = require('../prompt-clean');
+const { preferUserPrompt } = require('../lib/prompt-clean');
 
 /**
  * OpencodeWatcher — monitors OpenCode sessions via its SQLite WAL database.

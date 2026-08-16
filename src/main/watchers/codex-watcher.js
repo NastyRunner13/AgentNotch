@@ -11,7 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { getText, normalizePlan, buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
-const { preferUserPrompt } = require('../prompt-clean');
+const { preferUserPrompt } = require('../lib/prompt-clean');
 
 /**
  * Watches OpenAI Codex CLI session JSONL files.

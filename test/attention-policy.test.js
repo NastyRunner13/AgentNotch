@@ -29,8 +29,8 @@ const {
   isSessionAttention,
   normalizeStallAfterMs,
   formatStallAge
-} = require('../src/main/attention-policy');
-const { DEFAULT_SETTINGS } = require('../src/main/settings-defaults');
+} = require('../src/main/session/attention-policy');
+const { DEFAULT_SETTINGS } = require('../src/main/settings/settings-defaults');
 
 describe('attention-policy', () => {
   describe('kindFromStatus', () => {

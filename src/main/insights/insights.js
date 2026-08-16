@@ -1,5 +1,5 @@
-const { dayKey } = require('./usage-stats');
-const { cleanPrompt, isSubstantive, promptWasInjected } = require('./prompt-clean');
+const { dayKey } = require('../usage/usage-stats');
+const { cleanPrompt, isSubstantive, promptWasInjected } = require('../lib/prompt-clean');
 
 /**
  * Conversation Insights — local, heuristic classification of agent sessions.

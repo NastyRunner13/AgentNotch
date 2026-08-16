@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { UsageTracker, dayKey } = require('../src/main/usage-stats');
+const { UsageTracker, dayKey } = require('../src/main/usage/usage-stats');
 const {
   scanClaudeFile,
   scanCodexFile,
@@ -11,7 +11,7 @@ const {
   scanUsageHistory,
   mapCodexUsage,
   scanGrokLog
-} = require('../src/main/usage-backfill');
+} = require('../src/main/usage/usage-backfill');
 
 const NOW = new Date('2026-07-27T12:00:00').getTime();
 const TODAY = dayKey(NOW);

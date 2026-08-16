@@ -11,7 +11,7 @@ const {
   readJsonlEfficient
 } = require('./base-watcher');
 const { taggedSessionId } = require('./session-utils');
-const { preferUserPrompt } = require('../prompt-clean');
+const { preferUserPrompt } = require('../lib/prompt-clean');
 
 /**
  * Watches Antigravity (Google DeepMind) IDE sessions.

@@ -19,7 +19,7 @@ if (process.platform === 'win32') {
 
 // Clear module cache so permission-bridge picks up env (os.homedir is fixed at load time)
 // Actually os.homedir() reads env each call on Node - good.
-const bridge = require('../src/main/permission-bridge');
+const bridge = require('../src/main/permissions/permission-bridge');
 
 describe('permission-bridge', () => {
   before(() => {
@@ -198,7 +198,7 @@ describe('permission-bridge', () => {
 
   it('hook CLI exits with allow JSON when decision is written', async () => {
     // Use the real bridge script with env pointing at TMP_HOME
-    const script = path.join(__dirname, '..', 'src', 'main', 'permission-bridge.js');
+    const script = path.join(__dirname, '..', 'src', 'main', 'permissions', 'permission-bridge.js');
     const hookInput = JSON.stringify({
       session_id: 'cli-test',
       transcript_path: path.join(TMP_HOME, 'cli-test.jsonl'),

@@ -4,7 +4,7 @@ const {
   canRemoteApprove,
   canRemoteAnswer,
   notificationActionsFor
-} = require('../src/main/notification-actions');
+} = require('../src/main/lib/notification-actions');
 
 describe('notificationActionsFor', () => {
   it('returns nothing for idle / done / missing', () => {

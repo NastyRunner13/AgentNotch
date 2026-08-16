@@ -6,7 +6,7 @@ const {
   detectLimitCrossings,
   LIMIT_WARN_PERCENT,
   LIMIT_CRIT_PERCENT
-} = require('../src/main/usage-limits');
+} = require('../src/main/usage/usage-limits');
 
 describe('limitLevel', () => {
   it('returns null for missing values', () => {

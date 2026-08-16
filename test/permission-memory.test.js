@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const mem = require('../src/main/permission-memory');
+const mem = require('../src/main/permissions/permission-memory');
 
 describe('permission-memory', () => {
   let dir;

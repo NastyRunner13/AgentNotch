@@ -6,7 +6,7 @@ const path = require('path');
 const {
   UsageTracker, estimateCost, findPricing, dayKey,
   activeMsFromTimestamps, sessionActiveMs, LONE_GAP_CAP_MS, ACTIVE_GAP_CAP_MS
-} = require('../src/main/usage-stats');
+} = require('../src/main/usage/usage-stats');
 
 const NOW = new Date('2026-07-27T12:00:00').getTime();
 const TODAY = dayKey(NOW);

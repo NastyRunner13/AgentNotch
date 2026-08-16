@@ -14,7 +14,7 @@ const {
   toWindowsReadablePath,
   toLinuxCwd,
   isWslBackedSession
-} = require('../src/main/agent-paths');
+} = require('../src/main/lib/agent-paths');
 
 describe('agent-paths', () => {
   it('normalizeAgentRoots trims known keys and drops junk', () => {

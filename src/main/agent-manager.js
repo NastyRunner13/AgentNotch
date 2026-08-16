@@ -10,18 +10,18 @@ const { CursorWatcher } = require('./watchers/cursor-watcher');
 const { AntigravityWatcher } = require('./watchers/antigravity-watcher');
 const { GrokWatcher } = require('./watchers/grok-watcher');
 const { OpencodeWatcher } = require('./watchers/opencode-watcher');
-const { createSettingsStore } = require('./store');
+const { createSettingsStore } = require('./settings/store');
 const {
   DEFAULT_SETTINGS,
   ATTENTION_NOTIFY_KEYS,
   ATTENTION_SOUND_KEYS
-} = require('./settings-defaults');
-const { collectUsageLimits, detectLimitCrossings } = require('./usage-limits');
-const { UsageTracker, dayKey, sessionActiveMs } = require('./usage-stats');
-const { scanUsageHistory } = require('./usage-backfill');
-const { buildInsights } = require('./insights');
-const permissionBridge = require('./permission-bridge');
-const permissionMemory = require('./permission-memory');
+} = require('./settings/settings-defaults');
+const { collectUsageLimits, detectLimitCrossings } = require('./usage/usage-limits');
+const { UsageTracker, dayKey, sessionActiveMs } = require('./usage/usage-stats');
+const { scanUsageHistory } = require('./usage/usage-backfill');
+const { buildInsights } = require('./insights/insights');
+const permissionBridge = require('./permissions/permission-bridge');
+const permissionMemory = require('./permissions/permission-memory');
 const {
   normalizeAgentRoots,
   probeWsl,
@@ -31,8 +31,8 @@ const {
   toLinuxCwd,
   isLinuxCwd,
   isWslBackedSession
-} = require('./agent-paths');
-const { readGitContext } = require('./git-context');
+} = require('./lib/agent-paths');
+const { readGitContext } = require('./session/git-context');
 const { parseTaggedSessionId } = require('./watchers/session-utils');
 const {
   normalizeNotchAlign,
@@ -47,14 +47,14 @@ const {
   isAttentionEpisodeAcknowledged,
   compareSessionsByAttention,
   annotateAttentionQueue
-} = require('./attention-policy');
+} = require('./session/attention-policy');
 const {
   buildArchiveSnapshot,
   applyHistoryPin,
   trimHistoryEntries,
   resolveHistoryResumeTarget,
   DEFAULT_CONTINUE_PROMPT
-} = require('./history-utils');
+} = require('./session/history-utils');
 const {
   sanitizeWslDistro,
   sanitizeHotkey,
@@ -64,7 +64,7 @@ const {
   planWindowsCliLaunch,
   writePrivateFile,
   ensurePrivateDir
-} = require('./security');
+} = require('./security/security');
 
 const USAGE_BACKFILL_VERSION = 3; // v3: Grok tokens + active-span session time
 

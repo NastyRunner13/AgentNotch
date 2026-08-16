@@ -45,7 +45,7 @@ const HOTKEY_MODIFIERS = new Set([
 const HOTKEY_KEY = /^(F(?:[1-9]|1[0-9]|2[0-4])|Plus|Space|Tab|Backspace|Delete|Insert|Return|Enter|Up|Down|Left|Right|Home|End|PageUp|PageDown|Escape|Esc|[A-Za-z0-9])$/;
 
 function rendererIndexPath() {
-  return path.resolve(__dirname, '..', 'renderer', 'index.html');
+  return path.resolve(__dirname, '..', '..', 'renderer', 'index.html');
 }
 
 function isAppRendererUrl(url) {

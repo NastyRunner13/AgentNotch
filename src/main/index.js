@@ -8,8 +8,8 @@ const {
   clampAutohideDelayMs,
   normalizeNotchAlign,
   filterLimitAlertsForDelivery
-} = require('./attention-policy');
-const { notificationActionsFor } = require('./notification-actions');
+} = require('./session/attention-policy');
+const { notificationActionsFor } = require('./lib/notification-actions');
 const {
   installAppWebSecurity,
   installSessionSecurity,
@@ -19,7 +19,7 @@ const {
   validateFocusAgentName,
   normalizeDispatchPrompt,
   resolveOpenableDirectory
-} = require('./security');
+} = require('./security/security');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
 installConsoleCapture();

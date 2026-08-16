@@ -6,7 +6,7 @@ const {
   filterSessions,
   groupSessions,
   collectFilterOptions
-} = require('../src/main/session-feed-utils');
+} = require('../src/main/session/session-feed-utils');
 
 describe('projectBase', () => {
   it('returns the last path segment', () => {

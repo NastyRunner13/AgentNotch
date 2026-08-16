@@ -13,7 +13,7 @@ const {
 } = require('../src/main/watchers/cursor-watcher');
 const { extractTaskName, parseJSONL, formatDuration } = require('../src/main/watchers/base-watcher');
 const { getText, normalizePlan, parseTaggedSessionId, canonicalSessionId } = require('../src/main/watchers/session-utils');
-const { collectUsageLimits } = require('../src/main/usage-limits');
+const { collectUsageLimits } = require('../src/main/usage/usage-limits');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');

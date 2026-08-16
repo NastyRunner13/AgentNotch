@@ -11,7 +11,7 @@ const {
   COMPLEXITY_BANDS,
   SPECIFICITY_BANDS,
   CATEGORY_IDS
-} = require('../src/main/insights');
+} = require('../src/main/insights/insights');
 
 describe('insights: intent classification', () => {
   const cat = (prompt, toolCalls = [], taskName = '') => classifyIntent(prompt, taskName, toolCalls).category;

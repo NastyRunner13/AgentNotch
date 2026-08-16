@@ -1,6 +1,6 @@
 const EventEmitter = require('events');
 const fs = require('fs');
-const { cleanPrompt } = require('../prompt-clean');
+const { cleanPrompt } = require('../lib/prompt-clean');
 
 /**
  * Base class for all agent watchers.

@@ -10,7 +10,7 @@ const {
   parseLocalPr,
   readGitContext,
   clearGitContextCache
-} = require('../src/main/git-context');
+} = require('../src/main/session/git-context');
 
 describe('git-context parsers', () => {
   it('parseHead reads a branch ref or detached SHA', () => {

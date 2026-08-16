@@ -29,7 +29,7 @@ const {
   DEFAULT_POLL_MS,
   MIN_POLL_MS,
   MAX_POLL_MS
-} = require('../src/main/security');
+} = require('../src/main/security/security');
 
 describe('validateSessionId', () => {
   it('accepts watcher-style ids', () => {
