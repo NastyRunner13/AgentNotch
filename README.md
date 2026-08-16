@@ -151,25 +151,17 @@ agent-notch/
 ├── src/
 │   ├── main/                          # Electron main process
 │   │   ├── index.js                   # Entry point, window management, IPC
-│   │   ├── security.js                # IPC / path / dispatch / navigation hardening
 │   │   ├── agent-manager.js           # Multi-agent lifecycle orchestration
 │   │   ├── tray.js                    # OS tray icon, status colors, context menu
-│   │   ├── store.js                   # Settings & session state (electron-store)
 │   │   ├── logger.js                  # Quiet, file-based logging
-│   │   ├── permission-bridge.js       # Claude PermissionRequest hook + IPC
-│   │   ├── insights.js                # Conversation insights engine
-│   │   ├── usage-limits.js            # Local resource tracker
-│   │   ├── usage-stats.js             # Token/cost accumulation → daily buckets
-│   │   ├── usage-backfill.js          # Full-history scan of agent session files
-│   │   └── watchers/                  # Agent-specific file/process watchers
-│   │       ├── base-watcher.js        #   Abstract watcher base class
-│   │       ├── claude-watcher.js      #   Claude Code JSONL parser
-│   │       ├── codex-watcher.js       #   Codex rollout log parser
-│   │       ├── cursor-watcher.js      #   Cursor process tracker
-│   │       ├── antigravity-watcher.js #   Antigravity transcript parser
-│   │       ├── grok-watcher.js        #   Grok session updates tailer
-│   │       ├── opencode-watcher.js    #   OpenCode SQLite WAL reader
-│   │       └── session-utils.js       #   JSONL stream helpers
+│   │   ├── watchers/                  # Agent-specific file/process watchers
+│   │   ├── usage/                     # Token/cost stats, limits, backfill
+│   │   ├── permissions/               # Claude PermissionRequest hook + memory
+│   │   ├── insights/                  # Conversation insights engine
+│   │   ├── session/                   # History, attention, git, feed helpers
+│   │   ├── settings/                  # Defaults + electron-store
+│   │   ├── security/                  # IPC / path / dispatch / navigation
+│   │   └── lib/                       # Shared helpers (paths, prompts, toasts)
 │   ├── preload/
 │   │   └── index.js                   # contextBridge secure IPC
 │   └── renderer/                      # UI (Notch, Panel, Settings)

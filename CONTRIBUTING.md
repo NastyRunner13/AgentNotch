@@ -59,7 +59,7 @@ Before modifying renderer UI files (`src/renderer/`), please read [`DESIGN.md`](
 
 AgentNotch is built with **Electron + Vanilla CSS/JS** with zero heavy UI frameworks or bundlers to guarantee instant startup and low memory footprint.
 
-- **`src/main/`**: Electron main process. Handles system tray integration, window positioning, file watching (via `chokidar`), IPC handlers, local SQLite/JSON log parsing, usage stats tracking (`usage-stats.js`), and Claude permission bridge installation.
+- **`src/main/`**: Electron main process. Handles system tray integration, window positioning, file watching (via `chokidar`), IPC handlers, local SQLite/JSON log parsing, usage stats (`usage/`), and Claude permission bridge (`permissions/`).
 - **`src/renderer/`**: Electron renderer process. Pure DOM + Vanilla CSS components for the notch bar, session cards, usage analytics dashboard (`usage-view.js`), and settings view.
 - **`test/`**: Unit test suite using Node.js native test runner (`node --test`). Contains test fixtures and tests for all agent log scanners, cost calculators, and view state builders.
 
@@ -68,7 +68,7 @@ AgentNotch is built with **Electron + Vanilla CSS/JS** with zero heavy UI framew
 ## Development & Testing Guidelines
 
 ### Adding or Updating Agent Watchers
-- Place watcher parsers under `src/main/` (or dedicated analyzer utilities).
+- Place watcher parsers under `src/main/watchers/` (or dedicated analyzer utilities).
 - Ensure file watching and polling handle missing files, corrupted logs, or read access locks gracefully without crashing the main process.
 - Write unit tests under `test/` verifying log parsing, token extraction, timestamp ordering, and status mapping.
 
