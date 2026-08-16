@@ -55,6 +55,16 @@ const {
   resolveHistoryResumeTarget,
   DEFAULT_CONTINUE_PROMPT
 } = require('./history-utils');
+const {
+  sanitizeWslDistro,
+  sanitizeHotkey,
+  clampPollInterval,
+  sanitizeConfigurablePath,
+  sanitizeAgentRoots,
+  planWindowsCliLaunch,
+  writePrivateFile,
+  ensurePrivateDir
+} = require('./security');
 
 const USAGE_BACKFILL_VERSION = 3; // v3: Grok tokens + active-span session time
 
@@ -1017,9 +1027,8 @@ class AgentManager extends EventEmitter {
     if (typeof this.settings.notchDisplayId !== 'number' || !Number.isFinite(this.settings.notchDisplayId)) {
       this.settings.notchDisplayId = 0;
     }
-    if (typeof this.settings.globalHotkey !== 'string') {
-      this.settings.globalHotkey = '';
-    }
+    this.settings.globalHotkey = sanitizeHotkey(this.settings.globalHotkey);
+    this.settings.pollInterval = clampPollInterval(this.settings.pollInterval);
     this.settings.focusMode = Boolean(this.settings.focusMode);
     this.settings.mutedAgents = normalizeMutedAgents(this.settings.mutedAgents);
 
@@ -1034,24 +1043,16 @@ class AgentManager extends EventEmitter {
     this.settings.showSessionActivity = this.settings.showSessionActivity !== false;
     this.settings.autoCollapseFinished = this.settings.autoCollapseFinished !== false;
     this.settings.alwaysAllowEnabled = this.settings.alwaysAllowEnabled !== false;
-    this.settings.agentRoots = normalizeAgentRoots(this.settings.agentRoots);
+    this.settings.agentRoots = sanitizeAgentRoots(normalizeAgentRoots(this.settings.agentRoots));
     this.settings.watchWsl = this.settings.watchWsl !== false;
-    if (typeof this.settings.wslDistro !== 'string') {
-      this.settings.wslDistro = '';
-    } else {
-      this.settings.wslDistro = this.settings.wslDistro.trim().slice(0, 64);
-    }
+    this.settings.wslDistro = sanitizeWslDistro(this.settings.wslDistro);
     this.settings.stallAfterMs = normalizeStallAfterMs(this.settings.stallAfterMs);
 
     // Dispatch defaults
     const allowedAgents = new Set(['', 'Claude Code', 'Codex', 'Grok', 'OpenCode']);
     const defAgent = String(this.settings.defaultDispatchAgent || '');
     this.settings.defaultDispatchAgent = allowedAgents.has(defAgent) ? defAgent : '';
-    if (typeof this.settings.defaultProjectCwd !== 'string') {
-      this.settings.defaultProjectCwd = '';
-    } else {
-      this.settings.defaultProjectCwd = this.settings.defaultProjectCwd.trim().slice(0, 500);
-    }
+    this.settings.defaultProjectCwd = sanitizeConfigurablePath(this.settings.defaultProjectCwd);
   }
 
   _persistSettings() {
@@ -1062,6 +1063,11 @@ class AgentManager extends EventEmitter {
       }
     }
     this._store.set(toSave);
+    try {
+      fs.chmodSync(path.join(os.homedir(), '.agent-notch', 'settings.json'), 0o600);
+    } catch {
+      // Windows ACLs / first-write race
+    }
   }
 
   /**
@@ -1190,13 +1196,9 @@ class AgentManager extends EventEmitter {
 
   _saveHistory() {
     try {
-      const dir = path.dirname(this._historyPath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
       // Cap unpinned at 200; never drop pinned
       this._history = trimHistoryEntries(this._history, 200);
-      fs.writeFileSync(this._historyPath, JSON.stringify(this._history, null, 2));
+      writePrivateFile(this._historyPath, JSON.stringify(this._history, null, 2));
     } catch (err) {
       console.error('[AgentManager] Failed to save history:', err.message);
     }
@@ -2141,7 +2143,7 @@ function isDirectory(p) {
   }
 }
 
-const DISPATCH_LOG_DIR = path.join(os.tmpdir(), 'agent-notch-dispatch');
+const DISPATCH_LOG_DIR = path.join(os.homedir(), '.agent-notch', 'logs', 'dispatch');
 const _resolvedCli = new Map();
 
 /**
@@ -2177,11 +2179,12 @@ function resolveCli(bin) {
 }
 
 function openDispatchLog(bin) {
-  fs.mkdirSync(DISPATCH_LOG_DIR, { recursive: true });
+  ensurePrivateDir(DISPATCH_LOG_DIR);
   pruneDispatchLogs();
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const logPath = path.join(DISPATCH_LOG_DIR, `${stamp}-${bin}.log`);
-  return { logPath, fd: fs.openSync(logPath, 'a') };
+  const safeBin = String(bin || 'cli').replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 40);
+  const logPath = path.join(DISPATCH_LOG_DIR, `${stamp}-${safeBin}.log`);
+  return { logPath, fd: fs.openSync(logPath, 'a', 0o600) };
 }
 
 function pruneDispatchLogs(keep = 12) {
@@ -2220,14 +2223,16 @@ function runHeadlessResume(cmd) {
 
     let file;
     let args;
+    let spawnOpts = { shell: false };
     if (cmd.viaWsl) {
       // Linux CLIs live inside the distro — do not resolve Windows .cmd shims.
       file = 'wsl.exe';
       args = cmd.args;
     } else {
-      const cli = resolveCli(cmd.bin);
-      file = cli.viaCmd ? (process.env.ComSpec || 'cmd.exe') : cli.file;
-      args = cli.viaCmd ? ['/d', '/s', '/c', cli.file, ...cmd.args] : cmd.args;
+      const planned = planWindowsCliLaunch(resolveCli(cmd.bin), cmd.args);
+      file = planned.file;
+      args = planned.args;
+      spawnOpts = planned.spawnOpts || spawnOpts;
     }
 
     let child;
@@ -2237,7 +2242,9 @@ function runHeadlessResume(cmd) {
         cwd: cmd.cwd,
         windowsHide: true,
         detached: true,
-        stdio: ['ignore', fd, fd]
+        stdio: ['ignore', fd, fd],
+        shell: false,
+        ...spawnOpts
       });
     } catch (err) {
       try { fs.closeSync(fd); } catch { /* ignore */ }
