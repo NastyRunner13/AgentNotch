@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification, session } = require('electron');
 const path = require('path');
 const { createTray, updateTrayIcon, updateTrayMenu } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
@@ -10,6 +10,16 @@ const {
   filterLimitAlertsForDelivery
 } = require('./attention-policy');
 const { notificationActionsFor } = require('./notification-actions');
+const {
+  installAppWebSecurity,
+  installSessionSecurity,
+  assertTrustedIpcSender,
+  validateSessionId,
+  validateHistoryId,
+  validateFocusAgentName,
+  normalizeDispatchPrompt,
+  resolveOpenableDirectory
+} = require('./security');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
 installConsoleCapture();
@@ -19,6 +29,12 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
+
+// Chromium sandbox + navigation/window/webview locks before any BrowserWindow.
+if (typeof app.enableSandbox === 'function') {
+  app.enableSandbox();
+}
+installAppWebSecurity(app);
 
 let mainWindow = null;
 let tray = null;
@@ -264,7 +280,13 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload', 'index.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      experimentalFeatures: false,
+      webviewTag: false,
+      navigateOnDragDrop: false,
+      spellcheck: false
     }
   });
 
@@ -423,9 +445,14 @@ function openSettings() {
 
 function applyLoginItemSetting(enabled) {
   try {
+    const execPath = process.execPath;
+    // Quote on Windows so paths with spaces cannot be reinterpreted (GHSA-jfqx-fxh3-c62j).
+    const loginPath = process.platform === 'win32' && !execPath.startsWith('"')
+      ? `"${execPath}"`
+      : execPath;
     app.setLoginItemSettings({
       openAtLogin: Boolean(enabled),
-      path: process.execPath
+      path: loginPath
     });
   } catch (err) {
     console.error('[AgentNotch] Failed to set login item:', err.message);
@@ -536,6 +563,7 @@ function repositionNotch() {
 }
 
 app.whenReady().then(() => {
+  installSessionSecurity(session);
   createWindow();
 
   // Initialize agent manager (after window — settings drive placement / hotkey)
@@ -714,7 +742,13 @@ app.whenReady().then(() => {
   // Global hotkey to toggle notch (customizable via settings)
   registerNotchHotkey(agentManager.getSettings());
 
-  // IPC Handlers
+  // IPC Handlers — every invoke must come from the notch window.
+  const _handle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = (channel, listener) => _handle(channel, (event, ...args) => {
+    assertTrustedIpcSender(event, mainWindow);
+    return listener(event, ...args);
+  });
+
   ipcMain.handle('get-sessions', () => {
     return agentManager.getSessions();
   });
@@ -757,15 +791,6 @@ app.whenReady().then(() => {
     };
   });
 
-  // Session-id format validation — ids are prefixed slugs derived from on-disk filenames.
-  // Reject anything that could be path-traversal or injection.
-  const SESSION_ID_RE = /^[a-z][a-z0-9_-]*-[a-zA-Z0-9._~%-]{1,220}$/;
-  function validateSessionId(id) {
-    if (typeof id !== 'string' || !SESSION_ID_RE.test(id)) {
-      throw new Error(`Invalid session id: ${String(id).slice(0, 80)}`);
-    }
-  }
-
   ipcMain.handle('approve-permission', async (_, sessionId) => {
     validateSessionId(sessionId);
     return agentManager.approvePermission(sessionId);
@@ -778,7 +803,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('answer-question', async (_, sessionId, answer) => {
     validateSessionId(sessionId);
-    return agentManager.answerQuestion(sessionId, answer);
+    return agentManager.answerQuestion(sessionId, normalizeDispatchPrompt(answer));
   });
 
   ipcMain.handle('jump-to-terminal', async (_, sessionId) => {
@@ -786,14 +811,12 @@ app.whenReady().then(() => {
     return agentManager.jumpToTerminal(sessionId);
   });
 
-  // Open a project folder in the OS file manager (session cwd)
+  // Open a project folder in the OS file manager (directories only)
   ipcMain.handle('open-path', async (_, targetPath) => {
-    if (typeof targetPath !== 'string' || !targetPath.trim()) {
-      return { success: false, message: 'No path provided' };
-    }
-    const p = targetPath.trim().slice(0, 1000);
+    const resolved = resolveOpenableDirectory(targetPath);
+    if (!resolved.ok) return { success: false, message: resolved.message };
     try {
-      const err = await shell.openPath(p);
+      const err = await shell.openPath(resolved.path);
       if (err) return { success: false, message: err };
       return { success: true, message: 'Opened folder' };
     } catch (e) {
@@ -918,7 +941,12 @@ app.whenReady().then(() => {
     return true;
   });
 
-  ipcMain.on('notch-hover', (_, hovering) => {
+  ipcMain.on('notch-hover', (event, hovering) => {
+    try {
+      assertTrustedIpcSender(event, mainWindow);
+    } catch {
+      return;
+    }
     if (hovering) {
       if (isAutoHidden) showNotch();
       cancelAutoHide();
@@ -937,30 +965,20 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('pin-history', (_, historyId, pinned) => {
-    if (typeof historyId !== 'string' || !historyId) {
-      throw new Error('Invalid history id');
-    }
+    validateHistoryId(historyId);
     return agentManager.pinHistory(historyId, Boolean(pinned));
   });
 
   ipcMain.handle('dispatch-from-history', async (_, historyId, prompt) => {
-    if (typeof historyId !== 'string' || !historyId) {
-      throw new Error('Invalid history id');
-    }
-    if (prompt != null && typeof prompt !== 'string') {
-      throw new Error('Invalid dispatch prompt');
-    }
-    if (typeof prompt === 'string' && prompt.length > 8000) {
-      throw new Error('Dispatch prompt too long (max 8000 chars)');
-    }
-    return agentManager.dispatchFromHistory(historyId, prompt);
+    validateHistoryId(historyId);
+    return agentManager.dispatchFromHistory(historyId, normalizeDispatchPrompt(prompt));
   });
 
   ipcMain.handle('focus-agent', async (_, agentName) => {
     if (typeof agentName !== 'string' || !agentName.trim()) {
       throw new Error('Invalid agent name');
     }
-    return agentManager.focusAgentByName(agentName.trim());
+    return agentManager.focusAgentByName(validateFocusAgentName(agentName.trim()));
   });
 
   // Task dispatch — targets a live session (resumes that chat) or starts a
@@ -974,13 +992,7 @@ app.whenReady().then(() => {
     } else {
       validateSessionId(sessionId);
     }
-    if (typeof prompt !== 'string') {
-      throw new Error('Invalid dispatch prompt');
-    }
-    if (prompt.length > 8000) {
-      throw new Error('Dispatch prompt too long (max 8000 chars)');
-    }
-    return agentManager.dispatchTask(sessionId, prompt);
+    return agentManager.dispatchTask(sessionId, normalizeDispatchPrompt(prompt));
   });
 
   // Re-place on display geometry / add / remove
