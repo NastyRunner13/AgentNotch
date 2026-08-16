@@ -51,6 +51,17 @@ describe('permission-bridge', () => {
     }
   });
 
+  it('truncates oversized hook tool input', () => {
+    const pending = bridge.createPendingFromHookInput({
+      session_id: 'sess-big',
+      tool_name: 'Bash',
+      tool_input: { command: 'x'.repeat(40_000) }
+    });
+    assert.equal(pending.toolInput._truncated, true);
+    assert.ok(JSON.stringify(pending.toolInput).length < 1000);
+    bridge.cleanupRequest(pending.id);
+  });
+
   it('toNotchSessionId maps transcript basename', () => {
     assert.equal(
       bridge.toNotchSessionId('abc', '/Users/x/.claude/projects/p/00893aaf-19fa.jsonl'),

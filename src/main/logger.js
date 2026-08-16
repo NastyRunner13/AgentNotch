@@ -21,9 +21,11 @@ function ensureLogFile() {
   if (logStream) return logStream;
   try {
     const dir = path.join(os.homedir(), '.agent-notch', 'logs');
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(dir, 0o700); } catch { /* Windows may ignore */ }
     const file = path.join(dir, `agent-notch-${new Date().toISOString().slice(0, 10)}.log`);
-    logStream = fs.createWriteStream(file, { flags: 'a' });
+    logStream = fs.createWriteStream(file, { flags: 'a', mode: 0o600 });
+    try { fs.chmodSync(file, 0o600); } catch { /* Windows may ignore */ }
   } catch {
     logStream = null;
   }

@@ -111,6 +111,18 @@ function sessionIdsMatch(a, b) {
   return canonicalClaudeSessionId(a) === canonicalClaudeSessionId(b);
 }
 
+const MAX_TOOL_INPUT_CHARS = 32_768;
+
+function clampToolInput(input) {
+  if (!input || typeof input !== 'object') return {};
+  try {
+    if (JSON.stringify(input).length <= MAX_TOOL_INPUT_CHARS) return input;
+  } catch {
+    return {};
+  }
+  return { _truncated: true, file_path: extractFilePath(input) };
+}
+
 function extractFilePath(toolInput) {
   if (!toolInput || typeof toolInput !== 'object') return '';
   return (
@@ -152,12 +164,26 @@ function readJsonSafe(filePath) {
   }
 }
 
+function assertNotSymlink(filePath) {
+  try {
+    const st = fs.lstatSync(filePath);
+    if (st.isSymbolicLink()) {
+      throw new Error('Refusing to write through symlink');
+    }
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
+}
+
 function writeJsonAtomic(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  assertNotSymlink(filePath);
   const tmp = `${filePath}.${process.pid}.tmp`;
   // mode 0o600 — owner read/write only; pending/decision files may contain tool input / secrets
   fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, filePath);
+  try { fs.chmodSync(filePath, 0o600); } catch { /* Windows may ignore */ }
 }
 
 function removeQuiet(filePath) {
@@ -220,8 +246,8 @@ function createPendingFromHookInput(input) {
   const id = crypto.randomUUID();
   const claudeSessionId = input.session_id || input.sessionId || '';
   const transcriptPath = input.transcript_path || input.transcriptPath || '';
-  const toolName = input.tool_name || input.toolName || 'tool';
-  const toolInput = input.tool_input || input.toolInput || {};
+  const toolName = String(input.tool_name || input.toolName || 'tool').slice(0, 120);
+  const toolInput = clampToolInput(input.tool_input || input.toolInput || {});
   const notchSessionId = toNotchSessionId(claudeSessionId, transcriptPath);
 
   const pending = {
@@ -387,8 +413,9 @@ function readClaudeSettings() {
 function writeClaudeSettings(settings) {
   const p = claudeSettingsPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
+  assertNotSymlink(p);
   const tmp = `${p}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, p);
 }
 
@@ -517,8 +544,9 @@ function installClaudeHookAt(dest) {
 
   try {
     fs.mkdirSync(path.dirname(dest.settingsPath), { recursive: true });
+    assertNotSymlink(dest.settingsPath);
     const tmp = `${dest.settingsPath}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
+    fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, dest.settingsPath);
   } catch (err) {
     return { success: false, message: err.message || 'Could not write WSL Claude settings' };
@@ -696,6 +724,10 @@ async function runHookMode() {
   try {
     const raw = await readStdin();
     if (!raw.trim()) {
+      process.exit(0);
+    }
+    if (raw.length > 256 * 1024) {
+      process.stderr.write('[agent-notch] hook input too large\n');
       process.exit(0);
     }
     input = JSON.parse(raw);
