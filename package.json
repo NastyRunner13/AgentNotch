@@ -10,17 +10,21 @@
     "build": "electron-builder",
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux"
+    "build:linux": "electron-builder --linux",
+    "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "engines": { "node": ">=20" },
   "author": "AgentNotch",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^36.0.0",
-    "electron-builder": "^25.0.0"
+    "electron": "^41.10.5",
+    "electron-builder": "^26.15.7"
   },
   "dependencies": {
     "chokidar": "^4.0.0",
     "electron-store": "^10.0.0"
+  },
+  "overrides": {
+    "fast-uri": "3.1.5"
   }
 }

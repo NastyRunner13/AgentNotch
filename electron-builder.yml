@@ -2,6 +2,14 @@ appId: com.agentnotch.app
 productName: AgentNotch
 directories:
   output: dist
+asar: true
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
 files:
   - src/**/*
   - assets/**/*
