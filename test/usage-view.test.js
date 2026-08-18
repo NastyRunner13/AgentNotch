@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 
 // Renderer component is an ES module — loaded dynamically (same pattern the
 // markdown-table test uses for session-card.js).
-let buildUsageModel, buildSeries, renderUsageView, usageFingerprint;
+let buildUsageModel, buildSeries, renderUsageView, usageFingerprint, nearestTrendIndex, bindUsageCharts;
 
 const DAY_MS = 86400000;
 const day = (offset) => {
@@ -55,7 +55,8 @@ function makeStats() {
 
 describe('usage-view model + charts', async () => {
   before(async () => {
-    ({ buildUsageModel, buildSeries, renderUsageView, usageFingerprint } =
+    ({ buildUsageModel, buildSeries, renderUsageView, usageFingerprint,
+      nearestTrendIndex, bindUsageCharts } =
       await import('../src/renderer/components/usage-view.js'));
   });
 
@@ -129,9 +130,14 @@ describe('usage-view model + charts', async () => {
     const html = renderUsageView(makeStats(), 7, 'tokens');
     assert.ok(html.includes('<svg'));
     assert.ok(html.includes('usage-chart'));
-    // One rect per agent on active days: today 2 + yesterday 1 + day-3 1
-    const rects = html.match(/<rect /g) || [];
-    assert.equal(rects.length, 4);
+    // One data segment per agent on active days: today 2 + yesterday 1 + day-3 1
+    const segs = html.match(/class="usage-seg"/g) || [];
+    assert.equal(segs.length, 4);
+    // Full-slot hit targets for every calendar day (including zero gaps)
+    const hits = html.match(/class="usage-bar-hit"/g) || [];
+    assert.equal(hits.length, 7);
+    assert.ok(html.includes('usage-tip'));
+    assert.ok(html.includes('usage-chart-legend-item'));
     // Agent identity colors used for segments
     assert.ok(html.includes('#D97757')); // Claude
     assert.ok(html.includes('#10B981')); // Codex
@@ -146,7 +152,11 @@ describe('usage-view model + charts', async () => {
   });
 
   it('renders spend trajectory only when cost is known and range > 1', () => {
-    assert.ok(renderUsageView(makeStats(), 7, 'tokens').includes('usage-trend'));
+    const html = renderUsageView(makeStats(), 7, 'tokens');
+    assert.ok(html.includes('usage-trend'));
+    assert.ok(html.includes('data-points='));
+    assert.ok(html.includes('usage-trend-rule'));
+    assert.ok(html.includes('usage-trend-cursor'));
     assert.ok(!renderUsageView(makeStats(), 1, 'tokens').includes('usage-trend'));
     const timeOnly = { buckets: [], sessionTime: [{ day: day(0), agent: 'Grok', sessions: 1, ms: 60000 }] };
     assert.ok(!renderUsageView(timeOnly, 7, 'tokens').includes('usage-trend'));
@@ -157,6 +167,21 @@ describe('usage-view model + charts', async () => {
     assert.ok(html.includes('usage-mix'));
     assert.ok(html.includes('cache read'));
     assert.ok(html.includes('Cache reads'));
+    assert.ok(html.includes('data-mix="cacheRead"'));
+    assert.ok(html.includes('usage-mix-item'));
+  });
+
+  it('nearestTrendIndex picks the closest point in viewBox space', () => {
+    const points = [{ x: 10 }, { x: 50 }, { x: 90 }];
+    assert.equal(nearestTrendIndex(points, 12), 0);
+    assert.equal(nearestTrendIndex(points, 48), 1);
+    assert.equal(nearestTrendIndex(points, 100), 2);
+    assert.equal(nearestTrendIndex([], 0), -1);
+  });
+
+  it('bindUsageCharts is a no-op without a DOM root', () => {
+    bindUsageCharts(null);
+    bindUsageCharts({});
   });
 
   it('hides charts quietly when there is no token data', () => {

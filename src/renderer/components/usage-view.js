@@ -2,8 +2,9 @@
  * Usage dashboard — dense, quiet analytics from local data only.
  * Summary strips, stacked daily burn chart, spend trajectory, token mix,
  * daily rows, and a per-agent/model breakdown. Charts are hand-rolled
- * inline SVG (no dependencies, CSP-safe); agent hues identify series,
- * status hues stay semantic. No hero cards; mono owns the numbers.
+ * inline SVG (no dependencies, CSP-safe); hover inspects a day or point
+ * and legend click isolates a series. Agent hues identify series, status
+ * hues stay semantic. No hero cards; mono owns the numbers.
  */
 
 const AGENT_COLORS = {
@@ -107,6 +108,64 @@ function fmtPct(ratio) {
 
 function shortDate(ts) {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function agentSlug(name) {
+  return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'agent';
+}
+
+/** Compact inspect tooltip — title + mono value + optional agent rows. */
+function renderTipHtml(data) {
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const rowsHtml = rows.map((r) =>
+    `<div class="usage-tip-row">
+      <span class="usage-agent-dot" style="background:${escapeHtml(r.color)}"></span>
+      <span class="usage-tip-row-name">${escapeHtml(r.agent)}</span>
+      <span class="usage-tip-row-val">${escapeHtml(r.value)}</span>
+    </div>`
+  ).join('');
+  const meta = data?.meta ? `<span class="usage-tip-meta">${escapeHtml(data.meta)}</span>` : '';
+  return `<div class="usage-tip-head">
+    <span class="usage-tip-title">${escapeHtml(data?.title || '')}</span>
+    ${meta}
+    <span class="usage-tip-value">${escapeHtml(data?.value || '')}</span>
+  </div>${rowsHtml ? `<div class="usage-tip-rows">${rowsHtml}</div>` : ''}`;
+}
+
+/** Clamp a tooltip inside `host` so it sits above (x, y) when it fits. */
+function placeTip(tip, host, x, y) {
+  const tw = tip.offsetWidth;
+  const th = tip.offsetHeight;
+  const hw = host.clientWidth;
+  const hh = host.clientHeight;
+  const pad = 6;
+  let left = x - tw / 2;
+  let top = y - th - 8;
+  if (top < pad) top = Math.min(y + 10, Math.max(pad, hh - th - pad));
+  left = Math.max(pad, Math.min(left, hw - tw - pad));
+  top = Math.max(pad, Math.min(top, hh - th - pad));
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * Nearest series index for a pointer x in viewBox space.
+ * @param {Array<{x: number}>} points
+ * @param {number} x
+ * @returns {number}
+ */
+export function nearestTrendIndex(points, x) {
+  if (!Array.isArray(points) || points.length === 0) return -1;
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < points.length; i++) {
+    const d = Math.abs(Number(points[i].x) - x);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
 function dayLabel(day) {
@@ -328,6 +387,7 @@ function agentOrder(series, mode) {
 /**
  * Stacked daily burn chart — one bar per slot, segments per agent.
  * Honest gaps for zero days; two hairline gridlines; mono peak label.
+ * Full-slot hit targets + legend isolate; tooltip is bound after paint.
  */
 function renderBurnChart(series, weekly, mode) {
   const n = series.length;
@@ -349,9 +409,9 @@ function renderBurnChart(series, weekly, mode) {
   const bars = series.map((s, i) => {
     const total = valueOf(s);
     const x = slotW * i + (slotW - barW) / 2;
-    if (total <= 0) return '';
     let y = baseY;
     const segs = [];
+    const rows = [];
     for (const agent of order) {
       const v = s.byAgent.get(agent);
       if (!v) continue;
@@ -359,10 +419,23 @@ function renderBurnChart(series, weekly, mode) {
       if (val <= 0) continue;
       const h = Math.max(1, (val / max) * usableH);
       y -= h;
-      segs.push(`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR}"/>`);
+      const color = AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR;
+      const slug = agentSlug(agent);
+      segs.push(`<rect class="usage-seg" data-agent="${slug}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}"/>`);
+      rows.push({ agent, value: fmt(val), color });
     }
-    const tip = `${escapeHtml(s.label)} — ${fmt(total)} ${unit}${s.sessions ? ` · ${s.sessions} sess` : ''}`;
-    return `<g><title>${tip}</title>${segs.join('')}</g>`;
+    const isToday = !weekly && s.key === dayKey(Date.now());
+    const title = isToday ? 'Today' : s.label;
+    const tip = {
+      title,
+      meta: s.sessions ? `${s.sessions} sess` : '',
+      value: total > 0 ? fmt(total) : '—',
+      rows
+    };
+    return `<g class="usage-bar-group" data-slot="${i}" data-tip="${escapeHtml(JSON.stringify(tip))}">
+      <rect class="usage-bar-hit" x="${(slotW * i).toFixed(1)}" y="0" width="${slotW.toFixed(1)}" height="${BURN_H}"/>
+      ${segs.join('')}
+    </g>`;
   }).join('');
 
   // X labels: every slot for ≤7, every 5th for month-ish, every 2nd when weekly
@@ -371,7 +444,7 @@ function renderBurnChart(series, weekly, mode) {
     if (i % step !== 0 && i !== n - 1) return '';
     const isToday = !weekly && s.key === dayKey(Date.now());
     const text = isToday ? 'Today' : weekly || n > 7 ? s.label : new Date(s.startTs).toLocaleDateString('en-US', { weekday: 'short' });
-    return `<span class="usage-chart-x" style="left:${(slotW * i).toFixed(1)}px;width:${slotW.toFixed(1)}px"${isToday ? ' data-today="1"' : ''}>${escapeHtml(text)}</span>`;
+    return `<span class="usage-chart-x" data-slot="${i}" style="left:${(slotW * i).toFixed(1)}px;width:${slotW.toFixed(1)}px"${isToday ? ' data-today="1"' : ''}>${escapeHtml(text)}</span>`;
   }).join('');
 
   const legend = order.map(agent => {
@@ -380,21 +453,25 @@ function renderBurnChart(series, weekly, mode) {
       return sum + (v ? (mode === 'cost' ? v.cost : v.tokens) : 0);
     }, 0);
     if (total <= 0) return '';
-    return `<span class="usage-chart-legend-item">
+    const slug = agentSlug(agent);
+    return `<button type="button" class="usage-chart-legend-item" data-agent="${slug}" aria-pressed="false">
       <span class="usage-agent-dot" style="background:${AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR}"></span>
       ${escapeHtml(agent)} <span class="usage-chart-legend-val">${fmt(total)}</span>
-    </span>`;
+    </button>`;
   }).join('');
 
-  return `<div class="usage-chart" role="img" aria-label="${unit === 'cost' ? 'Daily cost' : 'Daily tokens'} by agent, peak ${fmt(max)}">
+  return `<div class="usage-chart" role="group" aria-label="${unit === 'cost' ? 'Daily cost' : 'Daily tokens'} by agent, peak ${fmt(max)}">
     <div class="usage-chart-peak">${fmt(max)}<span class="usage-chart-peak-unit"> peak ${unit}/day</span></div>
-    <svg width="100%" height="${BURN_H}" viewBox="0 0 ${CHART_W} ${BURN_H}" preserveAspectRatio="none" aria-hidden="true">
-      <line x1="0" y1="${BURN_PAD_TOP}" x2="${CHART_W}" y2="${BURN_PAD_TOP}" class="usage-grid"/>
-      <line x1="0" y1="${midY}" x2="${CHART_W}" y2="${midY}" class="usage-grid"/>
-      ${bars}
-    </svg>
+    <div class="usage-chart-plot">
+      <svg class="usage-chart-svg" width="100%" height="${BURN_H}" viewBox="0 0 ${CHART_W} ${BURN_H}" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="0" y1="${BURN_PAD_TOP}" x2="${CHART_W}" y2="${BURN_PAD_TOP}" class="usage-grid"/>
+        <line x1="0" y1="${midY}" x2="${CHART_W}" y2="${midY}" class="usage-grid"/>
+        ${bars}
+      </svg>
+    </div>
     <div class="usage-chart-xrow">${labels}</div>
-    <div class="usage-chart-legend">${legend}</div>
+    <div class="usage-chart-legend" role="toolbar" aria-label="Isolate agent">${legend}</div>
+    <div class="usage-tip" role="tooltip" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -420,19 +497,31 @@ function renderCostTrend(series) {
   const line = xy.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const area = `${line} L${xy[xy.length - 1][0].toFixed(1)},${TREND_H} L${xy[0][0].toFixed(1)},${TREND_H} Z`;
   const [ex, ey] = xy[xy.length - 1];
+  const pointData = points.map((p, i) => ({
+    x: xy[i][0],
+    y: xy[i][1],
+    label: p.day.label,
+    value: fmtCost(p.cum),
+    meta: 'cumulative'
+  }));
 
-  return `<div class="usage-trend" role="img" aria-label="Cumulative spend ${fmtCost(max)} over the range">
-    <svg width="100%" height="${TREND_H}" viewBox="0 0 ${CHART_W} ${TREND_H}" preserveAspectRatio="none" aria-hidden="true">
-      <line x1="0" y1="${TREND_H - 0.5}" x2="${CHART_W}" y2="${TREND_H - 0.5}" class="usage-grid"/>
-      <path d="${area}" class="usage-trend-area"/>
-      <path d="${line}" class="usage-trend-line"/>
-      <circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="2.5" class="usage-trend-dot"/>
-    </svg>
+  return `<div class="usage-trend" role="group" aria-label="Cumulative spend ${fmtCost(max)} over the range" data-points="${escapeHtml(JSON.stringify(pointData))}">
+    <div class="usage-trend-plot" tabindex="0" aria-label="Spend trajectory. Arrow keys move between days.">
+      <svg class="usage-trend-svg" width="100%" height="${TREND_H}" viewBox="0 0 ${CHART_W} ${TREND_H}" preserveAspectRatio="none" aria-hidden="true">
+        <line x1="0" y1="${TREND_H - 0.5}" x2="${CHART_W}" y2="${TREND_H - 0.5}" class="usage-grid"/>
+        <path d="${area}" class="usage-trend-area"/>
+        <path d="${line}" class="usage-trend-line"/>
+        <circle cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="2.5" class="usage-trend-dot"/>
+      </svg>
+      <div class="usage-trend-rule" aria-hidden="true"></div>
+      <div class="usage-trend-cursor" aria-hidden="true"></div>
+    </div>
     <div class="usage-trend-caption">
       <span>${escapeHtml(series[0].label)}</span>
       <span class="usage-trend-total">${fmtCost(max)} cumulative</span>
       <span>${escapeHtml(series[n - 1].label)}</span>
     </div>
+    <div class="usage-tip" role="tooltip" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -444,20 +533,23 @@ function renderTokenMix(split, totalTokens) {
     .filter(p => p.value > 0);
   if (parts.length === 0) return '';
 
-  const bar = parts.map(p =>
-    `<span class="usage-mix-seg" style="width:${((p.value / totalTokens) * 100).toFixed(2)}%;background:${p.color}" title="${p.label} — ${fmtTokens(p.value)} (${fmtPct(p.value / totalTokens)})"></span>`
-  ).join('');
+  const bar = parts.map(p => {
+    const tip = { title: p.label, value: fmtTokens(p.value), meta: fmtPct(p.value / totalTokens) };
+    return `<span class="usage-mix-seg" data-mix="${p.key}" data-tip="${escapeHtml(JSON.stringify(tip))}" style="width:${((p.value / totalTokens) * 100).toFixed(2)}%;background:${p.color}"></span>`;
+  }).join('');
 
-  const legend = parts.map(p =>
-    `<span class="usage-mix-item">
+  const legend = parts.map(p => {
+    const tip = { title: p.label, value: fmtTokens(p.value), meta: fmtPct(p.value / totalTokens) };
+    return `<button type="button" class="usage-mix-item" data-mix="${p.key}" data-tip="${escapeHtml(JSON.stringify(tip))}" aria-pressed="false">
       <span class="usage-mix-dot" style="background:${p.color}"></span>
       ${p.label} <span class="usage-mix-val">${fmtPct(p.value / totalTokens)}</span>
-    </span>`
-  ).join('');
+    </button>`;
+  }).join('');
 
-  return `<div class="usage-mix">
+  return `<div class="usage-mix" role="group" aria-label="Token mix">
     <div class="usage-mix-bar">${bar}</div>
-    <div class="usage-mix-legend">${legend}</div>
+    <div class="usage-mix-legend" role="toolbar" aria-label="Highlight token type">${legend}</div>
+    <div class="usage-tip" role="tooltip" aria-hidden="true"></div>
   </div>`;
 }
 
@@ -673,4 +765,234 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLim
     ${renderDays(model.days)}
     ${renderAgents(model.agents)}
     ${footnote}`;
+}
+
+function parseTip(el) {
+  if (!el) return null;
+  try {
+    return JSON.parse(el.dataset.tip || '');
+  } catch {
+    return null;
+  }
+}
+
+function showTip(tip, host, data, x, y) {
+  if (!tip || !host || !data) return;
+  tip.innerHTML = renderTipHtml(data);
+  tip.setAttribute('aria-hidden', 'false');
+  placeTip(tip, host, x, y);
+  tip.classList.add('is-on');
+}
+
+function hideTip(tip) {
+  if (!tip) return;
+  tip.classList.remove('is-on');
+  tip.setAttribute('aria-hidden', 'true');
+}
+
+function bindBurnChart(chart) {
+  const svg = chart.querySelector('.usage-chart-svg');
+  const tip = chart.querySelector(':scope > .usage-tip');
+  if (!svg || !tip) return;
+
+  const groups = [...chart.querySelectorAll('.usage-bar-group')];
+  const segs = [...chart.querySelectorAll('.usage-seg')];
+  const labels = [...chart.querySelectorAll('.usage-chart-x')];
+  const legendBtns = [...chart.querySelectorAll('.usage-chart-legend-item')];
+  let pinned = null;
+
+  const setSlot = (slot) => {
+    chart.classList.toggle('is-hovering', slot != null);
+    groups.forEach((g) => g.classList.toggle('is-active', slot != null && g.dataset.slot === String(slot)));
+    labels.forEach((l) => l.classList.toggle('is-active', slot != null && l.dataset.slot === String(slot)));
+  };
+
+  const setAgent = (agent) => {
+    const active = agent || pinned;
+    chart.classList.toggle('is-isolate', !!active);
+    segs.forEach((s) => s.classList.toggle('is-focus', !!active && s.dataset.agent === active));
+    legendBtns.forEach((b) => {
+      const on = !!active && b.dataset.agent === active;
+      b.classList.toggle('is-focus', on);
+      b.setAttribute('aria-pressed', b.dataset.agent === pinned ? 'true' : 'false');
+    });
+  };
+
+  const inspectGroup = (group) => {
+    const data = parseTip(group);
+    if (!data) return;
+    setSlot(group.dataset.slot);
+    const hit = group.querySelector('.usage-bar-hit');
+    const hostR = chart.getBoundingClientRect();
+    const hr = (hit || group).getBoundingClientRect();
+    let top = hr.bottom;
+    group.querySelectorAll('.usage-seg').forEach((s) => {
+      const r = s.getBoundingClientRect();
+      if (r.top < top) top = r.top;
+    });
+    if (!group.querySelector('.usage-seg')) top = hr.top + hr.height * 0.45;
+    showTip(tip, chart, data, hr.left + hr.width / 2 - hostR.left, top - hostR.top);
+  };
+
+  svg.addEventListener('pointermove', (e) => {
+    const group = e.target.closest('.usage-bar-group');
+    if (!group || !svg.contains(group)) {
+      hideTip(tip);
+      setSlot(null);
+      return;
+    }
+    inspectGroup(group);
+  });
+  svg.addEventListener('pointerleave', () => {
+    hideTip(tip);
+    setSlot(null);
+  });
+
+  legendBtns.forEach((btn) => {
+    const preview = () => setAgent(btn.dataset.agent);
+    const restore = () => setAgent(null);
+    btn.addEventListener('pointerenter', preview);
+    btn.addEventListener('pointerleave', restore);
+    btn.addEventListener('focus', preview);
+    btn.addEventListener('blur', restore);
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pinned = pinned === btn.dataset.agent ? null : btn.dataset.agent;
+      setAgent(pinned);
+    });
+  });
+}
+
+function bindTrendChart(trend) {
+  const plot = trend.querySelector('.usage-trend-plot');
+  const tip = trend.querySelector(':scope > .usage-tip');
+  const rule = trend.querySelector('.usage-trend-rule');
+  const cursor = trend.querySelector('.usage-trend-cursor');
+  if (!plot || !tip || !rule || !cursor) return;
+
+  let points;
+  try {
+    points = JSON.parse(trend.dataset.points || '[]');
+  } catch {
+    return;
+  }
+  if (!Array.isArray(points) || points.length === 0) return;
+
+  let index = -1;
+
+  const activate = (i, pointerXPct) => {
+    const p = points[i];
+    if (!p) return;
+    index = i;
+    trend.classList.add('is-hovering');
+    const left = (Number(p.x) / CHART_W) * 100;
+    const top = (Number(p.y) / TREND_H) * 100;
+    rule.style.left = pointerXPct != null ? `${pointerXPct}%` : `${left}%`;
+    cursor.style.left = `${left}%`;
+    cursor.style.top = `${top}%`;
+    const hostR = trend.getBoundingClientRect();
+    const plotR = plot.getBoundingClientRect();
+    const x = plotR.left - hostR.left + (Number(p.x) / CHART_W) * plotR.width;
+    const y = plotR.top - hostR.top + (Number(p.y) / TREND_H) * plotR.height;
+    showTip(tip, trend, { title: p.label, value: p.value, meta: p.meta }, x, y);
+  };
+
+  const clear = () => {
+    index = -1;
+    trend.classList.remove('is-hovering');
+    hideTip(tip);
+  };
+
+  plot.addEventListener('pointermove', (e) => {
+    const r = plot.getBoundingClientRect();
+    const ratio = r.width > 0 ? (e.clientX - r.left) / r.width : 0;
+    const x = ratio * CHART_W;
+    activate(nearestTrendIndex(points, x), Math.max(0, Math.min(1, ratio)) * 100);
+  });
+  plot.addEventListener('pointerleave', (e) => {
+    if (e.relatedTarget && plot.contains(e.relatedTarget)) return;
+    if (document.activeElement === plot) {
+      activate(index >= 0 ? index : points.length - 1);
+      return;
+    }
+    clear();
+  });
+  plot.addEventListener('focus', () => activate(index >= 0 ? index : points.length - 1));
+  plot.addEventListener('blur', clear);
+  plot.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const cur = index < 0 ? points.length - 1 : index;
+    if (e.key === 'Home') activate(0);
+    else if (e.key === 'End') activate(points.length - 1);
+    else if (e.key === 'ArrowLeft') activate(Math.max(0, cur - 1));
+    else activate(Math.min(points.length - 1, cur + 1));
+  });
+}
+
+function bindMixChart(mix) {
+  const tip = mix.querySelector(':scope > .usage-tip');
+  if (!tip) return;
+  const segs = [...mix.querySelectorAll('.usage-mix-seg')];
+  const items = [...mix.querySelectorAll('.usage-mix-item')];
+  let pinned = null;
+
+  const setMix = (key) => {
+    const active = key || pinned;
+    mix.classList.toggle('is-isolate', !!active);
+    segs.forEach((s) => s.classList.toggle('is-focus', !!active && s.dataset.mix === active));
+    items.forEach((b) => {
+      const on = !!active && b.dataset.mix === active;
+      b.classList.toggle('is-focus', on);
+      b.setAttribute('aria-pressed', b.dataset.mix === pinned ? 'true' : 'false');
+    });
+  };
+
+  const inspect = (el) => {
+    const data = parseTip(el);
+    if (!data) return;
+    setMix(el.dataset.mix);
+    const hostR = mix.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    showTip(tip, mix, data, r.left + r.width / 2 - hostR.left, r.top - hostR.top);
+  };
+
+  const leave = (el, related) => {
+    if (related && mix.contains(related) && related.closest('[data-mix]')?.dataset.mix === el.dataset.mix) return;
+    hideTip(tip);
+    setMix(null);
+  };
+
+  [...segs, ...items].forEach((el) => {
+    el.addEventListener('pointerenter', () => inspect(el));
+    el.addEventListener('pointerleave', (e) => leave(el, e.relatedTarget));
+    el.addEventListener('focus', () => inspect(el));
+    el.addEventListener('blur', () => {
+      hideTip(tip);
+      setMix(null);
+    });
+  });
+
+  items.forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      pinned = pinned === btn.dataset.mix ? null : btn.dataset.mix;
+      setMix(pinned);
+      if (pinned) inspect(btn);
+      else hideTip(tip);
+    });
+  });
+}
+
+/**
+ * Wire hover inspect + legend isolate on usage charts.
+ * Safe to call after each dashboard paint; listeners live on the new nodes.
+ * @param {ParentNode|null} root
+ */
+export function bindUsageCharts(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  root.querySelectorAll('.usage-chart').forEach(bindBurnChart);
+  root.querySelectorAll('.usage-trend').forEach(bindTrendChart);
+  root.querySelectorAll('.usage-mix').forEach(bindMixChart);
 }
