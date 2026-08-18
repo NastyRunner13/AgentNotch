@@ -1,20 +1,25 @@
 {
   "name": "agent-notch",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Cross-platform system tray app to monitor AI coding agents — Claude Code, Codex, Cursor, and more.",
   "main": "src/main/index.js",
   "scripts": {
     "dev": "electron .",
     "test": "node --test",
     "permission-bridge": "node src/main/permissions/permission-bridge.js",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux",
+    "build": "electron-builder --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:linux": "electron-builder --linux --publish never",
     "audit:prod": "npm audit --omit=dev --audit-level=high"
   },
   "engines": { "node": ">=20" },
-  "author": "AgentNotch",
+  "author": "AgentNotch <102866310+NastyRunner13@users.noreply.github.com>",
+  "homepage": "https://github.com/NastyRunner13/AgentNotch",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NastyRunner13/AgentNotch.git"
+  },
   "license": "MIT",
   "devDependencies": {
     "electron": "^41.10.5",

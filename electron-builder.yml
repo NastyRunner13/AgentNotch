@@ -15,12 +15,15 @@ files:
   - assets/**/*
   - "!**/*.map"
 
+# 1024² source — macOS icns conversion requires ≥512 (assets/icons/icon.png is 256).
+icon: assets/icons/agent-notch.png
+
 win:
   target:
     - target: nsis
       arch:
         - x64
-  icon: assets/icons/icon.png
+  icon: assets/icons/agent-notch.png
 
 mac:
   target:
@@ -28,16 +31,19 @@ mac:
       arch:
         - x64
         - arm64
-  icon: assets/icons/icon.png
+  icon: assets/icons/agent-notch.png
   category: public.app-category.developer-tools
+  # Unsigned OSS builds — no Developer ID in CI.
+  identity: null
 
 linux:
   target:
     - target: AppImage
       arch:
         - x64
-  icon: assets/icons/icon.png
+  icon: assets/icons/agent-notch.png
   category: Development
+  maintainer: AgentNotch <102866310+NastyRunner13@users.noreply.github.com>
 
 nsis:
   oneClick: false
