@@ -254,6 +254,17 @@ Feel: **refined and restrained** — tight radii, muted fills, color only for st
 ### Toggles
 - 34×18 track, full pill; off = `#222` / knob `#666`; on = green-tinted track + idle green knob
 
+### Motion
+Short, critically damped, interruptible. No bounce or elastic. Window geometry is a spring (response `0.40` expand / `0.30` collapse, damping `1.0`) that retargets from the live bounds and carries velocity. Renderer motion uses `--ease-out` (`cubic-bezier(0.16, 1, 0.3, 1)`).
+
+- **Press:** highlight and `scale(0.97)` on pointer-down (`100ms`)
+- **Tabs:** sliding ink follows the active tab; views enter from the direction of travel and exit the opposite way
+- **Sheets:** session/history detail opens on `grid-template-rows` (`280ms`); inner content fades and drops 4px on the same path
+- **Menus / toasts:** originate from their source (snooze scales from the trigger; toast rises from the dispatch bar)
+- **Working beam:** fades in; sweep stays status-earned, not a page-load show
+- **Charts:** hover inspects the nearest day or spend point (tooltip + column/cursor); legend click isolates a series. Opacity 120ms, no bounce, no layout motion. Reduced motion is instant opacity (no mix-bar scale).
+- **Reduced motion:** cross-fade or instant — no springs, slides, or loops
+
 ## 6. Do's and Don'ts
 
 ### Do:

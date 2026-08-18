@@ -44,14 +44,19 @@
     ],
     "motion": [
       { "name": "ease-out", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Default product ease for state transitions." },
-      { "name": "ease-out-quint", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Expand/collapse panel opacity and chevron." },
+      { "name": "ease-out-quint", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Panel enter, chevron, tab ink, toggle knob." },
+      { "name": "ease-out-quart", "value": "cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "Softer color/opacity settles." },
+      { "name": "duration-press", "value": "0.1s", "purpose": "Pointer-down scale and highlight." },
+      { "name": "press-scale", "value": "0.97", "purpose": "Active press compression." },
       { "name": "duration-fast", "value": "0.12s", "purpose": "Hover and micro feedback." },
       { "name": "duration-base", "value": "0.2s", "purpose": "Default UI state change." },
-      { "name": "duration-expand", "value": "0.42s", "purpose": "Notch expand choreography." },
-      { "name": "duration-collapse", "value": "0.3s", "purpose": "Notch collapse." },
-      { "name": "duration-hide", "value": "0.34s", "purpose": "Autohide opacity." },
+      { "name": "duration-expand", "value": "0.42s", "purpose": "Notch expand choreography (spring response 0.40)." },
+      { "name": "duration-collapse", "value": "0.3s", "purpose": "Notch collapse (spring response 0.30)." },
+      { "name": "duration-hide", "value": "0.34s", "purpose": "Autohide opacity / hide spring response." },
+      { "name": "notch-spring", "value": "damping 1.0, response 0.30–0.40", "purpose": "Interruptible window geometry; carry velocity on retarget; no overshoot." },
       { "name": "agent-breathe", "value": "2s ease-in-out infinite scale 1→1.08", "purpose": "Working agent icon only; disabled under reduced motion." },
-      { "name": "agent-spin", "value": "1.2s linear infinite ring", "purpose": "Working indicator ring; static under reduced motion." }
+      { "name": "agent-spin", "value": "1.2s linear infinite ring", "purpose": "Working indicator ring; static under reduced motion." },
+      { "name": "chart-inspect", "value": "0.12s opacity + tooltip", "purpose": "Usage chart hover inspect and legend isolate; instant under reduced motion." }
     ],
     "breakpoints": []
   },
