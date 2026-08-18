@@ -1,8 +1,14 @@
-const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification, session } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification, session, systemPreferences } = require('electron');
 const path = require('path');
 const { createTray, updateTrayIcon, updateTrayMenu } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
 const { installConsoleCapture, closeLogger } = require('./logger');
+const {
+  springOmega,
+  stepSpringAxis,
+  isSpringSettled,
+  clampFrameDt
+} = require('./lib/notch-motion');
 const {
   channelsForSessions,
   clampAutohideDelayMs,
@@ -54,17 +60,53 @@ const NOTCH_HEIGHT_EXPANDED = 560;
 const NOTCH_HEIGHT_HIDDEN = 4; // Visible peek strip when auto-hidden
 /** Offset from workArea.y so only the peek strip remains (true slide-up hide). */
 const NOTCH_HIDDEN_Y_OFFSET = -(NOTCH_HEIGHT_COLLAPSED - NOTCH_HEIGHT_HIDDEN);
-const NOTCH_EXPAND_DURATION = 420;   // Smooth ease-out expand (no overshoot bounce)
-const NOTCH_COLLAPSE_DURATION = 300; // Smooth deceleration
-const NOTCH_SHOW_DURATION = 320;     // Slide-down reveal from hidden strip
-const NOTCH_HIDE_DURATION = 340;     // Slide-up into hidden strip
-const FRAME_INTERVAL = 8;            // ~120fps for silky smooth animation
+// Apple response (seconds), critically damped — no overshoot (Windows setBounds jitter)
+const NOTCH_EXPAND_RESPONSE = 0.40;
+const NOTCH_COLLAPSE_RESPONSE = 0.30;
+const NOTCH_SHOW_RESPONSE = 0.32;
+const NOTCH_HIDE_RESPONSE = 0.34;
+const FRAME_INTERVAL = 8;            // ~120fps display-synced-enough tick
 const NOTCH_EDGE_MARGIN = 24;
 
-function stopNotchAnimation() {
+/** Live spring state so retargets inherit presentation value + velocity. */
+const notchMotion = {
+  running: false,
+  w: 0,
+  h: 0,
+  y: 0,
+  velW: 0,
+  velH: 0,
+  velY: 0,
+  targetW: 0,
+  targetH: 0,
+  targetY: 0,
+  omega: springOmega(NOTCH_EXPAND_RESPONSE),
+  lastTs: 0,
+  onComplete: null
+};
+
+function cancelNotchTimer() {
   if (notchAnimationTimer) {
     clearTimeout(notchAnimationTimer);
     notchAnimationTimer = null;
+  }
+}
+
+function stopNotchAnimation() {
+  cancelNotchTimer();
+  notchMotion.running = false;
+  notchMotion.velW = 0;
+  notchMotion.velH = 0;
+  notchMotion.velY = 0;
+  notchMotion.onComplete = null;
+}
+
+function prefersReducedMotion() {
+  try {
+    const settings = systemPreferences.getAnimationSettings?.();
+    return Boolean(settings && settings.prefersReducedMotion);
+  } catch {
+    return false;
   }
 }
 
@@ -192,67 +234,106 @@ function ensureDisplayStillAvailable() {
 }
 
 /**
- * Smooth deceleration — fast start, gentle landing. No overshoot.
- */
-function easeOutQuint(progress) {
-  const shifted = progress - 1;
-  return 1 + shifted ** 5;
-}
-
-/**
- * Exponential ease-out for slide-down show — responsive start, gentle tail.
- */
-function easeOutExpo(progress) {
-  return progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
-}
-
-/**
- * Ease-in for slide-up hide — slow start, accelerates away.
- */
-function easeInCubic(progress) {
-  return progress ** 3;
-}
-
-/**
- * Animate window bounds. Interpolates width, height, and y from current bounds.
+ * Animate window bounds with independent X-derived-from-width / H / Y springs.
+ * Interruptible: a new target keeps the live position and velocity (no brick wall).
  * @param {{ width: number, height: number, y?: number }} target
+ * @param {number} responseSec Apple-style spring response (not a fixed duration)
  */
-function animateNotchBounds(target, duration, easing, onComplete) {
+function animateNotchBounds(target, responseSec, onComplete) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
-  stopNotchAnimation();
-  const { width: startWidth, height: startHeight, y: startY } = mainWindow.getBounds();
+  const settings = getSettingsSafe();
   const targetWidth = target.width;
   const targetHeight = target.height;
-  const targetY = typeof target.y === 'number' ? target.y : getNotchY(false);
-  const startedAt = Date.now();
+  const targetY = typeof target.y === 'number' ? target.y : getNotchY(false, settings);
+
+  if (prefersReducedMotion()) {
+    stopNotchAnimation();
+    mainWindow.setBounds({
+      x: getNotchX(targetWidth, settings),
+      y: targetY,
+      width: targetWidth,
+      height: targetHeight
+    });
+    if (typeof onComplete === 'function') onComplete();
+    return;
+  }
+
+  cancelNotchTimer();
+  if (!notchMotion.running) {
+    const bounds = mainWindow.getBounds();
+    notchMotion.w = bounds.width;
+    notchMotion.h = bounds.height;
+    notchMotion.y = bounds.y;
+  }
+
+  notchMotion.running = true;
+  notchMotion.targetW = targetWidth;
+  notchMotion.targetH = targetHeight;
+  notchMotion.targetY = targetY;
+  notchMotion.omega = springOmega(responseSec);
+  notchMotion.onComplete = typeof onComplete === 'function' ? onComplete : null;
+  notchMotion.lastTs = Date.now();
 
   const tick = () => {
     if (!mainWindow || mainWindow.isDestroyed()) {
       notchAnimationTimer = null;
+      notchMotion.running = false;
       return;
     }
 
-    const elapsed = Date.now() - startedAt;
-    const progress = Math.min(elapsed / duration, 1);
-    const easedProgress = easing(progress);
-    const width = Math.round(startWidth + (targetWidth - startWidth) * easedProgress);
-    const height = Math.round(startHeight + (targetHeight - startHeight) * easedProgress);
-    const y = Math.round(startY + (targetY - startY) * easedProgress);
+    const now = Date.now();
+    const dt = clampFrameDt((now - notchMotion.lastTs) / 1000);
+    notchMotion.lastTs = now;
 
+    const omega = notchMotion.omega;
+    const nextW = stepSpringAxis(notchMotion.w, notchMotion.velW, notchMotion.targetW, dt, omega);
+    const nextH = stepSpringAxis(notchMotion.h, notchMotion.velH, notchMotion.targetH, dt, omega);
+    const nextY = stepSpringAxis(notchMotion.y, notchMotion.velY, notchMotion.targetY, dt, omega);
+    notchMotion.w = nextW.pos;
+    notchMotion.velW = nextW.vel;
+    notchMotion.h = nextH.pos;
+    notchMotion.velH = nextH.vel;
+    notchMotion.y = nextY.pos;
+    notchMotion.velY = nextY.vel;
+
+    const liveSettings = getSettingsSafe();
+    const width = Math.max(1, Math.round(notchMotion.w));
+    const height = Math.max(1, Math.round(notchMotion.h));
     mainWindow.setBounds({
-      x: getNotchX(width),
-      y,
+      x: getNotchX(width, liveSettings),
+      y: Math.round(notchMotion.y),
       width,
       height
     });
 
-    if (progress < 1) {
+    const settled =
+      isSpringSettled(notchMotion.w, notchMotion.velW, notchMotion.targetW) &&
+      isSpringSettled(notchMotion.h, notchMotion.velH, notchMotion.targetH) &&
+      isSpringSettled(notchMotion.y, notchMotion.velY, notchMotion.targetY);
+
+    if (!settled) {
       notchAnimationTimer = setTimeout(tick, FRAME_INTERVAL);
-    } else {
-      notchAnimationTimer = null;
-      if (typeof onComplete === 'function') onComplete();
+      return;
     }
+
+    mainWindow.setBounds({
+      x: getNotchX(notchMotion.targetW, liveSettings),
+      y: notchMotion.targetY,
+      width: notchMotion.targetW,
+      height: notchMotion.targetH
+    });
+    notchAnimationTimer = null;
+    notchMotion.running = false;
+    notchMotion.w = notchMotion.targetW;
+    notchMotion.h = notchMotion.targetH;
+    notchMotion.y = notchMotion.targetY;
+    notchMotion.velW = 0;
+    notchMotion.velH = 0;
+    notchMotion.velY = 0;
+    const done = notchMotion.onComplete;
+    notchMotion.onComplete = null;
+    if (done) done();
   };
 
   tick();
@@ -328,11 +409,9 @@ function expandNotch() {
   cancelAutoHide();
 
   mainWindow.webContents.send('notch-state', 'expanded');
-  // Smooth ease-out expand — no overshoot bounce (avoids Windows setBounds jitter)
   animateNotchBounds(
     { width: NOTCH_WIDTH_EXPANDED, height: NOTCH_HEIGHT_EXPANDED, y: getNotchY(false) },
-    NOTCH_EXPAND_DURATION,
-    easeOutQuint
+    NOTCH_EXPAND_RESPONSE
   );
 }
 
@@ -343,8 +422,7 @@ function collapseNotch() {
   mainWindow.webContents.send('notch-state', 'collapsed');
   animateNotchBounds(
     { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: getNotchY(false) },
-    NOTCH_COLLAPSE_DURATION,
-    easeOutQuint
+    NOTCH_COLLAPSE_RESPONSE
   );
 
   // Start autohide timer
@@ -373,8 +451,7 @@ function showNotch() {
   // Slide down from peek strip into collapsed bar
   animateNotchBounds(
     { width: NOTCH_WIDTH_COLLAPSED, height: NOTCH_HEIGHT_COLLAPSED, y: getNotchY(false) },
-    NOTCH_SHOW_DURATION,
-    easeOutExpo
+    NOTCH_SHOW_RESPONSE
   );
 }
 
@@ -390,8 +467,7 @@ function hideNotch() {
       height: NOTCH_HEIGHT_COLLAPSED,
       y: getNotchY(true)
     },
-    NOTCH_HIDE_DURATION,
-    easeInCubic,
+    NOTCH_HIDE_RESPONSE,
     () => {
       // Keep interactive so hover-reveal works on the peek strip
       if (mainWindow && !mainWindow.isDestroyed()) {
