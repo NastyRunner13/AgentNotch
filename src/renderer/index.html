@@ -13,8 +13,8 @@
 
     <!-- ═══ COLLAPSED BAR (always visible) ═══ -->
     <div id="notch-bar" class="notch-bar" role="button" tabindex="0" aria-label="Toggle AgentNotch panel">
-      <!-- Multicolor laser beam — sweeps the notch while agents are working -->
-      <div id="notch-laser" class="notch-laser" hidden aria-hidden="true">
+      <!-- Working beam — fades in while agents are working -->
+      <div id="notch-laser" class="notch-laser" aria-hidden="true">
         <span class="notch-laser-beam"></span>
         <span class="notch-laser-trail"></span>
       </div>
@@ -78,6 +78,7 @@
 
       <!-- Tab Navigation — only Sessions and History -->
       <nav class="notch-tabs">
+        <span class="ntab-ink" id="ntab-ink" aria-hidden="true"></span>
         <button class="ntab active" data-tab="sessions">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
           Sessions
@@ -95,7 +96,7 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
           Insights
         </button>
-        <button id="btn-settings" class="ntab ntab-icon" title="Settings" aria-label="Settings">
+        <button id="btn-settings" class="ntab ntab-icon" data-tab="settings" title="Settings" aria-label="Settings">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <circle cx="12" cy="12" r="3"/>
             <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>

@@ -1,6 +1,6 @@
 import { renderSessionCard, getAgentBarIcon, renderSessionSectionHeader } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
-import { renderUsageView, usageFingerprint, pickCritLimit } from './components/usage-view.js';
+import { renderUsageView, usageFingerprint, pickCritLimit, bindUsageCharts } from './components/usage-view.js';
 import { renderInsightsView, insightsFingerprint } from './components/insights-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
@@ -77,6 +77,7 @@ function shortAgentName(agent) {
 }
 
 const ATTENTION_STATUSES = ['permission-request', 'question', 'needs-attention'];
+const VIEW_ORDER = ['sessions', 'history', 'usage', 'insights', 'settings'];
 
 /** Active attention queue (unacked) — priority order matches main sort. */
 function isInAttentionQueue(session) {
@@ -154,6 +155,7 @@ class App {
     this.defaultDispatchAgent = '';
     this.defaultProjectCwd = '';
     this._dispatchLandedTimer = null;
+    this._viewMotionTimer = null;
   }
 
   async init() {
@@ -220,8 +222,13 @@ class App {
       });
     }
 
-    // Tab navigation
+    // Tab navigation + sliding ink
     this.initTabs();
+    const tabsNav = document.querySelector('.notch-tabs');
+    if (tabsNav && typeof ResizeObserver === 'function') {
+      this._tabInkObserver = new ResizeObserver(() => this.syncTabInk());
+      this._tabInkObserver.observe(tabsNav);
+    }
 
     // Settings panel bindings
     initSettings(this);
@@ -253,6 +260,9 @@ class App {
         this.isExpanded = state === 'expanded';
         this.isAutoHidden = state === 'hidden';
         this.updateNotchClass();
+        if (state === 'expanded') {
+          requestAnimationFrame(() => this.syncTabInk());
+        }
       });
 
       window.agentNotch.onAutoHideState((hidden) => {
@@ -313,9 +323,6 @@ class App {
             openSettingsView(this);
           } else if (view) {
             this.switchView(view);
-            document.querySelectorAll('.ntab:not(.ntab-icon)').forEach(t => {
-              t.classList.toggle('active', t.dataset.tab === view);
-            });
           }
         });
       }
@@ -470,9 +477,6 @@ class App {
     // Switch to Sessions tab so the card is visible
     if (this.currentView !== 'sessions') {
       this.switchView('sessions');
-      document.querySelectorAll('.ntab:not(.ntab-icon)').forEach(t => {
-        t.classList.toggle('active', t.dataset.tab === 'sessions');
-      });
     }
 
     let idx = queue.findIndex(s => s.id === this.expandedSessionId);
@@ -589,6 +593,10 @@ class App {
     }
     el.textContent = message;
     el.dataset.kind = kind;
+    if (el.classList.contains('visible')) {
+      el.classList.remove('visible');
+      void el.offsetWidth;
+    }
     el.classList.add('visible');
     clearTimeout(this._toastTimer);
     this._toastTimer = setTimeout(() => {
@@ -691,20 +699,81 @@ class App {
         e.stopPropagation();
         const viewName = tab.dataset.tab;
         if (!viewName) return;
-
-        tabs.forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
         this.switchView(viewName);
       });
     });
+    requestAnimationFrame(() => this.syncTabInk());
+  }
+
+  _setActiveTab(viewName) {
+    document.querySelectorAll('.ntab').forEach((t) => {
+      const name = t.dataset.tab || (t.id === 'btn-settings' ? 'settings' : '');
+      t.classList.toggle('active', name === viewName);
+    });
+  }
+
+  syncTabInk() {
+    const ink = document.getElementById('ntab-ink');
+    const nav = document.querySelector('.notch-tabs');
+    const active = nav && nav.querySelector('.ntab.active');
+    if (!ink || !nav || !active) return;
+    const navRect = nav.getBoundingClientRect();
+    const tabRect = active.getBoundingClientRect();
+    if (tabRect.width < 1) return;
+    ink.style.setProperty('--ink-x', `${Math.round(tabRect.left - navRect.left)}px`);
+    ink.style.setProperty('--ink-w', `${Math.round(tabRect.width)}`);
+    ink.classList.add('is-ready');
+  }
+
+  prefersReducedMotion() {
+    return typeof matchMedia === 'function'
+      && matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
   switchView(viewName) {
-    this.currentView = viewName;
+    if (!viewName) return;
+    const prevName = this.currentView;
+    this._setActiveTab(viewName);
 
-    document.querySelectorAll('.view').forEach(v => {
-      v.classList.toggle('active', v.id === `view-${viewName}`);
-    });
+    const views = document.querySelectorAll('.view');
+    const nextEl = document.getElementById(`view-${viewName}`);
+    const prevEl = document.getElementById(`view-${prevName}`);
+    const reduce = this.prefersReducedMotion();
+
+    if (prevName !== viewName && nextEl && !reduce) {
+      const from = VIEW_ORDER.indexOf(prevName);
+      const to = VIEW_ORDER.indexOf(viewName);
+      const dir = (to === -1 || from === -1 || to >= from) ? 1 : -1;
+
+      views.forEach((v) => {
+        v.classList.remove('from-left', 'from-right', 'to-left', 'to-right');
+      });
+
+      if (prevEl && prevEl !== nextEl) {
+        prevEl.classList.add(dir === 1 ? 'to-left' : 'to-right');
+        prevEl.classList.remove('active');
+      }
+
+      nextEl.classList.add(dir === 1 ? 'from-right' : 'from-left');
+      nextEl.classList.remove('active');
+      void nextEl.offsetWidth;
+      nextEl.classList.add('active');
+
+      clearTimeout(this._viewMotionTimer);
+      this._viewMotionTimer = setTimeout(() => {
+        views.forEach((v) => {
+          v.classList.remove('from-left', 'from-right', 'to-left', 'to-right');
+        });
+      }, 320);
+    } else {
+      views.forEach((v) => {
+        v.classList.remove('from-left', 'from-right', 'to-left', 'to-right');
+        v.classList.toggle('active', v.id === `view-${viewName}`);
+      });
+    }
+
+    this.currentView = viewName;
+    this.syncTabInk();
 
     if (viewName === 'history') {
       this.loadHistory();
@@ -822,6 +891,7 @@ class App {
       this.usageChartMode,
       this.usageLimits
     );
+    bindUsageCharts(container);
 
     container.querySelectorAll('.usage-range-btn[data-range]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -1035,10 +1105,6 @@ class App {
             this.showToast(res.message || 'Landed in session', 'ok');
             // Switch view back to sessions to watch the session work
             this.switchView('sessions');
-            const tabs = document.querySelectorAll('.ntab:not(.ntab-icon)');
-            tabs.forEach(t => {
-              t.classList.toggle('active', t.dataset.tab === 'sessions');
-            });
           } else {
             this.showToast(`Dispatch failed: ${res ? res.message : 'Unknown error'}`, 'error');
           }
@@ -1296,7 +1362,7 @@ class App {
     appEl.classList.toggle('laser-attention', attention && !working);
 
     if (notchLaser) {
-      notchLaser.hidden = !working;
+      notchLaser.removeAttribute('hidden');
       notchLaser.setAttribute('aria-hidden', working ? 'false' : 'true');
     }
   }
@@ -1316,6 +1382,7 @@ class App {
     this.updateBadges();
     this.updateLaserState();
     this.updateDispatchTargets();
+    this.syncTabInk();
   }
 
   renderUsageBar() {

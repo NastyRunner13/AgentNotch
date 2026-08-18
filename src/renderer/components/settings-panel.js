@@ -379,7 +379,6 @@ export function initSettings(app) {
 export function openSettingsView(app) {
   if (!app) return;
   app.switchView('settings');
-  document.querySelectorAll('.ntab:not(.ntab-icon)').forEach((t) => t.classList.remove('active'));
   refreshClaudeHookStatus();
   refreshAlwaysAllowCount();
   refreshDisplays();
