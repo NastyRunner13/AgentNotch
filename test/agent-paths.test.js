@@ -28,14 +28,18 @@ describe('agent-paths', () => {
     assert.equal(n.codex, '');
   });
 
-  it('defaultAgentRoots uses home on POSIX and APPDATA on Windows', () => {
+  it('defaultAgentRoots uses home on POSIX and APPDATA for Cursor on Windows', () => {
     const posix = defaultAgentRoots('/home/ada', {}, 'linux');
     assert.equal(posix.claude, path.join('/home/ada', '.claude'));
     assert.equal(posix.opencode, path.join('/home/ada', '.local', 'share', 'opencode', 'opencode.db'));
 
     const win = defaultAgentRoots('C:\\Users\\ada', { APPDATA: 'C:\\Users\\ada\\AppData\\Roaming' }, 'win32');
     assert.equal(win.cursor, path.join('C:\\Users\\ada\\AppData\\Roaming', 'Cursor'));
-    assert.equal(win.opencode, path.join('C:\\Users\\ada\\AppData\\Roaming', 'opencode', 'opencode.db'));
+    // OpenCode uses the XDG data home on Windows too.
+    assert.equal(win.opencode, path.join('C:\\Users\\ada', '.local', 'share', 'opencode', 'opencode.db'));
+
+    const mac = defaultAgentRoots('/Users/ada', {}, 'darwin');
+    assert.equal(mac.opencode, path.join('/Users/ada', '.local', 'share', 'opencode', 'opencode.db'));
   });
 
   it('decodes UTF-16LE wsl.exe listings and skips docker-desktop', () => {

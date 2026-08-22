@@ -63,13 +63,9 @@ function defaultAgentRoots(home = os.homedir(), env = process.env, platform = pr
         ? path.join(env.XDG_CONFIG_HOME, 'Cursor')
         : path.join(home, '.config', 'Cursor'));
 
-  const opencodeDb = platform === 'win32'
-    ? (env.APPDATA
-      ? path.join(env.APPDATA, 'opencode', 'opencode.db')
-      : path.join(home, 'AppData', 'Roaming', 'opencode', 'opencode.db'))
-    : platform === 'darwin'
-      ? path.join(home, 'Library', 'Application Support', 'opencode', 'opencode.db')
-      : path.join(home, '.local', 'share', 'opencode', 'opencode.db');
+  // OpenCode uses the XDG data home on every platform, including Windows
+  // and macOS — ~/.local/share/opencode/opencode.db.
+  const opencodeDb = path.join(home, '.local', 'share', 'opencode', 'opencode.db');
 
   return {
     claude: path.join(home, '.claude'),

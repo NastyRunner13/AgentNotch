@@ -8,9 +8,10 @@ const { preferUserPrompt } = require('../lib/prompt-clean');
 /**
  * OpencodeWatcher — monitors OpenCode sessions via its SQLite WAL database.
  *
- * OpenCode stores everything in a single SQLite database:
- *   Linux/macOS: ~/.local/share/opencode/opencode.db
- *   Windows:     %APPDATA%\opencode\opencode.db  or  %LOCALAPPDATA%\opencode\opencode.db
+ * OpenCode stores everything in a single SQLite database (XDG data home on
+ * every platform):
+ *   ~/.local/share/opencode/opencode.db
+ *   Windows fallbacks: %APPDATA%\opencode\opencode.db or %LOCALAPPDATA%\opencode\opencode.db
  *
  * Tables of interest:
  *   session  — id, title, model (JSON), time_created, time_updated
@@ -291,7 +292,10 @@ function analyzeOpencodeSession(sessionRow, messages, parts, now, _staleMs = 60_
 class OpencodeWatcher extends BaseWatcher {
   constructor(options = {}) {
     super('OpenCode', { pollInterval: 3000, ...options });
-    this.dbPath = options.dbPath || resolveDbPath();
+    // An injected dbPath (custom root or platform default) is only trusted if
+    // it actually exists — otherwise fall back to probing known locations.
+    const injected = typeof options.dbPath === 'string' ? options.dbPath.trim() : '';
+    this.dbPath = injected && fs.existsSync(injected) ? injected : resolveDbPath();
     this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this._lastChangeToken = '';
   }
