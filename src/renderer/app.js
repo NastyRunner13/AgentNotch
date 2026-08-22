@@ -1479,7 +1479,16 @@ class App {
           statusTextEl.removeAttribute('title');
         }
       } else {
-        iconsContainer.innerHTML = activeSessions.map(s => getAgentBarIcon(s)).join('');
+        // Cap at 4 logos; prioritize attention > running > rest, then "+N"
+        const MAX_ICONS = 4;
+        const rank = (s) => (isInAttentionQueue(s) ? 0 : s.status === 'working' ? 1 : 2);
+        const visible = [...activeSessions]
+          .sort((a, b) => rank(a) - rank(b))
+          .slice(0, MAX_ICONS);
+        const overflow = activeSessions.length - visible.length;
+        iconsContainer.innerHTML =
+          visible.map(s => getAgentBarIcon(s)).join('') +
+          (overflow > 0 ? `<div class="agent-icon-wrap"><div class="agent-overflow">+${overflow}</div></div>` : '');
         if (brandEl) brandEl.hidden = true;
 
         if (statusTextEl) {

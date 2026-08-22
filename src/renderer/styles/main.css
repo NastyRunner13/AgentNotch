@@ -347,6 +347,21 @@ html, body {
   opacity: 0.95;
 }
 
+/* Overflow chip: "+N" when more agents than fit in the bar */
+.agent-overflow {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--border-light);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 500;
+}
+
 /* ── Multicolor laser beam (notch bar) ─────────────────── */
 .notch-laser {
   position: absolute;
