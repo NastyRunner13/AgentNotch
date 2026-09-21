@@ -1,5 +1,5 @@
 const { extractTaskName, formatDuration, isFileActive } = require('../base-watcher');
-const { getText, normalizePlan } = require('../session-utils');
+const { getText, normalizePlan, classifyActivityTool } = require('../session-utils');
 const { preferUserPrompt } = require('../../lib/prompt-clean');
 const {
   getAcpUpdate,
@@ -7,7 +7,6 @@ const {
   extractToolName,
   formatToolInput,
   extractToolFilePath,
-  classifyToolKind,
   resolveTimestamp,
   truncate,
   uniqueTail,
@@ -157,7 +156,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
           name,
           detail: detail || name,
           filePath: filePath || undefined,
-          kind: classifyToolKind(name, input),
+          kind: classifyActivityTool(name, input),
           at
         });
         if (toolDetails.length > 40) toolDetails = toolDetails.slice(-40);
@@ -291,7 +290,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
           name,
           detail,
           filePath: extractToolFilePath(parsedArgs) || undefined,
-          kind: classifyToolKind(name, parsedArgs),
+          kind: classifyActivityTool(name, parsedArgs),
           at: ts
         });
         if (toolDetails.length > 40) toolDetails = toolDetails.slice(-40);
@@ -317,7 +316,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
         name,
         detail,
         filePath: extractToolFilePath(input) || undefined,
-        kind: classifyToolKind(name, input),
+        kind: classifyActivityTool(name, input),
         at: ts
       });
       if (toolDetails.length > 40) toolDetails = toolDetails.slice(-40);

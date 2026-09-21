@@ -68,9 +68,24 @@ function buildActivity(lastMessage, toolCalls, at, extra = []) {
   return activity.slice(-40);
 }
 
-function classifyActivityTool(label) {
+/**
+ * Classify a tool for UI row styling (terminal / file / search / tool).
+ * Matches on the tool name first, then on the raw input shape when available.
+ * @param {string} label
+ * @param {{ command?: unknown, cmd?: unknown, target_file?: unknown, file_path?: unknown, old_string?: unknown, content?: unknown }} [input]
+ */
+function classifyActivityTool(label, input) {
   const n = String(label || '').toLowerCase();
-  if (n.includes('terminal') || n.includes('bash') || n.includes('shell') || n.startsWith('run(') || n.includes('run_terminal')) {
+  if (
+    n.includes('terminal') ||
+    n.includes('bash') ||
+    n.includes('shell') ||
+    n.startsWith('run(') ||
+    n.includes('run_terminal') ||
+    n === 'run' ||
+    n === 'exec' ||
+    Boolean(input && (input.command || input.cmd))
+  ) {
     return 'terminal';
   }
   if (
@@ -80,7 +95,9 @@ function classifyActivityTool(label) {
     n.includes('search_replace') ||
     n.includes('str_replace') ||
     n.includes('apply_patch') ||
-    /\.(js|ts|tsx|jsx|py|go|rs|css|html|md|json|yml|yaml)\b/i.test(n)
+    n.includes('create_file') ||
+    /\.(js|ts|tsx|jsx|py|go|rs|css|html|md|json|yml|yaml)\b/i.test(n) ||
+    Boolean(input && (input.target_file || input.file_path || input.old_string || input.content))
   ) {
     return 'file';
   }

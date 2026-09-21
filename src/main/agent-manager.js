@@ -8,7 +8,7 @@ const { ClaudeWatcher } = require('./watchers/claude-watcher');
 const { CodexWatcher } = require('./watchers/codex-watcher');
 const { CursorWatcher } = require('./watchers/cursor-watcher');
 const { AntigravityWatcher } = require('./watchers/antigravity-watcher');
-const { GrokWatcher } = require('./watchers/grok-watcher');
+const { GrokWatcher } = require('./watchers/grok/watcher');
 const { OpencodeWatcher } = require('./watchers/opencode-watcher');
 const { createSettingsStore } = require('./settings/store');
 const {

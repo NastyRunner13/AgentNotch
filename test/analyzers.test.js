@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const { analyzeClaudeEntries } = require('../src/main/watchers/claude-watcher');
 const { analyzeCodexEntries } = require('../src/main/watchers/codex-watcher');
-const { analyzeGrokEntries } = require('../src/main/watchers/grok-watcher');
+const { analyzeGrokEntries } = require('../src/main/watchers/grok/updates');
 const { analyzeAntigravityEntries } = require('../src/main/watchers/antigravity-watcher');
 const { analyzeOpencodeSession } = require('../src/main/watchers/opencode-watcher');
 const {
@@ -231,7 +231,9 @@ describe('Grok analyzer', () => {
 });
 
 describe('Grok events analyzer', () => {
-  const { analyzeGrokEvents, analyzeGrokEntries, analyzeChatHistory, mergeGrokStatus } = require('../src/main/watchers/grok-watcher');
+  const { analyzeGrokEntries } = require('../src/main/watchers/grok/updates');
+  const { analyzeGrokEvents, mergeGrokStatus } = require('../src/main/watchers/grok/events');
+  const { analyzeChatHistory } = require('../src/main/watchers/grok/chat');
 
   it('maps tool_started and permission phases', () => {
     const working = analyzeGrokEvents([

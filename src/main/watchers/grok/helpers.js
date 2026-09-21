@@ -1,4 +1,4 @@
-const { getText } = require('../session-utils');
+const { getText, classifyActivityTool } = require('../session-utils');
 
 function getAcpUpdate(entry) {
   if (!entry || typeof entry !== 'object') return null;
@@ -38,13 +38,7 @@ function formatToolInput(name, input) {
   const cmd = input.command || input.cmd;
   if (cmd) return `${name}: ${truncate(String(cmd).replace(/\s+/g, ' '), 120)}`;
 
-  const file =
-    input.target_file ||
-    input.target_directory ||
-    input.file_path ||
-    input.path ||
-    input.url ||
-    input.cwd;
+  const file = extractToolFilePath(input) || input.cwd;
   if (file) {
     // Keep enough path context so the feed feels like the terminal
     const norm = String(file).replace(/\\/g, '/');
@@ -82,38 +76,6 @@ function extractToolFilePath(input) {
     input.url ||
     '';
   return file ? String(file) : '';
-}
-
-/** Classify tool for UI row styling (file / terminal / search / tool). */
-function classifyToolKind(name, input) {
-  const n = String(name || '').toLowerCase();
-  if (
-    n.includes('terminal') ||
-    n.includes('bash') ||
-    n.includes('shell') ||
-    n === 'run' ||
-    n === 'exec' ||
-    (input && (input.command || input.cmd))
-  ) {
-    return 'terminal';
-  }
-  if (
-    n.includes('search_replace') ||
-    n.includes('write') ||
-    n.includes('edit') ||
-    n.includes('str_replace') ||
-    n.includes('read_file') ||
-    n.includes('read') ||
-    n.includes('apply_patch') ||
-    n.includes('create_file') ||
-    (input && (input.target_file || input.file_path || input.old_string || input.content))
-  ) {
-    return 'file';
-  }
-  if (n.includes('grep') || n.includes('search') || n.includes('glob') || n.includes('find')) {
-    return 'search';
-  }
-  return 'tool';
 }
 
 function phaseToLabel(phase) {
@@ -233,7 +195,7 @@ function buildRichActivity({
       activity.push({
         text: d.detail || `Used ${d.name}`,
         at: d.at || at,
-        kind: d.kind || classifyToolKind(d.name),
+        kind: d.kind || classifyActivityTool(d.name),
         filePath: d.filePath,
         tool: d.name
       });
@@ -243,7 +205,7 @@ function buildRichActivity({
       activity.push({
         text: String(tool),
         at,
-        kind: classifyToolKind(tool),
+        kind: classifyActivityTool(tool),
         tool: String(tool)
       });
     }
@@ -316,7 +278,6 @@ module.exports = {
   extractToolName,
   formatToolInput,
   extractToolFilePath,
-  classifyToolKind,
   phaseToLabel,
   resolveTimestamp,
   truncate,
