@@ -244,12 +244,6 @@ function isDispatchableHistoryAgent(agent) {
   return DISPATCHABLE_AGENTS.has(agent);
 }
 
-function projectFolderName(cwd) {
-  if (!cwd || typeof cwd !== 'string') return '';
-  const parts = cwd.split(/[/\\]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : '';
-}
-
 module.exports = {
   DEFAULT_CONTINUE_PROMPT,
   DISPATCHABLE_AGENTS,
@@ -260,6 +254,5 @@ module.exports = {
   applyHistoryPin,
   buildHistoryResumeTarget,
   resolveHistoryResumeTarget,
-  isDispatchableHistoryAgent,
-  projectFolderName
+  isDispatchableHistoryAgent
 };

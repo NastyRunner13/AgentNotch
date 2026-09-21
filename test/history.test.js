@@ -9,9 +9,9 @@ const {
   buildHistoryResumeTarget,
   resolveHistoryResumeTarget,
   isDispatchableHistoryAgent,
-  projectFolderName,
   DEFAULT_CONTINUE_PROMPT
 } = require('../src/main/session/history-utils');
+const { projectBase } = require('../src/main/session/session-feed-utils');
 const { buildResumeCommand } = require('../src/main/agent-manager');
 
 const UUID = '123e4567-e89b-42d3-a456-426614174000';
@@ -221,9 +221,9 @@ describe('misc helpers', () => {
     assert.equal(isDispatchableHistoryAgent('Cursor'), false);
   });
 
-  it('projectFolderName', () => {
-    assert.equal(projectFolderName('C:\\dev\\agent-notch'), 'agent-notch');
-    assert.equal(projectFolderName('/tmp/foo/bar'), 'bar');
-    assert.equal(projectFolderName(''), '');
+  it('projectBase', () => {
+    assert.equal(projectBase('C:\\dev\\agent-notch'), 'agent-notch');
+    assert.equal(projectBase('/tmp/foo/bar'), 'bar');
+    assert.equal(projectBase(''), '');
   });
 });

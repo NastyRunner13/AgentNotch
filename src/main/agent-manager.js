@@ -55,6 +55,7 @@ const {
   resolveHistoryResumeTarget,
   DEFAULT_CONTINUE_PROMPT
 } = require('./session/history-utils');
+const { projectBase } = require('./session/session-feed-utils');
 const {
   sanitizeWslDistro,
   sanitizeHotkey,
@@ -1711,7 +1712,7 @@ class AgentManager extends EventEmitter {
       const agentShort = session.agent === 'Claude Code' ? 'Claude' : session.agent;
       const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
       const shortTask = task.length > 36 ? `${task.slice(0, 35)}…` : task;
-      const dir = projectFolderName(session.cwd);
+      const dir = projectBase(session.cwd);
       const where = dir ? ` · ${dir}` : '';
       return {
         success: true,
@@ -1744,7 +1745,7 @@ class AgentManager extends EventEmitter {
       await runHeadlessResume(cmd);
       this._scheduleEmit();
       const agentShort = agentName === 'Claude Code' ? 'Claude' : agentName;
-      const dir = projectFolderName(cmd.cwd);
+      const dir = projectBase(cmd.cwd);
       return {
         success: true,
         message: dir
@@ -2003,13 +2004,6 @@ function rememberFocusedFromStdout(agentName, stdout) {
     title: String(m[2] || '').slice(0, 200),
     at: Date.now()
   });
-}
-
-/** @param {string|null|undefined} cwd */
-function projectFolderName(cwd) {
-  if (!cwd) return '';
-  const parts = String(cwd).split(/[/\\]/).filter(Boolean);
-  return parts.length ? parts[parts.length - 1] : '';
 }
 
 /**
