@@ -139,11 +139,6 @@ function getNotchY(hidden, settings) {
   return hidden ? top + NOTCH_HIDDEN_Y_OFFSET : top;
 }
 
-/** @deprecated name kept for call sites — display-aware horizontal placement */
-function getCenteredX(width) {
-  return getNotchX(width, getSettingsSafe());
-}
-
 function setNotchBounds(width, height, y) {
   if (!mainWindow) return;
   stopNotchAnimation();
