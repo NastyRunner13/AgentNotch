@@ -282,12 +282,101 @@ describe('permission-bridge', () => {
     assert.equal(handler.type, 'command');
     assert.equal(handler.command, 'node');
     assert.ok(String(handler.args[0]).includes('claude-permission-bridge.js'));
+    const askGroup = settings.hooks.PreToolUse.find((g) => g.matcher === 'AskUserQuestion|ExitPlanMode');
+    assert.ok(askGroup);
+    assert.equal(bridge.questionHookInstalled(), true);
+    const bashGroup = settings.hooks.PreToolUse.find((g) => g.matcher === 'Bash');
+    assert.ok(bashGroup);
 
     const un = bridge.uninstallClaudeHook();
     assert.equal(un.success, true);
     assert.equal(bridge.isHookInstalled(), false);
+    assert.equal(bridge.questionHookInstalled(), false);
     const after = JSON.parse(fs.readFileSync(path.join(claudeDir, 'settings.json'), 'utf8'));
     assert.ok(after.hooks.PreToolUse);
     assert.equal(after.hooks.PermissionRequest, undefined);
+    assert.equal(after.hooks.PreToolUse[0].hooks[0].command, 'echo pre');
+  });
+
+  it('question pending merges as a remote question, not a permission', () => {
+    const pending = bridge.createQuestionFromHookInput({
+      session_id: 'q1',
+      transcript_path: '/x/q1.jsonl',
+      hook_event_name: 'PreToolUse',
+      tool_name: 'AskUserQuestion',
+      tool_input: {
+        questions: [
+          {
+            question: 'Which env?',
+            header: 'Env',
+            multiSelect: false,
+            options: [
+              { label: 'Staging', description: 'Safe' },
+              { label: 'Prod', description: 'Live' }
+            ]
+          },
+          {
+            question: 'Who reviews?',
+            header: 'Review',
+            multiSelect: true,
+            options: [{ label: 'Me' }, { label: 'Team' }]
+          }
+        ]
+      }
+    });
+    assert.equal(pending.kind, 'question');
+    assert.equal(pending.questions.length, 2);
+
+    const merged = bridge.mergePendingIntoSessions([
+      { id: 'claude-q1', agent: 'Claude Code', status: 'working', taskName: 'Ship', lastTime: 1 }
+    ]);
+    assert.equal(merged[0].status, 'question');
+    assert.equal(merged[0].remoteAnswer, true);
+    assert.equal(merged[0].remoteApprove, false);
+    assert.equal(merged[0].question.questions.length, 2);
+    assert.equal(bridge.findPendingForSession('claude-q1'), null);
+
+    const bad = bridge.submitDecision(pending.id, 'allow');
+    assert.equal(bad.success, false);
+
+    const res = bridge.submitQuestionDecision(pending.id, {
+      answers: { 'Which env?': 'Staging', 'Who reviews?': 'Me, Team' }
+    });
+    assert.equal(res.success, true);
+    const decision = JSON.parse(fs.readFileSync(path.join(bridge.decisionsDir(), `${pending.id}.json`), 'utf8'));
+    assert.equal(decision.answers['Which env?'], 'Staging');
+    assert.equal(decision.answers['Who reviews?'], 'Me, Team');
+
+    const response = bridge.buildQuestionHookResponse(pending, decision);
+    assert.equal(response.hookSpecificOutput.permissionDecision, 'allow');
+    assert.equal(response.hookSpecificOutput.updatedInput.answers['Who reviews?'], 'Me, Team');
+    assert.equal(response.hookSpecificOutput.updatedInput.questions.length, 2);
+  });
+
+  it('plan approval denies with a note and does not look like allow/deny permission', () => {
+    const pending = bridge.createQuestionFromHookInput({
+      session_id: 'plan-1',
+      transcript_path: '/x/plan-1.jsonl',
+      tool_name: 'ExitPlanMode',
+      tool_input: { plan: 'Do the thing' }
+    });
+    assert.equal(pending.questionKind, 'plan');
+    const res = bridge.submitQuestionDecision(pending.id, { deny: true, note: 'Skip the migration' });
+    assert.equal(res.decision, 'deny');
+    const response = bridge.buildQuestionHookResponse(pending, {
+      decision: 'deny',
+      note: 'Skip the migration'
+    });
+    assert.equal(response.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(response.hookSpecificOutput.permissionDecisionReason, 'Skip the migration');
+  });
+
+  it('empty AskUserQuestion does not create a pending card', () => {
+    const pending = bridge.createQuestionFromHookInput({
+      tool_name: 'AskUserQuestion',
+      tool_input: { questions: [] }
+    });
+    assert.equal(pending, null);
+    assert.equal(bridge.listPending().length, 0);
   });
 });

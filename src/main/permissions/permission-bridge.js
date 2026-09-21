@@ -224,9 +224,13 @@ function listPending() {
  * Find the newest pending request for an AgentNotch session id.
  * Also accepts synthetic ids `claude-pending-<requestId>`.
  */
+function pendingKind(pending) {
+  return pending && pending.kind === 'question' ? 'question' : 'permission';
+}
+
 function findPendingForSession(notchSessionId) {
   if (!notchSessionId) return null;
-  const all = listPending();
+  const all = listPending().filter((p) => pendingKind(p) === 'permission');
   const direct = all.find((p) => sessionIdsMatch(p.notchSessionId, notchSessionId));
   if (direct) return direct;
 
@@ -252,6 +256,7 @@ function createPendingFromHookInput(input) {
 
   const pending = {
     id,
+    kind: 'permission',
     claudeSessionId,
     notchSessionId,
     transcriptPath,
@@ -293,6 +298,9 @@ function submitDecision(requestId, decision, source = 'agent-notch') {
   if (!found) {
     return { success: false, message: 'No pending permission request for this id' };
   }
+  if (pendingKind(found.pending) === 'question') {
+    return { success: false, message: 'This prompt needs an answer, not allow/deny' };
+  }
 
   writeJsonAtomic(decisionPath(requestId, found.home), {
     id: requestId,
@@ -321,6 +329,189 @@ function submitDecisionForSession(notchSessionId, decision) {
   return submitDecision(pending.id, decision);
 }
 
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode']);
+const MAX_ANSWER_CHARS = 500;
+
+function clip(value, max) {
+  return String(value || '').trim().slice(0, max);
+}
+
+/**
+ * Claude AskUserQuestion input → notch form. Drops questions with no text.
+ * @param {object} toolInput
+ */
+function normalizeQuestions(toolInput) {
+  const raw = toolInput && Array.isArray(toolInput.questions) ? toolInput.questions : [];
+  const questions = [];
+  for (const q of raw.slice(0, 4)) {
+    if (!q || typeof q !== 'object') continue;
+    const question = clip(q.question || q.prompt, 500);
+    if (!question) continue;
+    const options = [];
+    const rawOpts = Array.isArray(q.options) ? q.options : [];
+    for (const opt of rawOpts.slice(0, 8)) {
+      if (typeof opt === 'string') {
+        const label = clip(opt, 160);
+        if (label) options.push({ label, description: '' });
+        continue;
+      }
+      if (!opt || typeof opt !== 'object') continue;
+      const label = clip(opt.label || opt.value, 160);
+      if (!label) continue;
+      options.push({ label, description: clip(opt.description, 240) });
+    }
+    questions.push({
+      id: String(questions.length),
+      header: clip(q.header, 40),
+      question,
+      multiSelect: Boolean(q.multiSelect),
+      options
+    });
+  }
+  return questions;
+}
+
+function extractPlanText(toolInput) {
+  if (!toolInput || typeof toolInput !== 'object') return '';
+  const direct = toolInput.plan || toolInput.planText || toolInput.plan_markdown;
+  return typeof direct === 'string' ? direct.trim().slice(0, 12000) : '';
+}
+
+/**
+ * Pending record for a Claude question or plan-approval hook.
+ * Returns null when AskUserQuestion has no usable questions — caller should
+ * let Claude show its own dialog instead of blocking on an empty card.
+ */
+function createQuestionFromHookInput(input) {
+  const toolName = String(input.tool_name || input.toolName || '').slice(0, 120);
+  if (!QUESTION_TOOLS.has(toolName)) return null;
+  const rawInput = input.tool_input || input.toolInput || {};
+  const questions = toolName === 'AskUserQuestion' ? normalizeQuestions(rawInput) : [];
+  if (toolName === 'AskUserQuestion' && questions.length === 0) return null;
+
+  ensureDirs();
+  const id = crypto.randomUUID();
+  const claudeSessionId = input.session_id || input.sessionId || '';
+  const transcriptPath = input.transcript_path || input.transcriptPath || '';
+  const pending = {
+    id,
+    kind: 'question',
+    questionKind: toolName === 'ExitPlanMode' ? 'plan' : 'ask',
+    claudeSessionId,
+    notchSessionId: toNotchSessionId(claudeSessionId, transcriptPath),
+    transcriptPath,
+    cwd: input.cwd || '',
+    tool: toolName,
+    toolInput: clampToolInput(rawInput),
+    questions,
+    plan: toolName === 'ExitPlanMode' ? extractPlanText(rawInput) : '',
+    createdAt: Date.now(),
+    status: 'pending'
+  };
+  writeJsonAtomic(pendingPath(id), pending);
+  return pending;
+}
+
+function matchAnswer(question, given) {
+  const text = clip(given, MAX_ANSWER_CHARS);
+  if (!text) return { ok: false, message: 'Answer every question before sending' };
+  const labels = (question.options || []).map((o) => o.label);
+  if (question.multiSelect) {
+    const parts = text.split(',').map((s) => s.trim()).filter(Boolean);
+    const known = parts.length > 0 && parts.every((p) => labels.includes(p));
+    // A value that isn't a list of known labels is the Other field, commas included.
+    if (!known) return { ok: true, value: text };
+    return { ok: true, value: parts.join(', ') };
+  }
+  return { ok: true, value: text };
+}
+
+/**
+ * @param {object} payload — `{ answers, deny, note, legacy }`
+ */
+function buildAnswers(pending, payload) {
+  if (pending.questionKind === 'plan') return { ok: true, answers: {} };
+  const questions = pending.questions || [];
+  if (questions.length === 0) return { ok: false, message: 'Question has no choices' };
+
+  const body = payload && typeof payload === 'object' ? payload : {};
+  const legacy = typeof body.legacy === 'string' ? body.legacy.trim() : '';
+  const raw = body.answers;
+  const answers = {};
+
+  if (legacy && questions.length === 1 && (!raw || typeof raw !== 'object')) {
+    const checked = matchAnswer(questions[0], legacy);
+    if (!checked.ok) return checked;
+    answers[questions[0].question] = checked.value;
+    return { ok: true, answers };
+  }
+
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, message: 'Answer every question before sending' };
+  }
+  for (const q of questions) {
+    const given = raw[q.question] != null ? raw[q.question] : raw[q.id];
+    const checked = matchAnswer(q, given);
+    if (!checked.ok) return checked;
+    answers[q.question] = checked.value;
+  }
+  return { ok: true, answers };
+}
+
+function submitQuestionDecision(requestId, payload) {
+  if (!requestId) return { success: false, message: 'Missing request id' };
+  const found = findPendingRecord(requestId);
+  if (!found || pendingKind(found.pending) !== 'question') {
+    return { success: false, message: 'No question waiting for this session' };
+  }
+
+  const deny = Boolean(payload && payload.deny);
+  let answers = {};
+  let note = '';
+  if (deny) {
+    note = clip(payload && payload.note, MAX_ANSWER_CHARS);
+  } else {
+    const built = buildAnswers(found.pending, payload);
+    if (!built.ok) return { success: false, message: built.message };
+    answers = built.answers;
+  }
+
+  const decision = deny ? 'deny' : 'allow';
+  writeJsonAtomic(decisionPath(requestId, found.home), {
+    id: requestId,
+    decision,
+    answers,
+    note,
+    decidedAt: Date.now(),
+    source: 'agent-notch'
+  });
+
+  return {
+    success: true,
+    remote: true,
+    decision,
+    requestId,
+    message: deny ? 'Declined from AgentNotch' : 'Answered from AgentNotch'
+  };
+}
+
+function pendingToQuestion(pending) {
+  const questions = Array.isArray(pending.questions) ? pending.questions : [];
+  const first = questions[0];
+  const plan = pending.questionKind === 'plan';
+  return {
+    requestId: pending.id,
+    remote: true,
+    kind: plan ? 'plan' : 'ask',
+    text: plan ? 'Approve this plan?' : (first && first.question) || 'Question',
+    questions,
+    plan: pending.plan || '',
+    options: questions.length === 1
+      ? (first.options || []).map((o) => ({ label: o.label, description: o.description || '', value: o.label }))
+      : []
+  };
+}
+
 function buildHookResponse(decision) {
   const behavior = decision === 'deny' ? 'deny' : 'allow';
   const body = {
@@ -338,20 +529,69 @@ function buildHookResponse(decision) {
 }
 
 /**
- * Poll for a decision file. Returns 'allow' | 'deny' | null (timeout).
+ * PreToolUse response. AskUserQuestion must echo questions plus answers.
+ * allow without updatedInput does not satisfy Claude for these tools.
  */
-async function waitForDecision(requestId, timeoutMs = DEFAULT_TIMEOUT_MS) {
+function buildQuestionHookResponse(pending, decision) {
+  if (!decision || decision.decision === 'deny') {
+    return {
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: clip(decision && decision.note, MAX_ANSWER_CHARS) || 'Declined from AgentNotch'
+      }
+    };
+  }
+
+  const updatedInput = pending.toolInput && !pending.toolInput._truncated
+    ? { ...pending.toolInput }
+    : {};
+  if (pending.questionKind === 'plan') {
+    if (!updatedInput.plan && pending.plan) updatedInput.plan = pending.plan;
+  } else {
+    updatedInput.questions = (pending.questions || []).map((q) => ({
+      question: q.question,
+      header: q.header || '',
+      multiSelect: Boolean(q.multiSelect),
+      options: (q.options || []).map((o) => ({
+        label: o.label,
+        description: o.description || ''
+      }))
+    }));
+    updatedInput.answers = decision.answers || {};
+  }
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'allow',
+      updatedInput
+    }
+  };
+}
+
+/**
+ * Poll for a decision file. Returns the file body, or null on timeout.
+ */
+async function waitForFullDecision(requestId, timeoutMs = DEFAULT_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
   const dPath = decisionPath(requestId);
 
   while (Date.now() < deadline) {
     const data = readJsonSafe(dPath);
     if (data && (data.decision === 'allow' || data.decision === 'deny')) {
-      return data.decision;
+      return data;
     }
     await sleep(POLL_MS);
   }
   return null;
+}
+
+/**
+ * Poll for a decision file. Returns 'allow' | 'deny' | null (timeout).
+ */
+async function waitForDecision(requestId, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const data = await waitForFullDecision(requestId, timeoutMs);
+  return data ? data.decision : null;
 }
 
 function cleanupRequest(requestId) {
@@ -439,59 +679,85 @@ function isHookInstalled() {
   return false;
 }
 
-function makeHookHandler(bridgePath) {
+function makeHookHandler(bridgePath, statusMessage) {
   return {
     type: 'command',
     command: 'node',
     args: [bridgePath],
     timeout: 600,
-    statusMessage: 'Waiting for AgentNotch approval…'
+    statusMessage
   };
 }
 
-/**
- * Install/update the PermissionRequest hook in ~/.claude/settings.json
- * and sync the bridge script.
- */
-function installClaudeHook() {
-  const bridgePath = syncBridgeScript();
-  const settings = readClaudeSettings();
-  if (!settings.hooks || typeof settings.hooks !== 'object') {
-    settings.hooks = {};
-  }
-  if (!Array.isArray(settings.hooks.PermissionRequest)) {
-    settings.hooks.PermissionRequest = [];
-  }
-
-  const handler = makeHookHandler(bridgePath);
-  let foundGroup = false;
-
-  for (const group of settings.hooks.PermissionRequest) {
+function upsertOurHandler(settings, eventName, matcher, handler) {
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+  if (!Array.isArray(settings.hooks[eventName])) settings.hooks[eventName] = [];
+  for (const group of settings.hooks[eventName]) {
     if (!group || typeof group !== 'object') continue;
     if (!Array.isArray(group.hooks)) group.hooks = [];
     const idx = group.hooks.findIndex(isOurHookHandler);
     if (idx >= 0) {
       group.hooks[idx] = handler;
-      foundGroup = true;
-      break;
+      if (!group.matcher) group.matcher = matcher;
+      return;
     }
   }
+  settings.hooks[eventName].push({ matcher, hooks: [handler] });
+}
 
-  if (!foundGroup) {
-    // Prefer a dedicated catch-all matcher group
-    settings.hooks.PermissionRequest.push({
-      matcher: '*',
-      hooks: [handler]
-    });
+/** Permission allow/deny plus AskUserQuestion and ExitPlanMode. */
+function installHooksInto(settings, bridgeArgPath) {
+  upsertOurHandler(
+    settings,
+    'PermissionRequest',
+    '*',
+    makeHookHandler(bridgeArgPath, 'Waiting for AgentNotch approval…')
+  );
+  upsertOurHandler(
+    settings,
+    'PreToolUse',
+    'AskUserQuestion|ExitPlanMode',
+    makeHookHandler(bridgeArgPath, 'Waiting for AgentNotch answer…')
+  );
+  return settings;
+}
+
+function eventHasOurHandler(settings, eventName) {
+  const groups = settings && settings.hooks && settings.hooks[eventName];
+  if (!Array.isArray(groups)) return false;
+  for (const group of groups) {
+    const hooks = group && group.hooks;
+    if (!Array.isArray(hooks)) continue;
+    if (hooks.some(isOurHookHandler)) return true;
   }
+  return false;
+}
 
+/**
+ * Install/update Claude hooks in ~/.claude/settings.json
+ * and sync the bridge script.
+ */
+function installClaudeHook() {
+  const bridgePath = syncBridgeScript();
+  const settings = readClaudeSettings();
+  installHooksInto(settings, bridgePath);
   writeClaudeSettings(settings);
   return {
     success: true,
     bridgePath,
     settingsPath: claudeSettingsPath(),
-    message: 'Claude remote-approve hook installed. Restart any open Claude Code sessions.'
+    message: 'Claude hook installed. Restart any open Claude Code sessions.'
   };
+}
+
+/**
+ * If the user already installed remote approve, add the question hook once.
+ * Does nothing when the permission hook is absent.
+ */
+function ensureQuestionHook() {
+  if (!isHookInstalled() || questionHookInstalled()) return { updated: false };
+  installClaudeHook();
+  return { updated: true };
 }
 
 /**
@@ -523,24 +789,7 @@ function installClaudeHookAt(dest) {
   } catch {
     settings = {};
   }
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
-  if (!Array.isArray(settings.hooks.PermissionRequest)) settings.hooks.PermissionRequest = [];
-
-  const handler = makeHookHandler(dest.hookArgPath);
-  let foundGroup = false;
-  for (const group of settings.hooks.PermissionRequest) {
-    if (!group || typeof group !== 'object') continue;
-    if (!Array.isArray(group.hooks)) group.hooks = [];
-    const idx = group.hooks.findIndex(isOurHookHandler);
-    if (idx >= 0) {
-      group.hooks[idx] = handler;
-      foundGroup = true;
-      break;
-    }
-  }
-  if (!foundGroup) {
-    settings.hooks.PermissionRequest.push({ matcher: '*', hooks: [handler] });
-  }
+  installHooksInto(settings, dest.hookArgPath);
 
   try {
     fs.mkdirSync(path.dirname(dest.settingsPath), { recursive: true });
@@ -566,31 +815,26 @@ function installClaudeHookAt(dest) {
  */
 function uninstallClaudeHook() {
   const settings = readClaudeSettings();
-  const groups = settings.hooks?.PermissionRequest;
-  if (!Array.isArray(groups)) {
+  if (!settings.hooks || typeof settings.hooks !== 'object') {
     return { success: true, message: 'No AgentNotch hook was installed' };
   }
 
-  const next = [];
-  for (const group of groups) {
-    if (!group || !Array.isArray(group.hooks)) {
-      next.push(group);
-      continue;
+  for (const eventName of ['PermissionRequest', 'PreToolUse']) {
+    const groups = settings.hooks[eventName];
+    if (!Array.isArray(groups)) continue;
+    const next = [];
+    for (const group of groups) {
+      if (!group || !Array.isArray(group.hooks)) {
+        next.push(group);
+        continue;
+      }
+      const hooks = group.hooks.filter((h) => !isOurHookHandler(h));
+      if (hooks.length > 0) next.push({ ...group, hooks });
     }
-    const hooks = group.hooks.filter((h) => !isOurHookHandler(h));
-    if (hooks.length > 0) {
-      next.push({ ...group, hooks });
-    }
+    if (next.length === 0) delete settings.hooks[eventName];
+    else settings.hooks[eventName] = next;
   }
-
-  if (next.length === 0) {
-    delete settings.hooks.PermissionRequest;
-    if (settings.hooks && Object.keys(settings.hooks).length === 0) {
-      delete settings.hooks;
-    }
-  } else {
-    settings.hooks.PermissionRequest = next;
-  }
+  if (Object.keys(settings.hooks).length === 0) delete settings.hooks;
 
   writeClaudeSettings(settings);
   return {
@@ -599,12 +843,17 @@ function uninstallClaudeHook() {
   };
 }
 
+function questionHookInstalled() {
+  return eventHasOurHandler(readClaudeSettings(), 'PreToolUse');
+}
+
 function getHookStatus() {
   const bridgePath = bridgeInstallPath();
   const bridgeExists = fs.existsSync(bridgePath);
   const installed = isHookInstalled();
   return {
     installed,
+    questions: questionHookInstalled(),
     bridgePath,
     bridgeExists,
     settingsPath: claudeSettingsPath(),
@@ -632,50 +881,82 @@ function pendingToPermissionRequest(pending) {
  * @param {Array<object>} sessions
  * @returns {Array<object>}
  */
-function mergePendingIntoSessions(sessions) {
-  const pending = listPending();
-  if (pending.length === 0) {
-    return sessions.map((s) => ({
-      ...s,
-      remoteApprove: s.agent === 'Claude Code'
-    }));
-  }
-
+function indexPendingBySession(items) {
   const byNotchId = new Map();
-  for (const p of pending) {
+  for (const p of items) {
     if (!p.notchSessionId) continue;
     const key = canonicalClaudeSessionId(p.notchSessionId);
     if (!byNotchId.has(key)) byNotchId.set(key, p);
     if (!byNotchId.has(p.notchSessionId)) byNotchId.set(p.notchSessionId, p);
   }
+  return byNotchId;
+}
 
+function lookupPending(index, sessionId) {
+  return index.get(sessionId) || index.get(canonicalClaudeSessionId(sessionId)) || null;
+}
+
+function mergePendingIntoSessions(sessions) {
+  const pending = listPending();
+  const permissions = pending.filter((p) => pendingKind(p) === 'permission');
+  const questions = pending.filter((p) => pendingKind(p) === 'question');
+  if (permissions.length === 0 && questions.length === 0) {
+    return sessions.map((s) => ({
+      ...s,
+      remoteApprove: s.agent === 'Claude Code',
+      remoteAnswer: false
+    }));
+  }
+
+  const permById = indexPendingBySession(permissions);
+  const questionById = indexPendingBySession(questions);
   const used = new Set();
   const result = sessions.map((s) => {
-    const p = byNotchId.get(s.id) || byNotchId.get(canonicalClaudeSessionId(s.id));
-    if (!p) {
+    const perm = lookupPending(permById, s.id);
+    if (perm) {
+      used.add(perm.id);
       return {
         ...s,
-        remoteApprove: false
+        status: 'permission-request',
+        permissionRequest: pendingToPermissionRequest(perm),
+        currentTool: perm.tool || s.currentTool,
+        remoteApprove: true,
+        remoteAnswer: false,
+        lastActivityAt: Math.max(s.lastActivityAt || 0, perm.createdAt || 0),
+        lastTime: Math.max(s.lastTime || 0, perm.createdAt || 0),
+        isActive: true
       };
     }
-    used.add(p.id);
+    const q = lookupPending(questionById, s.id);
+    if (q) {
+      used.add(q.id);
+      return {
+        ...s,
+        status: 'question',
+        question: pendingToQuestion(q),
+        permissionRequest: null,
+        currentTool: null,
+        remoteApprove: false,
+        remoteAnswer: true,
+        lastActivityAt: Math.max(s.lastActivityAt || 0, q.createdAt || 0),
+        lastTime: Math.max(s.lastTime || 0, q.createdAt || 0),
+        isActive: true
+      };
+    }
     return {
       ...s,
-      status: 'permission-request',
-      permissionRequest: pendingToPermissionRequest(p),
-      currentTool: p.tool || s.currentTool,
-      remoteApprove: true,
-      lastActivityAt: Math.max(s.lastActivityAt || 0, p.createdAt || 0),
-      lastTime: Math.max(s.lastTime || 0, p.createdAt || 0),
-      isActive: true
+      remoteApprove: false,
+      remoteAnswer: false
     };
   });
 
-  // Orphan pendings (Claude session not in watcher yet) → synthetic cards
-  for (const p of pending) {
+  // Orphan pendings (Claude session not in watcher yet) → synthetic cards.
+  // A permission wins over a question for the same session id.
+  for (const p of permissions) {
     if (used.has(p.id)) continue;
     const id = p.notchSessionId || `claude-pending-${p.id}`;
     if (result.some((s) => s.id === id)) continue;
+    used.add(p.id);
     result.push({
       id,
       agent: 'Claude Code',
@@ -697,7 +978,38 @@ function mergePendingIntoSessions(sessions) {
       isActive: true,
       cwd: p.cwd || '',
       model: null,
-      remoteApprove: true
+      remoteApprove: true,
+      remoteAnswer: false
+    });
+  }
+  for (const p of questions) {
+    if (used.has(p.id)) continue;
+    const id = p.notchSessionId || `claude-pending-${p.id}`;
+    if (result.some((s) => s.id === id)) continue;
+    const question = pendingToQuestion(p);
+    result.push({
+      id,
+      agent: 'Claude Code',
+      taskName: question.text || 'Claude asks',
+      status: 'question',
+      currentTool: null,
+      lastMessage: '',
+      userPrompt: '',
+      permissionRequest: null,
+      question,
+      duration: 0,
+      durationFormatted: '0s',
+      startTime: p.createdAt,
+      lastTime: p.createdAt,
+      lastActivityAt: p.createdAt,
+      terminal: 'Terminal',
+      toolCalls: [],
+      activity: [],
+      isActive: true,
+      cwd: p.cwd || '',
+      model: null,
+      remoteApprove: false,
+      remoteAnswer: true
     });
   }
 
@@ -738,17 +1050,26 @@ async function runHookMode() {
   }
 
   const eventName = input.hook_event_name || input.hookEventName || '';
-  // Allow PreToolUse only if someone misconfigured; we only decide PermissionRequest shape
-  if (eventName && eventName !== 'PermissionRequest') {
+  const toolName = String(input.tool_name || input.toolName || '');
+  const isQuestion = eventName === 'PreToolUse' && QUESTION_TOOLS.has(toolName);
+  // Other PreToolUse calls must not block. Only PermissionRequest and the
+  // question tools are ours.
+  if (eventName === 'PreToolUse' && !isQuestion) {
+    process.exit(0);
+  }
+  if (eventName && eventName !== 'PermissionRequest' && !isQuestion) {
     process.exit(0);
   }
 
   let pending;
   try {
     pruneStalePending();
-    pending = createPendingFromHookInput(input);
+    pending = isQuestion ? createQuestionFromHookInput(input) : createPendingFromHookInput(input);
   } catch (err) {
     process.stderr.write(`[agent-notch] failed to create pending: ${err.message}\n`);
+    process.exit(0);
+  }
+  if (!pending) {
     process.exit(0);
   }
 
@@ -770,14 +1091,18 @@ async function runHookMode() {
   });
 
   try {
-    const decision = await waitForDecision(pending.id, DEFAULT_TIMEOUT_MS);
+    const decision = isQuestion
+      ? await waitForFullDecision(pending.id, DEFAULT_TIMEOUT_MS)
+      : await waitForDecision(pending.id, DEFAULT_TIMEOUT_MS);
     if (!decision) {
       // Timeout: remove pending so notch clears; Claude shows its own dialog
       cleanup();
       process.exit(0);
     }
 
-    const response = buildHookResponse(decision);
+    const response = isQuestion
+      ? buildQuestionHookResponse(pending, decision)
+      : buildHookResponse(decision);
     process.stdout.write(JSON.stringify(response));
     cleanup();
     process.exit(0);
@@ -804,21 +1129,29 @@ module.exports = {
   listPending,
   findPendingForSession,
   createPendingFromHookInput,
+  createQuestionFromHookInput,
   submitDecision,
   submitDecisionForSession,
+  submitQuestionDecision,
   buildHookResponse,
+  buildQuestionHookResponse,
   waitForDecision,
+  waitForFullDecision,
   cleanupRequest,
   pruneStalePending,
   syncBridgeScript,
   installClaudeHook,
+  ensureQuestionHook,
   installClaudeHookAt,
   uninstallClaudeHook,
   isHookInstalled,
+  questionHookInstalled,
   getHookStatus,
   pendingToPermissionRequest,
+  pendingToQuestion,
   mergePendingIntoSessions,
-  runHookMode
+  runHookMode,
+  QUESTION_TOOLS
 };
 
 if (require.main === module) {

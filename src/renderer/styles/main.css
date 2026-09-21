@@ -1122,6 +1122,10 @@ html, body {
   white-space: nowrap;
 }
 
+.dispatch-profile {
+  max-width: 96px;
+}
+
 .dispatch-agent:disabled {
   opacity: 0.55;
   cursor: default;

@@ -186,8 +186,9 @@ function attentionEpisodeKey(session) {
   }
   if (status === 'question') {
     const q = session.question || {};
+    const id = q.requestId || '';
     const text = String(q.text || q.prompt || '').slice(0, 160);
-    return `q:${text}`;
+    return `q:${id}|${text}`;
   }
   // needs-attention — stall / generic human need.
   // Avoid lastTime: poll updates thrash the episode key and re-fire interrupts.

@@ -874,7 +874,7 @@ app.whenReady().then(() => {
 
   ipcMain.handle('answer-question', async (_, sessionId, answer) => {
     validateSessionId(sessionId);
-    return agentManager.answerQuestion(sessionId, normalizeDispatchPrompt(answer));
+    return agentManager.answerQuestion(sessionId, answer);
   });
 
   ipcMain.handle('jump-to-terminal', async (_, sessionId) => {
@@ -1054,7 +1054,7 @@ app.whenReady().then(() => {
 
   // Task dispatch — targets a live session (resumes that chat) or starts a
   // new session via `new:<Agent>` targets.
-  ipcMain.handle('dispatch-task', async (_, sessionId, prompt) => {
+  ipcMain.handle('dispatch-task', async (_, sessionId, prompt, profile) => {
     if (typeof sessionId === 'string' && sessionId.startsWith('new:')) {
       const agentName = sessionId.slice(4);
       if (!DISPATCH_AGENT_NAMES.includes(agentName)) {
@@ -1063,7 +1063,8 @@ app.whenReady().then(() => {
     } else {
       validateSessionId(sessionId);
     }
-    return agentManager.dispatchTask(sessionId, normalizeDispatchPrompt(prompt));
+    const launchProfile = profile == null || profile === '' ? undefined : profile;
+    return agentManager.dispatchTask(sessionId, normalizeDispatchPrompt(prompt), launchProfile);
   });
 
   // Re-place on display geometry / add / remove

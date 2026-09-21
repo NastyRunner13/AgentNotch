@@ -32,10 +32,11 @@ describe('notificationActionsFor', () => {
     assert.deepEqual(actions.map((a) => a.id), ['jump', 'snooze']);
   });
 
-  it('dispatchable question with 1–2 short options → answers + Snooze', () => {
+  it('remote question with 1–2 short options → answers + Snooze', () => {
     const actions = notificationActionsFor({
       status: 'question',
       agent: 'Claude Code',
+      remoteAnswer: true,
       question: { text: 'Which?', options: ['Yes', 'No'] }
     });
     assert.equal(actions[0].id, 'answer');
@@ -44,25 +45,35 @@ describe('notificationActionsFor', () => {
     assert.equal(actions[2].id, 'snooze');
   });
 
-  it('dispatchable question with long / many options → Open · Snooze', () => {
+  it('remote question with long / many options → Open · Snooze', () => {
     const long = notificationActionsFor({
       status: 'question',
-      agent: 'Codex',
+      agent: 'Claude Code',
+      remoteAnswer: true,
       question: { options: ['This is a very long option label indeed'] }
     });
     assert.deepEqual(long.map((a) => a.id), ['open', 'snooze']);
 
     const many = notificationActionsFor({
       status: 'question',
-      agent: 'Grok',
+      agent: 'Claude Code',
+      remoteAnswer: true,
       question: { options: ['A', 'B', 'C'] }
     });
     assert.deepEqual(many.map((a) => a.id), ['open', 'snooze']);
   });
 
-  it('non-dispatchable question / needs-attention → Jump · Snooze', () => {
+  it('question without a bridge → Jump · Snooze', () => {
     assert.deepEqual(
       notificationActionsFor({ status: 'question', agent: 'Cursor' }).map((a) => a.id),
+      ['jump', 'snooze']
+    );
+    assert.deepEqual(
+      notificationActionsFor({
+        status: 'question',
+        agent: 'Grok',
+        question: { options: ['Yes', 'No'] }
+      }).map((a) => a.id),
       ['jump', 'snooze']
     );
     assert.deepEqual(
@@ -83,7 +94,8 @@ describe('notificationActionsFor', () => {
   it('canRemoteApprove / canRemoteAnswer flags', () => {
     assert.equal(canRemoteApprove({ status: 'permission-request', remoteApprove: true }), true);
     assert.equal(canRemoteApprove({ status: 'permission-request', remoteApprove: false }), false);
-    assert.equal(canRemoteAnswer({ status: 'question', agent: 'Claude Code' }), true);
+    assert.equal(canRemoteAnswer({ status: 'question', agent: 'Claude Code', remoteAnswer: true }), true);
+    assert.equal(canRemoteAnswer({ status: 'question', agent: 'Claude Code' }), false);
     assert.equal(canRemoteAnswer({ status: 'question', agent: 'Cursor' }), false);
   });
 });

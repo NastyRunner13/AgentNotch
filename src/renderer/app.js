@@ -154,6 +154,8 @@ class App {
     /** Dispatch defaults */
     this.defaultDispatchAgent = '';
     this.defaultProjectCwd = '';
+    this.defaultLaunchProfile = 'ask';
+    this._questionIdentity = '';
     this._dispatchLandedTimer = null;
     this._viewMotionTimer = null;
   }
@@ -417,6 +419,9 @@ class App {
         if (attentionSession && attentionSession.status === 'permission-request') {
           e.preventDefault();
           this.handleApprove(attentionSession.id);
+        } else if (attentionSession && attentionSession.remoteAnswer && attentionSession.question?.kind === 'plan') {
+          e.preventDefault();
+          this.handleAnswer(attentionSession.id, { answers: {} });
         }
         return;
       }
@@ -425,19 +430,25 @@ class App {
         if (attentionSession && attentionSession.status === 'permission-request') {
           e.preventDefault();
           this.handleDeny(attentionSession.id);
+        } else if (attentionSession && attentionSession.remoteAnswer && attentionSession.question?.kind === 'plan') {
+          e.preventDefault();
+          this.handleAnswer(attentionSession.id, { deny: true });
         }
         return;
       }
 
       if (e.key >= '1' && e.key <= '9') {
-        if (attentionSession && attentionSession.status === 'question' && attentionSession.question) {
+        if (attentionSession && attentionSession.remoteAnswer && attentionSession.question) {
           const idx = parseInt(e.key, 10) - 1;
-          const options = attentionSession.question.options || [];
-          if (options[idx] !== undefined) {
+          const questions = attentionSession.question.questions || [];
+          const only = questions.length === 1 ? questions[0] : null;
+          if (only && !only.multiSelect && only.options && only.options[idx]) {
             e.preventDefault();
-            const opt = options[idx];
-            const value = typeof opt === 'string' ? opt : (opt.value || opt.label || String(idx));
-            this.handleAnswer(attentionSession.id, value);
+            const opt = only.options[idx];
+            const value = typeof opt === 'string' ? opt : (opt.label || opt.value || '');
+            if (value) {
+              this.handleAnswer(attentionSession.id, { answers: { [only.question]: value } });
+            }
           }
         }
       }
@@ -963,6 +974,14 @@ class App {
     if (partial.defaultProjectCwd !== undefined) {
       this.defaultProjectCwd = String(partial.defaultProjectCwd || '');
     }
+    if (partial.defaultLaunchProfile !== undefined) {
+      const profile = partial.defaultLaunchProfile;
+      this.defaultLaunchProfile = profile === 'plan' || profile === 'dont-ask' ? profile : 'ask';
+      const profileSel = document.getElementById('dispatch-profile');
+      if (profileSel && document.activeElement !== profileSel) {
+        profileSel.value = this.defaultLaunchProfile;
+      }
+    }
     this._dispatchFp = ''; // rebuild targets so default selection can apply
     if (this.initialized) this.updateDispatchTargets();
   }
@@ -1080,6 +1099,7 @@ class App {
   initDispatch() {
     const input = document.getElementById('dispatch-input');
     const agentSelect = document.getElementById('dispatch-agent');
+    const profileSelect = document.getElementById('dispatch-profile');
     const btn = document.getElementById('dispatch-btn');
 
     if (!input || !agentSelect || !btn) return;
@@ -1093,12 +1113,15 @@ class App {
       this._dispatching = true;
       input.disabled = true;
       agentSelect.disabled = true;
+      if (profileSelect) profileSelect.disabled = true;
       btn.disabled = true;
       btn.classList.remove('dispatch-success');
 
       try {
         if (window.agentNotch) {
-          const res = await window.agentNotch.dispatchTask(sessionId, prompt);
+          const isNew = sessionId.startsWith('new:');
+          const profile = isNew && profileSelect ? profileSelect.value : undefined;
+          const res = await window.agentNotch.dispatchTask(sessionId, prompt, profile);
           if (res && res.success) {
             input.value = '';
             this.flashDispatchLanded(res.message || 'Landed');
@@ -1146,6 +1169,19 @@ class App {
     agentSelect.addEventListener('change', () => {
       this.updateDispatchPlaceholder();
     });
+
+    if (profileSelect) {
+      profileSelect.addEventListener('click', (e) => e.stopPropagation());
+      profileSelect.addEventListener('change', () => {
+        const value = profileSelect.value === 'plan' || profileSelect.value === 'dont-ask'
+          ? profileSelect.value
+          : 'ask';
+        this.defaultLaunchProfile = value;
+        if (window.agentNotch?.setSettings) {
+          window.agentNotch.setSettings({ defaultLaunchProfile: value }).catch(() => {});
+        }
+      });
+    }
 
     this.updateDispatchTargets();
   }
@@ -1270,14 +1306,18 @@ class App {
     select.disabled = disabled;
     input.disabled = disabled;
     btn.disabled = disabled;
+    const profileSel = document.getElementById('dispatch-profile');
+    if (profileSel) profileSel.disabled = disabled;
     this.updateDispatchPlaceholder();
   }
 
   updateDispatchPlaceholder() {
     const select = document.getElementById('dispatch-agent');
     const input = document.getElementById('dispatch-input');
+    const profile = document.getElementById('dispatch-profile');
     if (!select || !input) return;
     const isNew = (select.value || '').startsWith('new:');
+    if (profile) profile.hidden = !isNew;
     if (isNew) {
       const dir = projectBase(this.defaultProjectCwd);
       input.placeholder = dir
@@ -1316,7 +1356,10 @@ class App {
         actKey,
         planKey,
         s.permissionRequest?.requestId || '',
+        s.question?.requestId || '',
+        s.question?.kind || '',
         s.question?.prompt || s.question?.text || '',
+        s.remoteAnswer ? '1' : '0',
         snoozeKey,
         s.attentionAcknowledged ? '1' : '0',
         s.stalled ? '1' : '0',
@@ -1645,11 +1688,25 @@ class App {
     const sessionsFp = this._sessionFingerprint(activeSessions) +
       `\x1d${this.expandedSessionId || ''}\x1d${appearanceKey}`;
 
+    const questionIdentity = activeSessions
+      .map((s) => `${s.id}\x1f${s.status}\x1f${s.question?.requestId || ''}`)
+      .join('\x1e');
+    // Don't wipe an in-progress answer when the poll only refreshes duration.
+    const editingQuestion = list.querySelector('.session-question input:focus');
+    if (
+      editingQuestion &&
+      list.dataset.bound === '1' &&
+      questionIdentity === this._questionIdentity
+    ) {
+      return;
+    }
+
     // Skip full card rebuild when content is unchanged (stops poll-driven flicker)
     if (sessionsFp === this._lastSessionsFp && list.dataset.bound === '1') {
       return;
     }
     this._lastSessionsFp = sessionsFp;
+    this._questionIdentity = questionIdentity;
 
     if (activeSessions.length === 0) {
       list.innerHTML = '';
@@ -1810,7 +1867,9 @@ class App {
       }
     }
 
+    const questionDrafts = snapshotQuestionDrafts(list);
     list.innerHTML = html;
+    restoreQuestionDrafts(list, questionDrafts);
 
     this._knownSessionIds = nextIds;
     list.dataset.bound = '1';
@@ -1974,12 +2033,39 @@ class App {
       });
     });
 
-    list.querySelectorAll('.ask-option').forEach(btn => {
+    list.querySelectorAll('.session-question').forEach((block) => {
+      block.addEventListener('click', (e) => e.stopPropagation());
+    });
+
+    list.querySelectorAll('.question-submit').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const form = btn.closest('.question-form');
+        const sid = btn.dataset.sessionId;
+        if (!form || !sid) return;
+        const answers = collectQuestionAnswers(form);
+        if (!answers) {
+          this.showToast('Answer every question before sending', 'error');
+          return;
+        }
+        this.handleAnswer(sid, { answers });
+      });
+    });
+
+    list.querySelectorAll('.question-approve').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
-        const answer = btn.dataset.answer;
-        if (sid) this.handleAnswer(sid, answer);
+        if (sid) this.handleAnswer(sid, { answers: {} });
+      });
+    });
+
+    list.querySelectorAll('.question-decline').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const sid = btn.dataset.sessionId;
+        const note = btn.closest('.session-question')?.querySelector('.question-note');
+        if (sid) this.handleAnswer(sid, { deny: true, note: note ? note.value : '' });
       });
     });
 
@@ -2370,6 +2456,66 @@ class App {
 function statusClass(el, cls) {
   el.classList.remove('working', 'idle', 'attention');
   if (cls) el.classList.add(cls);
+}
+
+function snapshotQuestionDrafts(root) {
+  const drafts = new Map();
+  if (!root) return drafts;
+  root.querySelectorAll('.session-question').forEach((block) => {
+    const sid = block.dataset.sessionId;
+    if (!sid) return;
+    const draft = { note: '', others: {}, checked: {} };
+    const note = block.querySelector('.question-note');
+    if (note) draft.note = note.value;
+    block.querySelectorAll('.question-item').forEach((item) => {
+      const question = item.dataset.question || '';
+      const other = item.querySelector('.question-other-input');
+      if (other) draft.others[question] = other.value;
+      draft.checked[question] = [...item.querySelectorAll('input:checked')].map((input) => input.value);
+    });
+    drafts.set(sid, draft);
+  });
+  return drafts;
+}
+
+function restoreQuestionDrafts(root, drafts) {
+  if (!root || !drafts || drafts.size === 0) return;
+  root.querySelectorAll('.session-question').forEach((block) => {
+    const draft = drafts.get(block.dataset.sessionId || '');
+    if (!draft) return;
+    const note = block.querySelector('.question-note');
+    if (note && draft.note) note.value = draft.note;
+    block.querySelectorAll('.question-item').forEach((item) => {
+      const question = item.dataset.question || '';
+      const other = item.querySelector('.question-other-input');
+      if (other && draft.others[question]) other.value = draft.others[question];
+      const picked = draft.checked[question] || [];
+      item.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((input) => {
+        if (picked.includes(input.value)) input.checked = true;
+      });
+    });
+  });
+}
+
+function collectQuestionAnswers(form) {
+  const answers = {};
+  let missing = false;
+  form.querySelectorAll('.question-item').forEach((item) => {
+    const question = item.dataset.question || '';
+    const other = item.querySelector('.question-other-input');
+    const otherText = other ? other.value.trim() : '';
+    if (otherText) {
+      answers[question] = otherText;
+      return;
+    }
+    const checked = [...item.querySelectorAll('input:checked')].map((input) => input.value).filter(Boolean);
+    if (checked.length === 0) {
+      missing = true;
+      return;
+    }
+    answers[question] = checked.join(', ');
+  });
+  return missing ? null : answers;
 }
 
 function escapeHtml(text) {

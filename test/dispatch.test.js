@@ -194,6 +194,52 @@ describe('buildNewSessionCommand', () => {
     const cmd = buildNewSessionCommand('Grok', 'hi', '');
     assert.equal(cmd.cwd, os.homedir());
   });
+
+  it('ask profile adds no permission flags', () => {
+    assert.deepEqual(
+      buildNewSessionCommand('Claude Code', 'hi', '/tmp', 'ask').args,
+      ['-p', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Grok', 'hi', '/tmp', 'nope').args,
+      ['-p', 'hi']
+    );
+  });
+
+  it('plan and dont-ask map per agent without a full bypass', () => {
+    assert.deepEqual(
+      buildNewSessionCommand('Claude Code', 'hi', '/tmp', 'plan').args,
+      ['--permission-mode', 'plan', '-p', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Claude Code', 'hi', '/tmp', 'dont-ask').args,
+      ['--permission-mode', 'acceptEdits', '-p', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Grok', 'hi', '/tmp', 'plan').args,
+      ['--permission-mode', 'plan', '-p', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Grok', 'hi', '/tmp', 'dont-ask').args,
+      ['--always-approve', '-p', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Codex', 'hi', '/tmp', 'plan').args,
+      ['exec', '--skip-git-repo-check', '-s', 'read-only', '-a', 'on-request', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('Codex', 'hi', '/tmp', 'dont-ask').args,
+      ['exec', '--skip-git-repo-check', '-s', 'workspace-write', '-a', 'never', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('OpenCode', 'hi', '/tmp', 'plan').args,
+      ['run', 'hi']
+    );
+    assert.deepEqual(
+      buildNewSessionCommand('OpenCode', 'hi', '/tmp', 'dont-ask').args,
+      ['run', '--auto', 'hi']
+    );
+  });
 });
 
 describe('session cwd extraction (needed to resume in the right directory)', () => {

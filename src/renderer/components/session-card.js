@@ -1050,28 +1050,85 @@ function renderInlineQuestion(session) {
   const q = session.question;
   if (!q) return '';
 
-  const options = (q.options || []).map((opt, i) => {
-    const shortcut = i < 9 ? `Ctrl+${i + 1}` : '';
-    const label = typeof opt === 'string' ? opt : (opt.label || opt.value || String(opt));
-    const value = typeof opt === 'string' ? opt : (opt.value || opt.label || String(i));
+  const label = `
+    <div class="question-label">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity="0.9">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
+      </svg>
+      ${escapeHtml(session.agent)} asks
+    </div>`;
+
+  if (q.remote && q.kind === 'plan') {
+    const plan = q.plan ? `<pre class="question-plan">${escapeHtml(q.plan)}</pre>` : '';
     return `
-      <button class="ask-option"
-              data-session-id="${escapeHtml(session.id)}"
-              data-answer="${escapeHtml(value)}">
-        ${shortcut ? `<span class="ask-option-num">${shortcut}</span>` : ''}
-        <span>${escapeHtml(label)}</span>
-      </button>`;
+      <div class="session-question" data-session-id="${escapeHtml(session.id)}">
+        ${label}
+        <div class="question-text">Approve this plan?</div>
+        ${plan}
+        <label class="question-other">
+          <span>Changes</span>
+          <input class="question-note" type="text" data-session-id="${escapeHtml(session.id)}" placeholder="What should change…" aria-label="Requested plan changes">
+        </label>
+        <div class="approval-btns">
+          <button type="button" class="btn-deny question-decline" data-session-id="${escapeHtml(session.id)}">Request changes</button>
+          <button type="button" class="btn-allow question-approve" data-session-id="${escapeHtml(session.id)}">Approve plan</button>
+        </div>
+        <p class="approval-hint">Approves in Claude Code without leaving the notch.</p>
+      </div>`;
+  }
+
+  const questions = Array.isArray(q.questions) ? q.questions : [];
+  if (q.remote && questions.length > 0) {
+    const blocks = questions.map((item, qi) => {
+      const inputType = item.multiSelect ? 'checkbox' : 'radio';
+      const group = `q-${session.id}-${qi}`;
+      const choices = (item.options || []).map((opt, i) => {
+        const labelText = typeof opt === 'string' ? opt : (opt.label || opt.value || '');
+        const description = typeof opt === 'string' ? '' : (opt.description || '');
+        const shortcut = questions.length === 1 && !item.multiSelect && i < 9 ? `Ctrl+${i + 1}` : '';
+        return `
+          <label class="ask-choice">
+            <input type="${inputType}" name="${escapeHtml(group)}" value="${escapeHtml(labelText)}">
+            <span>
+              ${shortcut ? `<span class="ask-option-num">${shortcut}</span>` : ''}
+              <span>${escapeHtml(labelText)}</span>
+              ${description ? `<span class="ask-choice-desc">${escapeHtml(description)}</span>` : ''}
+            </span>
+          </label>`;
+      }).join('');
+      const header = item.header
+        ? `<legend>${escapeHtml(item.header)}</legend>`
+        : '';
+      return `
+        <fieldset class="question-item" data-question="${escapeHtml(item.question)}" data-multi="${item.multiSelect ? '1' : '0'}">
+          ${header}
+          <div class="question-text">${escapeHtml(item.question)}</div>
+          <div class="question-options">${choices}</div>
+          <label class="question-other">
+            <span>Other</span>
+            <input class="question-other-input" type="text" placeholder="Type an answer…" aria-label="Other answer">
+          </label>
+        </fieldset>`;
+    }).join('');
+    return `
+      <form class="session-question question-form" data-session-id="${escapeHtml(session.id)}">
+        ${label}
+        ${blocks}
+        <button type="button" class="btn-allow question-submit" data-session-id="${escapeHtml(session.id)}">Send answers</button>
+        <p class="approval-hint">Sends every answer to Claude. Other replaces the selected options.</p>
+      </form>`;
+  }
+
+  const options = (q.options || []).map((opt) => {
+    const labelText = typeof opt === 'string' ? opt : (opt.label || opt.value || String(opt));
+    return `<div class="ask-option ask-option-static"><span>${escapeHtml(labelText)}</span></div>`;
   }).join('');
 
   return `
     <div class="session-question">
-      <div class="question-label">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity="0.9">
-          <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/>
-        </svg>
-        ${escapeHtml(session.agent)} asks
-      </div>
-      <div class="question-text">${escapeHtml(q.text)}</div>
+      ${label}
+      <div class="question-text">${escapeHtml(q.text || '')}</div>
       ${options ? `<div class="question-options">${options}</div>` : ''}
+      <p class="approval-hint">Opens the agent. The notch cannot fill this prompt.</p>
     </div>`;
 }

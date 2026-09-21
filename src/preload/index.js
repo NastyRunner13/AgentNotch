@@ -118,5 +118,5 @@ contextBridge.exposeInMainWorld('agentNotch', {
   focusAgent: (agentName) => ipcRenderer.invoke('focus-agent', agentName),
 
   // Task dispatch — sends a message into a live session (continues that chat)
-  dispatchTask: (sessionId, prompt) => ipcRenderer.invoke('dispatch-task', sessionId, prompt)
+  dispatchTask: (sessionId, prompt, profile) => ipcRenderer.invoke('dispatch-task', sessionId, prompt, profile)
 });

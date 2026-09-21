@@ -291,10 +291,11 @@ class AgentManager extends EventEmitter {
   start() {
     this._applyWatcherEnabled();
 
-    // Keep bridge script fresh for Claude PermissionRequest hooks
+    // Keep bridge script fresh. Add the question hook if remote approve is already installed.
     try {
       permissionBridge.syncBridgeScript();
       permissionBridge.pruneStalePending();
+      permissionBridge.ensureQuestionHook();
     } catch (err) {
       console.warn('[AgentManager] permission bridge sync failed:', err.message);
     }
@@ -449,18 +450,40 @@ class AgentManager extends EventEmitter {
     this._scheduleEmit();
 
     if (stillNew.length > 0) {
-      // Build lightweight session-shaped objects for notifications
-      const sessions = this.getSessions().filter((s) => s.remoteApprove && s.status === 'permission-request');
-      const attention = sessions.length
-        ? sessions.filter((s) => stillNew.some((p) => p.notchSessionId === s.id || s.permissionRequest?.requestId === p.id))
-        : stillNew.map((p) => ({
-          id: p.notchSessionId || `claude-pending-${p.id}`,
-          agent: 'Claude Code',
-          taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
-          status: 'permission-request',
-          permissionRequest: permissionBridge.pendingToPermissionRequest(p),
-          remoteApprove: true
-        }));
+      const sessions = this.getSessions();
+      const attention = [];
+      for (const p of stillNew) {
+        const isQuestion = p.kind === 'question';
+        const match = sessions.find((s) => (
+          isQuestion
+            ? s.question && s.question.requestId === p.id
+            : s.permissionRequest && s.permissionRequest.requestId === p.id
+        ));
+        if (match) {
+          attention.push(match);
+          continue;
+        }
+        if (isQuestion) {
+          const question = permissionBridge.pendingToQuestion(p);
+          attention.push({
+            id: p.notchSessionId || `claude-pending-${p.id}`,
+            agent: 'Claude Code',
+            taskName: question.text || 'Claude asks',
+            status: 'question',
+            question,
+            remoteAnswer: true
+          });
+        } else {
+          attention.push({
+            id: p.notchSessionId || `claude-pending-${p.id}`,
+            agent: 'Claude Code',
+            taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
+            status: 'permission-request',
+            permissionRequest: permissionBridge.pendingToPermissionRequest(p),
+            remoteApprove: true
+          });
+        }
+      }
       if (attention.length > 0) {
         this.emit('attention', attention);
       }
@@ -730,6 +753,7 @@ class AgentManager extends EventEmitter {
   }
 
   _autoAllowPending(pending) {
+    if (pending && pending.kind === 'question') return false;
     try {
       const store = permissionMemory.load(this._permissionMemoryPath);
       const hit = permissionMemory.matches(store, {
@@ -1054,6 +1078,7 @@ class AgentManager extends EventEmitter {
     const defAgent = String(this.settings.defaultDispatchAgent || '');
     this.settings.defaultDispatchAgent = allowedAgents.has(defAgent) ? defAgent : '';
     this.settings.defaultProjectCwd = sanitizeConfigurablePath(this.settings.defaultProjectCwd);
+    this.settings.defaultLaunchProfile = normalizeLaunchProfile(this.settings.defaultLaunchProfile);
   }
 
   _persistSettings() {
@@ -1354,7 +1379,12 @@ class AgentManager extends EventEmitter {
     }
 
     if (target.mode === 'new') {
-      const cmd = buildNewSessionCommand(target.agent, text, target.cwd);
+      const cmd = buildNewSessionCommand(
+        target.agent,
+        text,
+        target.cwd,
+        this.settings.defaultLaunchProfile
+      );
       if (!cmd) {
         return { success: false, message: `Cannot start new ${target.agent} sessions from history.` };
       }
@@ -1592,51 +1622,27 @@ class AgentManager extends EventEmitter {
   }
 
   async answerQuestion(sessionId, answer) {
-    const text = String(answer || '').trim();
-    if (!text) {
-      return { success: false, message: 'Answer is empty' };
-    }
-
     const session = this.getSessions().find((s) => s.id === sessionId);
     if (!session) {
       return { success: false, message: 'Session not found — it may have already ended.' };
     }
 
-    const cmd = planDispatchCommand(buildResumeCommand(session, text), session, this._wslInfo);
-    if (canRunDispatch(cmd)) {
-      try {
-        await runHeadlessResume(cmd);
-        this._scheduleEmit();
-        const agentShort = session.agent === 'Claude Code' ? 'Claude' : session.agent;
-        const task = String(session.taskName || 'session').replace(/\s+/g, ' ').trim();
-        const shortTask = task.length > 36 ? `${task.slice(0, 35)}…` : task;
-        return {
-          success: true,
-          message: `Answered · ${agentShort} · ${shortTask}`,
-          remote: true,
-          landed: true,
-          sessionId: session.id,
-          answer: text
-        };
-      } catch (err) {
-        return {
-          success: false,
-          message: err.message || `Failed to answer ${session.agent}`,
-          remote: false,
-          answer: text
-        };
-      }
+    const q = session.question;
+    if (q && q.remote && q.requestId && session.remoteAnswer) {
+      const res = permissionBridge.submitQuestionDecision(q.requestId, coerceAnswerPayload(answer));
+      if (res.success) this._scheduleEmit();
+      return res;
     }
 
+    // A headless resume does not unblock the process waiting on the question.
     const result = await this.jumpToTerminal(sessionId);
     return {
       success: result.success,
       message: result.success
-        ? `Opened agent — answer there${text ? ` (suggested: ${text.slice(0, 80)})` : ''}.`
+        ? 'Opened the agent — answer there. The notch cannot fill this prompt.'
         : result.message,
       focused: result.success,
-      remote: false,
-      answer: text
+      remote: false
     };
   }
 
@@ -1676,7 +1682,7 @@ class AgentManager extends EventEmitter {
    * @param {string} sessionId — AgentNotch session id (e.g. `claude-<uuid>`)
    * @param {string} prompt
    */
-  async dispatchTask(sessionId, prompt) {
+  async dispatchTask(sessionId, prompt, profile) {
     const text = String(prompt || '').trim();
     if (!text) {
       return { success: false, message: 'Prompt is empty' };
@@ -1684,7 +1690,7 @@ class AgentManager extends EventEmitter {
 
     // `new:<Agent>` targets start a brand-new session instead of resuming one
     if (typeof sessionId === 'string' && sessionId.startsWith(NEW_TARGET_PREFIX)) {
-      return this._dispatchNewSession(sessionId.slice(NEW_TARGET_PREFIX.length), text);
+      return this._dispatchNewSession(sessionId.slice(NEW_TARGET_PREFIX.length), text, profile);
     }
 
     const session = this.getSessions().find(s => s.id === sessionId);
@@ -1735,8 +1741,11 @@ class AgentManager extends EventEmitter {
    * agent most recently worked in. The new session shows up in the notch via
    * the watchers, so the chat can be continued from the dispatch bar.
    */
-  async _dispatchNewSession(agentName, text) {
-    const cmd = buildNewSessionCommand(agentName, text, this._resolveNewSessionCwd(agentName));
+  async _dispatchNewSession(agentName, text, profile) {
+    const mode = normalizeLaunchProfile(
+      profile == null || profile === '' ? this.settings.defaultLaunchProfile : profile
+    );
+    const cmd = buildNewSessionCommand(agentName, text, this._resolveNewSessionCwd(agentName), mode);
     if (!cmd) {
       return { success: false, message: `Cannot start new ${agentName} sessions from the notch.` };
     }
@@ -2007,6 +2016,16 @@ function rememberFocusedFromStdout(agentName, stdout) {
 }
 
 /**
+ * Launch profile for a brand-new session. "ask" adds no flags so the agent's
+ * own config decides. Unknown values fall back to ask.
+ * @param {string} [profile]
+ * @returns {'ask'|'plan'|'dont-ask'}
+ */
+function normalizeLaunchProfile(profile) {
+  return profile === 'plan' || profile === 'dont-ask' ? profile : 'ask';
+}
+
+/**
  * Agents that support headless dispatch: resuming a live session
  * non-interactively (`args`) or starting a brand-new session (`newArgs`).
  * `prefix` is the AgentNotch session-id prefix; the native resume id is the
@@ -2017,25 +2036,49 @@ const DISPATCH_AGENTS = {
     bin: 'claude',
     prefix: 'claude-',
     args: (id, text) => ['-p', '--resume', id, text],
-    newArgs: (text) => ['-p', text]
+    newArgs: (text, mode) => {
+      const args = [];
+      if (mode === 'plan') args.push('--permission-mode', 'plan');
+      else if (mode === 'dont-ask') args.push('--permission-mode', 'acceptEdits');
+      args.push('-p', text);
+      return args;
+    }
   },
   'Codex': {
     bin: 'codex',
     prefix: 'codex-',
     args: (id, text) => ['exec', '--skip-git-repo-check', 'resume', id, text],
-    newArgs: (text) => ['exec', '--skip-git-repo-check', text]
+    newArgs: (text, mode) => {
+      const args = ['exec', '--skip-git-repo-check'];
+      if (mode === 'plan') args.push('-s', 'read-only', '-a', 'on-request');
+      else if (mode === 'dont-ask') args.push('-s', 'workspace-write', '-a', 'never');
+      args.push(text);
+      return args;
+    }
   },
   'Grok': {
     bin: 'grok',
     prefix: 'grok-',
     args: (id, text) => ['-r', id, '-p', text],
-    newArgs: (text) => ['-p', text]
+    newArgs: (text, mode) => {
+      const args = [];
+      if (mode === 'plan') args.push('--permission-mode', 'plan');
+      else if (mode === 'dont-ask') args.push('--always-approve');
+      args.push('-p', text);
+      return args;
+    }
   },
   'OpenCode': {
     bin: 'opencode',
     prefix: 'opencode-',
     args: (id, text) => ['run', '-s', id, text],
-    newArgs: (text) => ['run', text]
+    newArgs: (text, mode) => {
+      const args = ['run'];
+      // No plan agent flag — a missing `--agent plan` would fail the launch.
+      if (mode === 'dont-ask') args.push('--auto');
+      args.push(text);
+      return args;
+    }
   }
 };
 
@@ -2120,13 +2163,14 @@ function canRunDispatch(cmd) {
  * @param {string} agentName
  * @param {string} text — first prompt of the new session
  * @param {string} cwd  — working directory to start in
+ * @param {string} [profile] — ask | plan | dont-ask
  * @returns {{bin:string, args:string[], cwd:string}|null}
  */
-function buildNewSessionCommand(agentName, text, cwd) {
+function buildNewSessionCommand(agentName, text, cwd, profile) {
   const spec = DISPATCH_AGENTS[agentName];
   if (!spec) return null;
   const dir = typeof cwd === 'string' && cwd.trim() ? cwd.trim() : os.homedir();
-  return { bin: spec.bin, args: spec.newArgs(text), cwd: dir };
+  return { bin: spec.bin, args: spec.newArgs(text, normalizeLaunchProfile(profile)), cwd: dir };
 }
 
 function isDirectory(p) {
@@ -2211,6 +2255,30 @@ function readLogTail(logPath, max = 600) {
  *
  * @param {{bin:string, args:string[], cwd:string}} cmd
  */
+function coerceAnswerPayload(answer) {
+  if (typeof answer === 'string') {
+    return { legacy: answer.trim().slice(0, 500) };
+  }
+  if (!answer || typeof answer !== 'object' || Array.isArray(answer)) {
+    return {};
+  }
+  const answers = {};
+  if (answer.answers && typeof answer.answers === 'object' && !Array.isArray(answer.answers)) {
+    for (const [key, value] of Object.entries(answer.answers)) {
+      if (typeof key !== 'string' || typeof value !== 'string') continue;
+      const k = key.trim().slice(0, 500);
+      const v = value.trim().slice(0, 500);
+      if (k && v) answers[k] = v;
+    }
+  }
+  return {
+    answers,
+    deny: Boolean(answer.deny),
+    note: typeof answer.note === 'string' ? answer.note.trim().slice(0, 500) : '',
+    legacy: typeof answer.legacy === 'string' ? answer.legacy.trim().slice(0, 500) : ''
+  };
+}
+
 function runHeadlessResume(cmd) {
   return new Promise((resolve, reject) => {
     const { logPath, fd } = openDispatchLog(cmd.viaWsl ? 'wsl' : cmd.bin);
@@ -2286,6 +2354,7 @@ module.exports = {
   AgentManager,
   buildResumeCommand,
   buildNewSessionCommand,
+  normalizeLaunchProfile,
   planDispatchCommand,
   canRunDispatch,
   DISPATCH_AGENT_NAMES

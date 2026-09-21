@@ -225,6 +225,14 @@ export function initSettings(app) {
     });
   }
 
+  const launchEl = document.getElementById('set-default-launch-profile');
+  if (launchEl) {
+    launchEl.addEventListener('change', () => {
+      const value = launchEl.value === 'plan' || launchEl.value === 'dont-ask' ? launchEl.value : 'ask';
+      persistSettings({ defaultLaunchProfile: value }, app);
+    });
+  }
+
   const defCwdEl = document.getElementById('set-default-project-cwd');
   if (defCwdEl) {
     let cwdTimer = null;
@@ -500,6 +508,12 @@ function applySettings(settings) {
   const defAgentEl = document.getElementById('set-default-dispatch-agent');
   if (defAgentEl && settings.defaultDispatchAgent !== undefined) {
     defAgentEl.value = settings.defaultDispatchAgent || '';
+  }
+
+  const launchEl = document.getElementById('set-default-launch-profile');
+  if (launchEl && settings.defaultLaunchProfile !== undefined) {
+    const profile = settings.defaultLaunchProfile;
+    launchEl.value = profile === 'plan' || profile === 'dont-ask' ? profile : 'ask';
   }
 
   const defCwdEl = document.getElementById('set-default-project-cwd');

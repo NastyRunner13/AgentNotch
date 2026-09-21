@@ -81,6 +81,8 @@ const DEFAULT_SETTINGS = {
   // Dispatch defaults for "new session"
   defaultDispatchAgent: '', // '' = auto, else 'Claude Code' | 'Codex' | 'Grok' | 'OpenCode'
   defaultProjectCwd: '', // empty = derive from recent sessions; else absolute path
+  // ask = no extra flags. plan / dont-ask only apply to a new session.
+  defaultLaunchProfile: 'ask',
 
   pollInterval: 3000
 };

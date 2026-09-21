@@ -393,7 +393,16 @@
             <p class="settings-hint settings-hint-block">Working with no new activity becomes a quiet attention item. Sound stays off.</p>
 
             <h3 class="settings-heading">Dispatch</h3>
-            <p class="settings-hint settings-hint-block">Defaults when starting a new session from the bar.</p>
+            <p class="settings-hint settings-hint-block">Defaults when starting a new session from the bar. A message into a session that is already running ignores these.</p>
+            <label class="setting-row setting-row-control">
+              <span class="setting-label">New session</span>
+              <select id="set-default-launch-profile" class="setting-select" aria-label="How a new session should ask">
+                <option value="ask">Ask me</option>
+                <option value="plan">Plan</option>
+                <option value="dont-ask">Don't ask</option>
+              </select>
+            </label>
+            <p class="settings-hint settings-hint-block">Ask me uses each agent's own config. Plan starts Claude, Grok, and Codex in plan or read-only. Don't ask lets Claude accept edits, Grok auto-approve, Codex write inside the project, and OpenCode auto-approve. It is not a full bypass.</p>
             <label class="setting-row setting-row-control">
               <span class="setting-label">Default agent</span>
               <select id="set-default-dispatch-agent" class="setting-select" aria-label="Default dispatch agent">
@@ -423,8 +432,9 @@
 
             <h3 class="settings-heading">Claude remote approve</h3>
             <p class="settings-hint settings-hint-block">
-              Install a Claude Code <code>PermissionRequest</code> hook so Allow / Deny in the notch
-              approves tools without switching windows. Other agents still open the agent app.
+              Install a Claude Code hook so Allow / Deny and question cards in the notch
+              answer Claude without switching windows. Restart open Claude sessions after installing.
+              Other agents still open their own app.
             </p>
             <div class="setting-row setting-row-actions">
               <span class="setting-label" id="claude-hook-status">Checking hook…</span>
@@ -500,6 +510,11 @@
       <!-- Task Dispatch Input — targets a live session; the message resumes that chat -->
       <div class="dispatch-bar" id="dispatch-bar">
         <select id="dispatch-agent" class="dispatch-agent"></select>
+        <select id="dispatch-profile" class="dispatch-agent dispatch-profile" hidden aria-label="How the new session should ask">
+          <option value="ask" title="Use each agent's own permission config">Ask me</option>
+          <option value="plan" title="Claude and Grok plan mode. Codex read-only. OpenCode unchanged.">Plan</option>
+          <option value="dont-ask" title="Claude accept-edits, Grok always-approve, Codex workspace write, OpenCode auto. Not a full bypass.">Don't ask</option>
+        </select>
         <input type="text" id="dispatch-input" class="dispatch-input" placeholder="Message this session…" autocomplete="off">
         <button id="dispatch-btn" class="dispatch-btn" title="Send">
           <svg class="dispatch-btn-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

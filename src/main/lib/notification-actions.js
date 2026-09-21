@@ -6,7 +6,6 @@
 
 'use strict';
 
-const DISPATCHABLE_AGENTS = new Set(['Claude Code', 'Codex', 'Grok', 'OpenCode']);
 const SHORT_LABEL_MAX = 22;
 
 /**
@@ -25,7 +24,7 @@ function canRemoteAnswer(session) {
   return Boolean(
     session &&
     session.status === 'question' &&
-    DISPATCHABLE_AGENTS.has(session.agent)
+    session.remoteAnswer
   );
 }
 
@@ -99,7 +98,6 @@ function notificationActionsFor(session) {
 }
 
 module.exports = {
-  DISPATCHABLE_AGENTS,
   canRemoteApprove,
   canRemoteAnswer,
   notificationActionsFor
