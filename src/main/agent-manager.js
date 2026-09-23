@@ -1068,6 +1068,7 @@ class AgentManager extends EventEmitter {
     this.settings.showSessionActivity = this.settings.showSessionActivity !== false;
     this.settings.autoCollapseFinished = this.settings.autoCollapseFinished !== false;
     this.settings.alwaysAllowEnabled = this.settings.alwaysAllowEnabled !== false;
+    this.settings.checkForUpdates = this.settings.checkForUpdates !== false;
     this.settings.agentRoots = sanitizeAgentRoots(normalizeAgentRoots(this.settings.agentRoots));
     this.settings.watchWsl = this.settings.watchWsl !== false;
     this.settings.wslDistro = sanitizeWslDistro(this.settings.wslDistro);

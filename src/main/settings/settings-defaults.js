@@ -15,6 +15,8 @@ const DEFAULT_SETTINGS = {
   soundAlerts: true,
   desktopNotifications: true,
   launchAtStartup: false,
+  // Packaged app only. Requests the GitHub release manifest, nothing else.
+  checkForUpdates: true,
 
   // Focus mode: suppress sound + toast globally; bar truth / reveal stay
   focusMode: false,

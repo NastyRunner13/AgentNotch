@@ -14,6 +14,7 @@ const MASTER_TOGGLES = {
   'set-sound': 'soundAlerts',
   'set-notifications': 'desktopNotifications',
   'set-startup': 'launchAtStartup',
+  'set-updates': 'checkForUpdates',
   'set-limit-notch': 'showLimitOnNotch',
   'set-limit-notify-crit': 'notifyOnLimitCrit',
   'set-show-model': 'showSessionModel',

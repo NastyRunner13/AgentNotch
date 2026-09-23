@@ -4,7 +4,7 @@
 
 **AgentNotch** is engineered as a **100% local-first** desktop status application.
 
-- **Zero External Telemetry**: AgentNotch does not transmit telemetry, analytics, session contents, prompt text, or token counts to any cloud servers or third parties. The renderer does not load fonts, scripts, or analytics from the network.
+- **Zero External Telemetry**: AgentNotch does not transmit telemetry, analytics, session contents, prompt text, or token counts to any cloud servers or third parties. The renderer does not load fonts, scripts, or analytics from the network. A packaged app with update checks left on requests the public GitHub release manifest and the installer. That request carries no session text, paths, prompts, or usage. Settings can turn the check off.
 - **Local File Inspection**: AgentNotch reads agent log files and SQLite WAL databases directly from your local user directory (`~/.claude/`, `~/.codex/`, `~/.gemini/`, `~/.grok/`, `~/.local/share/opencode/`). Log inspection is read-only.
 - **Claude Remote Approval**: The optional Claude permission bridge writes pending permission state and responses strictly to local disk IPC directories (`~/.agent-notch/permissions/`).
 
@@ -28,7 +28,7 @@
 - **Same-user local attacker**: anything that can write `~/.agent-notch/permissions/decisions/` as you can approve a Claude hook. The protocol is local-file IPC by design.
 - **PATH hijack**: dispatch locates `claude` / `codex` / `grok` / `opencode` on `PATH`. A malicious sibling executable with the same name would run as you.
 - **Untrusted session logs**: prompt text and cwd come from agent transcripts. They are escaped in the UI; they are never evaluated as HTML or as a shell string.
-- **Code signing**: release binaries are not Authenticode / Apple-notarized unless the publisher adds certificates. Unsigned Windows builds will show SmartScreen.
+- **Code signing**: the release workflow signs Windows when `WIN_CSC_LINK` is set and signs plus notarizes macOS when `MAC_CSC_LINK` and Apple notarization credentials are set. Until those secrets exist, release binaries are unsigned. Unsigned Windows builds show SmartScreen. Unsigned macOS builds are blocked by Gatekeeper until the user bypasses it.
 
 Run `npm run audit:prod` to check production dependencies. CI fails on high+ production advisories.
 
@@ -40,8 +40,8 @@ Only the latest release version receives security updates.
 
 | Version | Supported |
 | :--- | :--- |
-| 1.0.x | Yes |
-| < 1.0 | No |
+| 1.3.x | Yes |
+| < 1.3 | No |
 
 ---
 

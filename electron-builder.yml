@@ -31,10 +31,17 @@ mac:
       arch:
         - x64
         - arm64
+    # electron-updater installs from the zip. The dmg is the download on the release page.
+    - target: zip
+      arch:
+        - x64
+        - arm64
   icon: assets/icons/agent-notch.png
   category: public.app-category.developer-tools
-  # Unsigned OSS builds — no Developer ID in CI.
-  identity: null
+  # Identity is unset on purpose. scripts/release-build.js passes
+  # -c.mac.identity=null when MAC_CSC_LINK / CSC_LINK is absent, so a local
+  # keychain is not used. A Developer ID in that env var signs and, when
+  # Apple notarization credentials are set, notarizes.
 
 linux:
   target:
@@ -48,3 +55,11 @@ linux:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+
+# Baked into app-update.yml. Drafts and prereleases are ignored.
+# Local and CI builds pass --publish never; the release workflow uploads the yml.
+publish:
+  provider: github
+  owner: NastyRunner13
+  repo: AgentNotch
+  releaseType: release

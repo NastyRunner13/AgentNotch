@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-23
+
+### Added
+- **Claude question hook**: AskUserQuestion and plan approval are answered in the notch through the Claude permission hook. The hook writes the decision the waiting Claude process reads. Keys 1-9 pick a single-select option. Ctrl+Y / Ctrl+N approve or decline a plan. Other agents still Jump. Dispatch of a later prompt still uses headless resume.
+- **Launch profile**: a new session can start as ask, plan, or don't-ask. The choice is on the dispatch bar and under Settings, Dispatch.
+- **Update check**: an installed app asks GitHub whether a newer published release exists and installs it on quit. Settings, Preferences turns the check off. The request is the public release manifest. Draft releases are ignored. The panel does not open.
+- **Collapsed bar**: at most four agent icons, then a count for the rest.
+
+### Fixed
+- **OpenCode database path**: resolution follows the XDG data home, and a custom path is validated before it is used.
+
+### Security
+- **Dependency pins**: `fast-uri` 3.1.8 and `js-yaml` 4.3.2 so production `npm audit` stays clean. The updater brings in `js-yaml`.
+
+### Changed
+- **Release pipeline**: Windows builds sign when `WIN_CSC_LINK` is set. macOS builds sign when `MAC_CSC_LINK` is set and notarize when Apple notarization credentials are set too. Builds without those secrets stay unsigned. A `v*` tag opens a draft GitHub release. Pushes to `main` build the Windows, macOS, and Linux installers and upload them as workflow artifacts. macOS releases include a zip so the updater can install them.
+
+## [1.2.0] - 2026-08-18
+
 ### Security
 - **Electron shell**: sandbox + `webSecurity` explicit; deny foreign navigation, `window.open`, `<webview>`, renderer downloads, and extra Chromium permissions. IPC invokes must come from the notch window.
 - **Dispatch / open-path**: Windows `.cmd` shims no longer concatenate the user prompt through `cmd.exe`; folder open refuses files so a poisoned cwd cannot execute. Settings paths, WSL distro, hotkey, and poll interval are sanitized.
@@ -19,32 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **In-notch answers**: choosing a question option delivers the answer into the same live session via headless resume (Claude, Codex, Grok, OpenCode). Cursor / Antigravity still Jump.
 - **Notification actions**: attention toasts expose Allow / Deny / Snooze, Jump, or short question options. Actions do not open the panel; click-on-body still does.
 - **Always-allow**: remember Claude Allow for a tool + project (`~/.agent-notch/permission-memory.json`). Matching requests auto-allow without sound/toast. Settings: toggle + clear list.
-- **Custom agent data paths + WSL**: Settings → Advanced for per-agent roots; on Windows, Watch WSL home merges `\\wsl$\…` sessions. Headless answer/dispatch into WSL runs via `wsl.exe`. Linux cwds map to UNC for git chips and Folder; Jump prefers Windows Terminal / the WSL profile.
+- **Custom agent data paths + WSL**: Settings, Advanced for per-agent roots; on Windows, Watch WSL home merges `\\wsl$\…` sessions. Headless dispatch into WSL runs via `wsl.exe`. Linux cwds map to UNC for git chips and Folder; Jump prefers Windows Terminal / the WSL profile.
 - **Git identity chips**: local branch / worktree / PR# on session cards (file reads only, including WSL UNC). Toggle under Sessions.
 - **Stall detection**: working with no new activity (default 10m) becomes a quiet attention episode (`stalled · Agent · 12m`). Sound stays off; notify + strip stay. Presets 5 / 10 / 15 / off.
-
-### Notes
-- **Grok remote approve**: Grok Build has blocking `PreToolUse` (deny or fail-open) and a non-blocking `Notification`/`permission_prompt`. There is no PermissionRequest-style hook that replaces the TUI prompt. In-notch Allow stays Claude-only; Grok remains Jump.
-
-### Fixed
-- **Per-agent mute covers usage limit alerts**: muting an agent (or turning on Focus) now suppresses soft limit toasts and desktop notifications for that agent, matching attention/done interrupt policy. Critical limit chips on the bar still show (status-before-chrome).
-
-### Added
 - **Smarter session feed density**: Compact vs comfortable cards; toggles for model / project folder / activity line; auto-collapse finished sessions; group and filter the live feed by status, agent, or project folder.
-- **Jump & project context**: Open project folder and copy cwd from each card; Jump remembers the last-focused agent window (sticky per OS); clearer agent tags when multiple sessions share a harness (`Claude · project` / `#2`).
-- **Dispatch feedback & defaults**: Clearer “Landed in …” toast plus brief bar/check feedback when a prompt is accepted; optional default agent and default project path for new sessions (Settings → Dispatch).
-- **Deeper Cursor signal**: Cursor is no longer process-presence only. AgentNotch reads local Cursor composer state (`state.vscdb` / `cursorDiskKV`) and optional `~/.cursor/projects/*/agent-transcripts` so session cards show real agent chats — task name, working vs finished, project folder, model, and activity — while Jump still focuses the Cursor window. Remote Allow/Deny remains Claude-only (Cursor has no equivalent permission bridge).
-- **Attention command center**: Unified multi-agent attention queue — priority order on the strip and Sessions list (`1 of N · …`), queue badges on cards, keyboard path (`Ctrl+]` / `Ctrl+[` next/previous), and **Clear** attention (`Ctrl+Shift+D`) which drops the episode from the queue without removing the session (restore via chip). New episodes re-enter the queue; sound/toast debounce follows episode keys.
+- **Jump and project context**: Open project folder and copy cwd from each card; Jump remembers the last-focused agent window (sticky per OS); clearer agent tags when multiple sessions share a harness (`Claude · project` / `#2`).
+- **Dispatch feedback and defaults**: Clearer "Landed in …" toast plus brief bar/check feedback when a prompt is accepted; optional default agent and default project path for new sessions (Settings, Dispatch).
+- **Deeper Cursor signal**: Cursor is no longer process-presence only. AgentNotch reads local Cursor composer state (`state.vscdb` / `cursorDiskKV`) and optional `~/.cursor/projects/*/agent-transcripts` so session cards show real agent chats: task name, working vs finished, project folder, model, and activity. Jump still focuses the Cursor window. Remote Allow/Deny remains Claude-only (Cursor has no equivalent permission bridge).
+- **Attention command center**: Unified multi-agent attention queue. Priority order on the strip and Sessions list (`1 of N · …`), queue badges on cards, keyboard path (`Ctrl+]` / `Ctrl+[` next/previous), and **Clear** attention (`Ctrl+Shift+D`) which drops the episode from the queue without removing the session (restore via chip). New episodes re-enter the queue; sound/toast debounce follows episode keys.
 - **Focus mode**: One switch (Settings + tray menu) suppresses sound and desktop notifications while the bar stays truthful. Quiet `focus` chip on the collapsed notch. Limit toasts also respect Focus.
 - **Per-agent mute**: Mute sound/toast for specific agents (`mutedAgents`: claude, codex, cursor, antigravity, grok, opencode) while status stays on the bar. Wired through `attention-policy.js` with session snooze and Focus.
 - **History resume**: Search history by task / project / agent; pin important entries (never trimmed); Continue (headless resume or new session in project cwd) and Jump for archived sessions. Archive snapshots keep `resumeId` for Codex resume.
 - **Usage limits glance**: Limits header on the Usage tab for all agents with local rate/credit data; critical limit chip on the collapsed notch (attention always wins); soft one-shot toast/desktop notify on crit crossing (never auto-opens the panel). Settings: show critical limit on notch, notify when critical.
+
+### Fixed
+- **Per-agent mute covers usage limit alerts**: muting an agent (or turning on Focus) now suppresses soft limit toasts and desktop notifications for that agent, matching attention/done interrupt policy. Critical limit chips on the bar still show (status-before-chrome).
+
+### Notes
+- **Grok remote approve**: Grok Build has blocking `PreToolUse` (deny or fail-open) and a non-blocking `Notification`/`permission_prompt`. There is no PermissionRequest-style hook that replaces the TUI prompt. In-notch Allow stays Claude-only; Grok remains Jump.
+
+## [1.1.0] - 2026-07-29
+
+### Added
 - **Attention Control**: Per-event interrupt matrix (permission / question / needs-attention / done) for desktop notifications and sound, gated by master Sound and Notifications toggles. Defaults match 1.0 behavior (attention loud; done notify without sound).
 - **Notch placement**: Choose display, left/center/right alignment, and autohide delay (2s / 4s / 8s / 15s).
 - **Custom global hotkey**: Capture a new accelerator in Settings; Reset restores the platform default. Conflicts fall back gracefully with a toast.
 - Shared `settings-defaults` + pure `attention-policy` module with unit tests (policy never auto-opens the panel).
-
----
 
 ## [1.0.0] - 2026-07-28
 

@@ -26,6 +26,7 @@ const {
   normalizeDispatchPrompt,
   resolveOpenableDirectory
 } = require('./security/security');
+const { createUpdateController } = require('./updates');
 
 // Mirror all main-process console.* output to ~/.agent-notch/logs/
 installConsoleCapture();
@@ -34,6 +35,11 @@ installConsoleCapture();
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
+}
+
+// Must match electron-builder.yml appId so Windows toasts and the updater share one identity.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.agentnotch.app');
 }
 
 // Chromium sandbox + navigation/window/webview locks before any BrowserWindow.
@@ -51,6 +57,8 @@ let autoHideTimer = null;
 let notchAnimationTimer = null;
 /** @type {string|null} last successfully registered accelerator */
 let registeredHotkey = null;
+/** @type {ReturnType<typeof createUpdateController>|null} */
+let updates = null;
 
 // Notch dimensions
 const NOTCH_WIDTH_COLLAPSED = 420;
@@ -538,6 +546,21 @@ function playAttentionAlert() {
   }
 }
 
+function showUpdateNotification(body) {
+  if (!Notification.isSupported()) return;
+  try {
+    // Leave the click handler off so the notch stays closed.
+    const n = new Notification({
+      title: 'AgentNotch update',
+      body,
+      silent: true
+    });
+    n.show();
+  } catch {
+    // ignore notification failures
+  }
+}
+
 function handleNotificationAction(action, session) {
   if (!agentManager || !action || !session || !session.id) return;
   // Allow / Deny / Snooze / Answer / Jump must not expand the panel.
@@ -780,6 +803,9 @@ app.whenReady().then(() => {
     if (settings.launchAtStartup !== prev.launchAtStartup) {
       applyLoginItemSetting(settings.launchAtStartup);
     }
+    if (updates && settings.checkForUpdates !== prev.checkForUpdates) {
+      updates.setEnabled(settings.checkForUpdates !== false);
+    }
     if (settings.globalHotkey !== prev.globalHotkey) {
       const result = registerNotchHotkey(settings);
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -812,6 +838,20 @@ app.whenReady().then(() => {
 
   // Global hotkey to toggle notch (customizable via settings)
   registerNotchHotkey(agentManager.getSettings());
+
+  // electron-updater uses its own HTTP client for the GitHub manifest.
+  // The session will-download deny does not see that request.
+  if (app.isPackaged) {
+    const { autoUpdater } = require('electron-updater');
+    updates = createUpdateController({
+      autoUpdater,
+      isPackaged: true,
+      isEnabled: () => agentManager.getSettings().checkForUpdates !== false,
+      notify: showUpdateNotification,
+      log: (message) => console.error('[AgentNotch] Update:', message)
+    });
+    updates.start();
+  }
 
   // IPC Handlers — every invoke must come from the notch window.
   const _handle = ipcMain.handle.bind(ipcMain);

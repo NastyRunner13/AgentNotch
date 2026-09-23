@@ -103,7 +103,7 @@ Daily buckets persist under `~/.agent-notch/usage-stats.json`; costs are list-pr
 Message any running agent session directly from the expanded notch — pick a live session and the prompt resumes that exact chat headlessly (no new windows), or start a new headless session for an agent in its most recent project directory.
 
 ### Conversation Insights
-AI-powered conversation analysis that surfaces session patterns, agent behavior trends, and productivity signals across your agent interactions.
+Local classification of your sessions from the prompt, the tools, and the duration. There is no model call. It shows what kind of work you ran, which agent did it, and how long it took.
 
 ### Settings & History
 Per-agent watcher toggles, **Attention Control** (when to sound / notify for permission, question, needs-attention, and done), **Notch** placement (display, left/center/right, autohide delay, custom global hotkey), autostart, and locally-archived session history.
@@ -137,10 +137,23 @@ Build distributable packages with [electron-builder](https://github.com/electron
 | Command | Platform | Output |
 | :--- | :--- | :--- |
 | `npm run build:win` | Windows | NSIS installer (`.exe`) |
-| `npm run build:mac` | macOS | Disk image (`.dmg`) — x64 + arm64 |
+| `npm run build:mac` | macOS | DMG and zip, x64 and arm64 |
 | `npm run build:linux` | Linux | AppImage (`.AppImage`) |
 
-Automated release builds are triggered by pushing a `v*` tag — see the [release workflow](.github/workflows/release.yml).
+Pushing to `main` builds all three installers and stores them as workflow artifacts ([installer workflow](.github/workflows/installers.yml)). Pushing a `v*` tag builds them again and opens a **draft** GitHub release ([release workflow](.github/workflows/release.yml)). The draft stays unpublished until you publish it. The in-app updater ignores drafts.
+
+An installed app checks GitHub for a newer release and installs it on quit. Settings, Preferences, "Check for updates" turns that off. The check downloads the public release manifest only.
+
+Windows and macOS builds sign when these repository secrets are set, and stay unsigned when they are not. Unsigned Windows builds still show SmartScreen. Unsigned macOS builds still need the Gatekeeper bypass.
+
+| Secret | Use |
+| :--- | :--- |
+| `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` | Authenticode certificate (base64 `.pfx` and its password) |
+| `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD` | Developer ID Application certificate (base64 `.p12` and its password) |
+| `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` | Notarize the signed macOS build |
+| `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | Notarize with an App Store Connect API key instead of an Apple ID |
+
+A lone `CSC_LINK` still works for a local build of the current platform. When both certificates are present, Windows is signed with `WIN_CSC_LINK` and macOS with `MAC_CSC_LINK`.
 
 ## 🏗 Architecture
 
@@ -195,7 +208,7 @@ agent-notch/
 
 | Layer | Technology | Why |
 | :--- | :--- | :--- |
-| Runtime | Electron 36 | Cross-platform desktop, system tray, frameless window |
+| Runtime | Electron 41 | Cross-platform desktop, system tray, frameless window |
 | File watching | Chokidar 4 | Efficient FS events for JSONL tailing |
 | Persistence | electron-store | Simple JSON config, no external DB |
 | UI | Vanilla JS + CSS | Zero-dependency renderer, instant startup |
@@ -216,6 +229,7 @@ agent-notch/
 AgentNotch is **local-first and private by design.**
 
 - ✅ **Zero telemetry** — no cloud dashboards, no accounts, no analytics, no remote fonts
+- ✅ **Update check is the release manifest only** — a packaged app with the setting left on asks GitHub if a newer release exists. Session text, paths, and usage stay on the machine
 - ✅ **Read-only inspection** — agent logs are parsed directly, never modified
 - ✅ **On-device only** — settings and history never leave your machine (`~/.agent-notch/`)
 - ✅ **Hardened Electron** — sandboxed renderer, contextBridge-only IPC, folder-only `openPath`, argv-safe dispatch

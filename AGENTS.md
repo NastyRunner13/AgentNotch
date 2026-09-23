@@ -2,7 +2,7 @@
 
 ## Active work
 
-**[TIER1.md](./TIER1.md)** is the current implementation brief. Next session: start there — do not re-discover. Do not start Tier 2/3 until those four bets ship.
+Release line is **1.3.0**. Signing, the updater, and draft releases are in `scripts/release-build.js`, `src/main/updates.js`, `electron-builder.yml`, and `.github/workflows/release.yml`. Installer builds on `main` are `.github/workflows/installers.yml`. `CHANGELOG.md` is the record of what shipped. In-notch approve is Claude Code only, through the permission hook. Extending that is the next product gap.
 
 ## Design Context
 
