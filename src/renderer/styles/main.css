@@ -499,7 +499,7 @@ html, body {
   height: 6px;
   border-radius: 50%;
   background: var(--color-working);
-  animation: pulse 1.6s ease-in-out infinite;
+  animation: none;
 }
 
 /* Done — idle green check; static, calm, no celebration chrome */
@@ -602,17 +602,17 @@ html, body {
   flex: 1;
   overflow: hidden;
   opacity: 0;
-  transform: translateY(-8px);
+  transform: translateY(-6px);
   /* Exit is faster and undelayed — same path back under the bar */
   transition: opacity 0.2s var(--ease-out-quint),
-              transform 0.24s var(--ease-out-quint);
+              transform 0.2s var(--ease-out);
 }
 
 .notch.expanded .notch-panel {
   opacity: 1;
   transform: translateY(0);
-  transition-duration: 0.32s, var(--duration-expand);
-  transition-delay: 0.04s, 0.04s;
+  transition-duration: 0.2s;
+  transition-delay: 0s;
 }
 
 /* ── Notch Tabs ───────────────────────────────────────── */
@@ -637,7 +637,7 @@ html, body {
   pointer-events: none;
   transform-origin: left center;
   transform: translateX(var(--ink-x, 0px)) scaleX(var(--ink-w, 40));
-  transition: transform 0.32s var(--ease-out-quint);
+  transition: transform 0.18s var(--ease-out);
   opacity: 0;
 }
 
@@ -815,7 +815,7 @@ html, body {
   transform: translateX(0);
   pointer-events: none;
   transition: opacity var(--duration-base) var(--ease-out),
-              transform 0.28s var(--ease-out);
+              transform 0.18s var(--ease-out);
 }
 
 .view.active {
