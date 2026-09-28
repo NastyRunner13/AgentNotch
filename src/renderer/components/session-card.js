@@ -53,7 +53,7 @@ function getStatusInfo(session) {
       return {
         dotClass: 'idle',
         textClass: 'idle',
-        text: oneLine(session.lastMessage, 64)
+        text: `Done · ${oneLine(session.lastMessage, 64)}`
       };
     }
     return { dotClass: 'idle', textClass: 'idle', text: 'Finished' };
@@ -641,7 +641,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
   /** Active queue member — still needs the user and not dismissed from the queue */
   const needsAttention = isAttentionStatus && !attentionAcknowledged;
   const isWorking = session.status === 'working' && !session.stalled;
-  const delay = index * 50;
+  const delay = 0;
   const animateIn = options.animateIn !== false && options.animateIn !== undefined
     ? options.animateIn
     : false;
@@ -722,17 +722,9 @@ export function renderSessionCard(session, index = 0, options = {}) {
          </span>`
       : '';
 
-  // Multicolor laser that sweeps active (working) session windows.
-  // Poll-driven list rebuilds recreate these nodes, which would restart the
-  // CSS animations from 0% and freeze the sweep at the left edge. Negative
-  // animation-delay keyed to wall-clock time keeps the phase continuous.
-  const now = Date.now();
+  // One persistent working cue; regular updates preserve its DOM node.
   const sessionLaser = isWorking
-    ? `<div class="session-laser" aria-hidden="true">
-         <span class="session-laser-beam" style="animation-delay: -${now % 2400}ms"></span>
-         <span class="session-laser-glow" style="animation-delay: -${now % 3200}ms"></span>
-         <span class="session-laser-edge" style="animation-delay: -${now % 2800}ms"></span>
-       </div>`
+    ? `<div class="session-laser" aria-hidden="true"><span class="session-laser-beam"></span></div>`
     : '';
 
   // Dismiss (×) — completed sessions go to history; stuck/errored sessions
@@ -790,6 +782,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
     <div class="${cardClasses}"
          data-session-id="${escapeHtml(session.id)}"
          data-status="${escapeHtml(session.status)}"
+         data-attention-episode="${escapeHtml(session.permissionRequest?.requestId || session.question?.requestId || session.status)}"
          data-agent="${escapeHtml(session.agent || '')}"
          data-project="${escapeHtml(projectLabel || '')}"
          data-queue-index="${needsAttention && session.queueIndex ? session.queueIndex : ''}"
@@ -810,7 +803,7 @@ export function renderSessionCard(session, index = 0, options = {}) {
         <div class="session-meta">
           <div class="session-row-top">
             ${queueBadge}
-            <span class="session-name">${escapeHtml(session.taskName)}</span>
+            <span class="session-name" title="${escapeHtml(session.taskName)}">${escapeHtml(session.taskName)}</span>
             <span class="session-tag ${agent.class}" title="${escapeHtml(session.agent)}">${escapeHtml(agentLabel)}</span>
             ${modelChip}
             ${cwdChip}
@@ -1061,7 +1054,7 @@ function renderInlineQuestion(session) {
   if (q.remote && q.kind === 'plan') {
     const plan = q.plan ? `<pre class="question-plan">${escapeHtml(q.plan)}</pre>` : '';
     return `
-      <div class="session-question" data-session-id="${escapeHtml(session.id)}">
+      <div class="session-question" data-request-id="${escapeHtml(q.requestId || q.kind || '')}" data-session-id="${escapeHtml(session.id)}">
         ${label}
         <div class="question-text">Approve this plan?</div>
         ${plan}
@@ -1111,7 +1104,7 @@ function renderInlineQuestion(session) {
         </fieldset>`;
     }).join('');
     return `
-      <form class="session-question question-form" data-session-id="${escapeHtml(session.id)}">
+      <form class="session-question question-form" data-request-id="${escapeHtml(q.requestId || JSON.stringify(q.questions))}" data-session-id="${escapeHtml(session.id)}">
         ${label}
         ${blocks}
         <button type="button" class="btn-allow question-submit" data-session-id="${escapeHtml(session.id)}">Send answers</button>
