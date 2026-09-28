@@ -4,6 +4,7 @@
  */
 
 const MASTER_TOGGLES = {
+  'set-performance': 'collectPerformance',
   'set-claude': 'enableClaude',
   'set-codex': 'enableCodex',
   'set-cursor': 'enableCursor',
@@ -66,6 +67,29 @@ let capturingHotkey = false;
 let hotkeyKeyHandler = null;
 
 export function initSettings(app) {
+  const clearPerformance = document.getElementById('btn-clear-performance');
+  clearPerformance?.addEventListener('click', async () => {
+    if (!window.agentNotch?.clearPerformanceStats) return;
+    if (clearPerformance.dataset.confirm !== 'true') {
+      clearPerformance.dataset.confirm = 'true';
+      clearPerformance.textContent = 'Confirm clear';
+      setTimeout(() => { clearPerformance.dataset.confirm = ''; clearPerformance.textContent = 'Clear data'; }, 4000);
+      return;
+    }
+    clearPerformance.disabled = true;
+    try {
+      app._analyticsGeneration = (app._analyticsGeneration || 0) + 1;
+      app.performanceStats = await window.agentNotch.clearPerformanceStats();
+      app._lastAnalyticsFp = '';
+      app.showToast('Performance data cleared', 'ok');
+    } catch (err) {
+      app.showToast(`Could not clear performance data: ${err.message}`, 'error');
+    } finally {
+      clearPerformance.disabled = false;
+      clearPerformance.dataset.confirm = '';
+      clearPerformance.textContent = 'Clear data';
+    }
+  });
   const settingsBtn = document.getElementById('btn-settings');
   if (settingsBtn) {
     settingsBtn.addEventListener('click', (e) => {
