@@ -190,7 +190,7 @@
 .session-pet .agent-logo-fallback {
   width: 22px;
   height: 22px;
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 /* Logos never animate — brightness only (running bright / done dull) */
@@ -357,7 +357,7 @@
 .session-card.density-compact .session-pet .agent-logo-fallback {
   width: 18px;
   height: 18px;
-  font-size: 10px;
+  font-size: var(--text-sm);
 }
 
 .session-card.density-compact .session-name {
@@ -823,7 +823,7 @@
   background: rgba(255, 255, 255, 0.04);
   font-weight: 600;
   color: var(--text-primary);
-  font-size: 11px;
+  font-size: var(--text-sm);
   letter-spacing: 0.01em;
   text-transform: uppercase;
 }
@@ -877,7 +877,7 @@
   display: block;
   margin-bottom: 4px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1125,7 +1125,7 @@
 
 .btn-clear-attention kbd {
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 500;
   opacity: 0.75;
   margin-left: 2px;
@@ -1145,7 +1145,7 @@
   border: 1px solid rgba(245, 158, 11, 0.28);
   color: var(--color-attention);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 600;
   line-height: 1;
   letter-spacing: 0.02em;
@@ -1165,7 +1165,7 @@
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -1249,7 +1249,7 @@
   background: rgba(255, 255, 255, 0.03);
   color: var(--text-tertiary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-sm);
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -1356,7 +1356,7 @@
   margin-left: auto;
   flex-shrink: 0;
   font-family: var(--font-sans);
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1802,7 +1802,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 700;
   color: var(--text-tertiary);
   background: var(--bg-card-hover);
@@ -2177,7 +2177,7 @@
 }
 
 .interrupt-matrix-head {
-  font-size: 9px;
+  font-size: var(--text-sm);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2267,7 +2267,7 @@
 
 #btn-hotkey-capture {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-sm);
   min-width: 110px;
 }
 
