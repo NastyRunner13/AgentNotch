@@ -46,3 +46,11 @@ The always-on multi-agent status bar — one glanceable notch for every agent’
 Target **WCAG 2.2 AA** for the renderer UI: text contrast, focus visibility, meaningful control labels, and operable keyboard paths for expand/collapse, tabs, session actions, and dispatch where the surface allows.
 
 **Reduced motion** is required: honor `prefers-reduced-motion` for expand/collapse, icon animation, and entrance effects (crossfade or instant, not bounce or elastic). Support color-independent status cues (icon + text, not color alone) for working / attention / error states.
+
+## Analytics and interaction behavior
+
+Analytics stays inside the notch, with Usage, Performance, and Insights sections. Shared date and agent filters default to 30 days and all agents. Costs disclose their source and missing coverage; session time inferred from activity gaps is labeled as an estimate.
+
+Performance collection stores only local aggregates for 90 days. It measures observed work/wait intervals and completion transitions, not task correctness. Sleep, restarts, and observation gaps are excluded. Collection can be disabled and its stored data cleared in Settings. Historical performance before collection is unavailable.
+
+Session updates preserve open/closed choices, focused controls, and in-progress answers. IBM Plex Sans provides the interface type; JetBrains Mono remains for technical data. Use one motion cue per working card and keep the full panel user-opened.
