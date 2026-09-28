@@ -135,8 +135,9 @@ function getNotchX(width, settings) {
   const display = resolveTargetDisplay(settings || getSettingsSafe());
   const { x, width: areaW } = display.workArea;
   const align = normalizeNotchAlign(settings?.notchAlign ?? getSettingsSafe().notchAlign);
-  if (align === 'left') return Math.round(x + NOTCH_EDGE_MARGIN);
-  if (align === 'right') return Math.round(x + areaW - width - NOTCH_EDGE_MARGIN);
+  const margin = Math.min(NOTCH_EDGE_MARGIN, Math.max(0, (areaW - width) / 2));
+  if (align === 'left') return Math.round(x + margin);
+  if (align === 'right') return Math.round(x + areaW - width - margin);
   return Math.round(x + (areaW - width) / 2);
 }
 
@@ -246,8 +247,9 @@ function animateNotchBounds(target, responseSec, onComplete) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   const settings = getSettingsSafe();
-  const targetWidth = target.width;
-  const targetHeight = target.height;
+  const area = resolveTargetDisplay(settings).workArea;
+  const targetWidth = Math.min(target.width, area.width);
+  const targetHeight = Math.min(target.height, area.height);
   const targetY = typeof target.y === 'number' ? target.y : getNotchY(false, settings);
 
   if (prefersReducedMotion()) {
@@ -644,8 +646,9 @@ function repositionNotch() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   ensureDisplayStillAvailable();
   const settings = getSettingsSafe();
-  const width = isExpanded ? NOTCH_WIDTH_EXPANDED : NOTCH_WIDTH_COLLAPSED;
-  const height = isExpanded ? NOTCH_HEIGHT_EXPANDED : NOTCH_HEIGHT_COLLAPSED;
+  const area = resolveTargetDisplay(settings).workArea;
+  const width = Math.min(isExpanded ? NOTCH_WIDTH_EXPANDED : NOTCH_WIDTH_COLLAPSED, area.width);
+  const height = Math.min(isExpanded ? NOTCH_HEIGHT_EXPANDED : NOTCH_HEIGHT_COLLAPSED, area.height);
   const y = getNotchY(isAutoHidden && !isExpanded, settings);
   stopNotchAnimation();
   mainWindow.setBounds({
