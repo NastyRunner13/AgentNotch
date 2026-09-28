@@ -200,10 +200,10 @@ A restrained dark product palette: neutral ink for structure, semantic status fo
 
 Depth is **tonal layering, almost no shadow**. Surfaces step Void → Panel → Card → Lift; 1px hairline borders define edges. Soft drop shadows are not part of the resting language.
 
-Attention may use a soft pulse ring (`box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.2)` on a cycle) only on attention-state cards. Plan-step “in progress” may use a tiny working-blue glow ring. Neither is ambient decoration.
+Attention uses a steady amber border and a single 200ms opacity emphasis on a new episode. Plan-step “in progress” may use a tiny working-blue glow ring. Neither is ambient decoration.
 
 ### Shadow Vocabulary
-- **Attention pulse** (`0 0 0 2px rgba(245, 158, 11, 0.2)` animated): Session cards in attention state only.
+- **Attention:** steady amber border; no repeating glow.
 - **Plan progress ring** (`0 0 0 3px rgba(96, 165, 250, 0.12)`): In-progress plan markers only.
 - **Ambient / card drop shadows:** Forbidden at rest.
 
@@ -231,7 +231,7 @@ Feel: **refined and restrained** — tight radii, muted fills, color only for st
 ### Cards / Containers
 - **Corner Style:** Medium (`10px`) for session cards; smaller (`6px`) for history rows
 - **Background:** Card charcoal; hover lifts to `#1c1c1c`
-- **Shadow Strategy:** Flat-by-default; attention pulse only when status demands
+- **Shadow Strategy:** Flat-by-default; steady attention border when status demands
 - **Border:** Subtle `#1e1e1e`, lightens on hover; attention cards use warm border `#3d2a00`
 - **Internal Padding:** Header `10px 12px`; detail stack with `space-sm` gaps
 
@@ -258,12 +258,21 @@ Feel: **refined and restrained** — tight radii, muted fills, color only for st
 Short, critically damped, interruptible. No bounce or elastic. Window geometry is a spring (response `0.40` expand / `0.30` collapse, damping `1.0`) that retargets from the live bounds and carries velocity. Renderer motion uses `--ease-out` (`cubic-bezier(0.16, 1, 0.3, 1)`).
 
 - **Press:** highlight and `scale(0.97)` on pointer-down (`100ms`)
-- **Tabs:** sliding ink follows the active tab; views enter from the direction of travel and exit the opposite way
+- **Tabs:** 180ms sliding ink and directional view changes. Inactive views are inert.
 - **Sheets:** session/history detail opens on `grid-template-rows` (`280ms`); inner content fades and drops 4px on the same path
 - **Menus / toasts:** originate from their source (snooze scales from the trigger; toast rises from the dispatch bar)
-- **Working beam:** fades in; sweep stays status-earned, not a page-load show
-- **Charts:** hover inspects the nearest day or spend point (tooltip + column/cursor); legend click isolates a series. Opacity 120ms, no bounce, no layout motion. Reduced motion is instant opacity (no mix-bar scale).
+- **Working beam:** one blue transform sweep per visible card, 2.4 seconds linear. Pause below the viewport, in inactive tabs, or when collapsed. The strip beam pauses while expanded.
+- **Charts:** pointer or arrow-key inspection selects a day or spend point (tooltip + column/cursor); legend click isolates a series. Opacity 120ms, no bounce, no layout motion. Reduced motion is instant opacity (no mix-bar scale).
 - **Reduced motion:** cross-fade or instant — no springs, slides, or loops
+
+## Analytics and live updates
+
+- Sessions, History, Analytics, and Settings are the top-level navigation. Analytics contains Usage, Performance, and Insights with shared range and agent filters, defaulting to 30 days and all agents.
+- Keep cards keyed by session ID. Patch changed content while retaining focus, drafts, scroll, and open menus. A manually collapsed card stays collapsed. Defer reordering during interaction; new sessions still appear.
+- Add/remove and reorder motion uses 200ms transform/opacity, without list-position delays. The panel content uses a 200ms fade while native springs own window bounds.
+- Usage labels distinguish reported, estimated, mixed, partial, and unavailable cost. Missing pricing is never a known zero. Previous-period comparison remains unavailable until continuous coverage can be established.
+- Performance measures observed work, wait, attention, and completion episodes from local state transitions. Record 90 days prospectively; never infer successful tasks or reconstruct missing history. Incomplete episodes are excluded from medians.
+- Insights describes local heuristic conversation patterns. Show sample size and confidence beside the results.
 
 ## 6. Do's and Don'ts
 
