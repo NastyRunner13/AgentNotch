@@ -18,7 +18,7 @@
 
 /* Entrance only for brand-new cards — never on every poll update */
 .session-card.card-enter {
-  animation: slideIn 0.32s var(--ease-out) both;
+  animation: slideIn 0.2s var(--ease-out) both;
 }
 
 .session-card.card-static {
@@ -41,12 +41,11 @@
 }
 
 .session-card.attention.card-enter {
-  animation: slideIn 0.32s var(--ease-out) both,
-             attentionPulse 2s ease-in-out infinite;
+  animation: slideIn 0.2s var(--ease-out) both;
 }
 
 .session-card.attention.card-static {
-  animation: attentionPulse 2s ease-in-out infinite;
+  animation: none;
 }
 
 .session-card.attention:focus-visible {
@@ -74,78 +73,12 @@
   width: 42%;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    #60A5FA 10%,
-    #A78BFA 30%,
-    #F472B6 50%,
-    #FBBF24 70%,
-    #34D399 90%,
-    transparent 100%
-  );
-  box-shadow:
-    0 0 8px 1px rgba(167, 139, 250, 0.5),
-    0 0 14px 2px rgba(96, 165, 250, 0.3);
+  background: linear-gradient(90deg, transparent, var(--color-working), transparent);
   animation: sessionLaserSweep 2.4s linear infinite;
-  will-change: transform;
 }
-
-.session-laser-glow {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 1px;
-  opacity: 0.35;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    #60A5FA,
-    #A78BFA,
-    #F472B6,
-    #FBBF24,
-    #34D399,
-    transparent
-  );
-  background-size: 200% 100%;
-  animation: sessionLaserHue 3.2s linear infinite;
-}
-
-/* Second pass along the bottom edge, slightly delayed / reverse feel.
-   Real element (not ::after) so renderSessionCard can set a phase-synced
-   inline animation-delay that survives poll-driven list rebuilds. */
-.session-laser-edge {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 2px;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    #34D399 12%,
-    #FBBF24 32%,
-    #F472B6 52%,
-    #A78BFA 72%,
-    #60A5FA 88%,
-    transparent 100%
-  );
-  background-size: 220% 100%;
-  opacity: 0.7;
-  animation: sessionLaserHue 2.8s linear infinite reverse;
-  filter: drop-shadow(0 0 4px rgba(244, 114, 182, 0.35));
-}
-
 @keyframes sessionLaserSweep {
-  0% { transform: translateX(-120%); }
-  100% { transform: translateX(280%); }
-}
-
-@keyframes sessionLaserHue {
-  0% { background-position: 0% 50%; }
-  100% { background-position: 200% 50%; }
+  from { transform: translateX(-120%); }
+  to { transform: translateX(280%); }
 }
 
 /* ── Card Header (always visible) ─────────────────────── */
@@ -640,7 +573,7 @@
   margin: 2px 0 0 4px;
   border-radius: 1px;
   background: var(--color-working);
-  animation: activityCaretBlink 1.1s ease-in-out infinite;
+  display: none;
 }
 
 @keyframes activityCaretBlink {
@@ -666,7 +599,7 @@
   margin-left: 5px;
   border-radius: 50%;
   background: var(--color-working);
-  animation: activityPhasePulse 1.6s ease-in-out infinite;
+  animation: none;
   flex-shrink: 0;
 }
 
@@ -2806,7 +2739,7 @@ button.usage-mix-item:active {
 .usage-mix:hover .usage-mix-bar,
 .usage-mix:focus-within .usage-mix-bar,
 .usage-mix.is-isolate .usage-mix-bar {
-  transform: scaleY(1.35);
+  transform: none;
 }
 
 .usage-mix-seg {
