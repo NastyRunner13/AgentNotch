@@ -243,6 +243,7 @@ class UsageTracker {
             model: b.model ?? null,
             totals: normalizeTokens(b.totals),
             cost: num(b.cost),
+            costCoverage: b.costCoverage || 'unknown',
             sess: b.sess && typeof b.sess === 'object' ? b.sess : {}
           });
         }
@@ -474,11 +475,14 @@ class UsageTracker {
     const key = `${day}|${agent}|${model || ''}`;
     let b = this._buckets.get(key);
     if (!b) {
-      b = { day, agent, model: model || null, totals: emptyTotals(), cost: 0, sess: {} };
+      b = { day, agent, model: model || null, totals: emptyTotals(), cost: 0, costCoverage: null, sess: {} };
       this._buckets.set(key, b);
     }
     for (const k of Object.keys(b.totals)) b.totals[k] += delta[k];
     b.cost += costDelta;
+    // Delayed cost reports cannot prove all token deltas were priced. Be conservative.
+    const coverage = costDelta > 0 ? 'reported' : 'estimated';
+    b.costCoverage = b.costCoverage == null ? coverage : b.costCoverage === coverage ? coverage : 'mixed';
     if (sessionId) b.sess[sessionId] = 1;
   }
 
@@ -572,6 +576,7 @@ class UsageTracker {
         sessions: Object.keys(b.sess).length,
         cost: actual ? b.cost : (est || 0),
         costActual: actual,
+        partial: actual && b.costCoverage !== 'reported',
         costKnown: actual || est != null
       });
     }
