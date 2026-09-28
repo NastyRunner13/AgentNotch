@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS = {
   launchAtStartup: false,
   // Packaged app only. Requests the GitHub release manifest, nothing else.
   checkForUpdates: true,
+  collectPerformance: true, // Local observed work/wait statistics, retained for 90 days
 
   // Focus mode: suppress sound + toast globally; bar truth / reveal stay
   focusMode: false,
