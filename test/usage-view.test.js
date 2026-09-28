@@ -147,7 +147,7 @@ describe('usage-view model + charts', async () => {
 
   it('burn chart respects cost mode', () => {
     const html = renderUsageView(makeStats(), 7, 'cost');
-    assert.ok(html.includes('data-chart-mode="cost" role="tab" aria-selected="true"'));
+    assert.ok(html.includes('data-chart-mode="cost" aria-pressed="true"'));
     assert.ok(html.includes('peak cost/day'));
   });
 
