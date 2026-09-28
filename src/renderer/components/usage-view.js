@@ -39,7 +39,34 @@ const TOKEN_MIX = [
   { key: 'input', label: 'input', color: 'rgba(255,255,255,0.35)' }
 ];
 
-const DAY_MS = 24 * 60 * 60 * 1000;
+function calendarOffset(ts, days) {
+  const date = new Date(ts);
+  date.setDate(date.getDate() + days);
+  return date.getTime();
+}
+
+// Legacy priced buckets without provenance remain unclassified.
+function mergeCost(target, source) {
+  target.costKnown = Boolean(target.costKnown || source.costKnown);
+  target.reported = Boolean(target.reported || source.reported || (source.costKnown && source.costActual === true));
+  target.estimated = Boolean(target.estimated || source.estimated || (source.costKnown && source.costActual === false));
+  target.unknown = Boolean(target.unknown || source.unknown || source.partial ||
+    (!source.costKnown && (source.total > 0 || source.tokens > 0)) ||
+    (source.costKnown && source.costActual == null && !source.reported && !source.estimated));
+  target.mixed = target.reported && target.estimated;
+  target.partial = target.costKnown && target.unknown;
+  return target;
+}
+
+function costLabel(value) {
+  if (!value.costKnown) return 'unavailable';
+  const provenance = value.mixed ? 'mixed' : value.estimated ? 'estimated' : value.reported ? 'reported' : 'unclassified';
+  return value.partial ? `${provenance}, partial` : provenance;
+}
+
+function costValue(value) {
+  return `${fmtCost(value.cost, Boolean(value.costKnown))} (${costLabel(value)})`;
+}
 /** Buckets longer ranges into week slots so bars stay legible. */
 const WEEKLY_THRESHOLD_DAYS = 45;
 
@@ -170,7 +197,7 @@ export function nearestTrendIndex(points, x) {
 
 function dayLabel(day) {
   const today = dayKey(Date.now());
-  const yesterday = dayKey(Date.now() - DAY_MS);
+  const yesterday = dayKey(calendarOffset(Date.now(), -1));
   if (day === today) return 'Today';
   if (day === yesterday) return 'Yesterday';
   return new Date(parseDay(day)).toLocaleDateString('en-US', {
@@ -186,7 +213,7 @@ function dayLabel(day) {
 export function buildUsageModel(stats, rangeDays) {
   const buckets = Array.isArray(stats?.buckets) ? stats.buckets : [];
   const sessionTime = Array.isArray(stats?.sessionTime) ? stats.sessionTime : [];
-  const cutoff = dayKey(Date.now() - (rangeDays - 1) * DAY_MS);
+  const cutoff = dayKey(calendarOffset(Date.now(), -(rangeDays - 1)));
 
   const daysMap = new Map();  // day → aggregate
   const agentsMap = new Map(); // agent → aggregate
@@ -214,7 +241,7 @@ export function buildUsageModel(stats, rangeDays) {
   };
 
   for (const b of buckets) {
-    if (!b || !b.day || b.day < cutoff) continue;
+    if (!b || !b.day || b.day < cutoff || b.day > dayKey(Date.now())) continue;
     const tokens = Number(b.total) || 0;
     const known = Boolean(b.costKnown);
     const cost = known ? (Number(b.cost) || 0) : 0;
@@ -223,12 +250,12 @@ export function buildUsageModel(stats, rangeDays) {
     const d = dayEntry(b.day);
     d.tokens += tokens;
     d.cost += cost;
-    d.costKnown = d.costKnown || known;
+    mergeCost(d, b);
 
     const a = agentEntry(b.agent || 'Unknown');
     a.tokens += tokens;
     a.cost += cost;
-    a.costKnown = a.costKnown || known;
+    mergeCost(a, b);
 
     for (const k of Object.keys(totals.split)) {
       totals.split[k] += Number(b[k]) || 0;
@@ -244,21 +271,19 @@ export function buildUsageModel(stats, rangeDays) {
       }
       m.tokens += tokens;
       m.cost += cost;
-      m.costKnown = m.costKnown || known;
+      mergeCost(m, b);
       m.sessions += sess;
     }
 
     totals.tokens += tokens;
     totals.cost += cost;
-    totals.costKnown = totals.costKnown || known;
+    mergeCost(totals, b);
     if (known && sess > 0) totals.pricedSessions += sess;
     if (tokens > 0 && sess > 0) totals.tokenSessions += sess;
-    if (known && !b.costActual) totals.estimated = true;
-    if (!known && tokens > 0) totals.partial = true;
   }
 
   for (const t of sessionTime) {
-    if (!t || !t.day || t.day < cutoff) continue;
+    if (!t || !t.day || t.day < cutoff || t.day > dayKey(Date.now())) continue;
     const ms = Number(t.ms) || 0;
     const sess = Number(t.sessions) || 0;
     dayEntry(t.day).ms += ms;
@@ -289,7 +314,7 @@ export function buildUsageModel(stats, rangeDays) {
   totals.avgSessionMs = totals.sessions > 0 ? totals.ms / totals.sessions : 0;
   totals.cacheShare = totals.tokens > 0 ? totals.split.cacheRead / totals.tokens : 0;
   totals.dailyAvgCost = totals.costKnown && totals.activeDays > 0
-    ? totals.cost / totals.activeDays : null;
+    ? totals.cost / rangeDays : null;
 
   return { days, agents, totals, empty: days.length === 0 && agents.length === 0 };
 }
@@ -310,11 +335,11 @@ export function buildSeries(stats, rangeDays) {
   const slotCount = Math.ceil(rangeDays / bucketDays);
 
   const todayStart = parseDay(dayKey(Date.now()));
-  const firstStart = todayStart - (rangeDays - 1) * DAY_MS;
+  const firstStart = calendarOffset(todayStart, -(rangeDays - 1));
 
   const slots = [];
   for (let i = 0; i < slotCount; i++) {
-    const startTs = firstStart + i * bucketDays * DAY_MS;
+    const startTs = calendarOffset(firstStart, i * bucketDays);
     slots.push({
       key: dayKey(startTs),
       startTs,
@@ -326,10 +351,11 @@ export function buildSeries(stats, rangeDays) {
     });
   }
   const slotIndex = (day) => {
-    const idx = Math.floor((parseDay(day) - firstStart) / (bucketDays * DAY_MS));
+    const dayOffset = Math.round((Date.parse(day + 'T00:00:00Z') - Date.parse(dayKey(firstStart) + 'T00:00:00Z')) / 86400000);
+    const idx = dayOffset < rangeDays ? Math.floor(dayOffset / bucketDays) : -1;
     return idx >= 0 && idx < slotCount ? idx : -1;
   };
-  const bumpAgent = (slot, agent, tokens, cost) => {
+  const bumpAgent = (slot, agent, tokens, cost, bucket) => {
     let a = slot.byAgent.get(agent);
     if (!a) {
       a = { tokens: 0, cost: 0 };
@@ -337,6 +363,7 @@ export function buildSeries(stats, rangeDays) {
     }
     a.tokens += tokens;
     a.cost += cost;
+    mergeCost(a, bucket);
   };
 
   for (const b of buckets) {
@@ -347,7 +374,8 @@ export function buildSeries(stats, rangeDays) {
     const cost = b.costKnown ? (Number(b.cost) || 0) : 0;
     slots[idx].tokens += tokens;
     slots[idx].cost += cost;
-    bumpAgent(slots[idx], b.agent || 'Unknown', tokens, cost);
+    mergeCost(slots[idx], b);
+    bumpAgent(slots[idx], b.agent || 'Unknown', tokens, cost, b);
   }
   for (const t of sessionTime) {
     if (!t || !t.day) continue;
@@ -394,7 +422,7 @@ function renderBurnChart(series, weekly, mode) {
   if (n === 0) return '';
   const valueOf = (s) => (mode === 'cost' ? s.cost : s.tokens);
   const max = series.reduce((mx, s) => Math.max(mx, valueOf(s)), 0);
-  if (max <= 0) return '';
+  if (max <= 0 && !series.some(s => s.tokens > 0)) return '';
 
   const order = agentOrder(series, mode);
   const fmt = mode === 'cost' ? (v) => fmtCost(v) : fmtTokens;
@@ -416,25 +444,26 @@ function renderBurnChart(series, weekly, mode) {
       const v = s.byAgent.get(agent);
       if (!v) continue;
       const val = mode === 'cost' ? v.cost : v.tokens;
+      const color = AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR;
+      rows.push({ agent, value: mode === 'cost' ? costValue(v) : fmt(val), color });
       if (val <= 0) continue;
       const h = Math.max(1, (val / max) * usableH);
       y -= h;
-      const color = AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR;
       const slug = agentSlug(agent);
       segs.push(`<rect class="usage-seg" data-agent="${slug}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" fill="${color}"/>`);
-      rows.push({ agent, value: fmt(val), color });
     }
     const isToday = !weekly && s.key === dayKey(Date.now());
     const title = isToday ? 'Today' : s.label;
     const tip = {
       title,
       meta: s.sessions ? `${s.sessions} sess` : '',
-      value: total > 0 ? fmt(total) : '—',
+      value: mode === 'cost' ? costValue(s) : fmt(total),
       rows
     };
-    return `<g class="usage-bar-group" data-slot="${i}" data-tip="${escapeHtml(JSON.stringify(tip))}">
+    return `<g class="usage-bar-group" data-slot="${i}" data-day="${s.key}" data-tip="${escapeHtml(JSON.stringify(tip))}">
       <rect class="usage-bar-hit" x="${(slotW * i).toFixed(1)}" y="0" width="${slotW.toFixed(1)}" height="${BURN_H}"/>
       ${segs.join('')}
+      ${mode === 'cost' && (!s.costKnown || s.partial) ? `<line x1="${x}" x2="${x + barW}" y1="${BURN_H - 2}" y2="${BURN_H - 2}" stroke="#949494" stroke-width="2" stroke-dasharray="2 2"/>` : ''}
     </g>`;
   }).join('');
 
@@ -444,7 +473,7 @@ function renderBurnChart(series, weekly, mode) {
     if (i % step !== 0 && i !== n - 1) return '';
     const isToday = !weekly && s.key === dayKey(Date.now());
     const text = isToday ? 'Today' : weekly || n > 7 ? s.label : new Date(s.startTs).toLocaleDateString('en-US', { weekday: 'short' });
-    return `<span class="usage-chart-x" data-slot="${i}" style="left:${(slotW * i).toFixed(1)}px;width:${slotW.toFixed(1)}px"${isToday ? ' data-today="1"' : ''}>${escapeHtml(text)}</span>`;
+    return `<span class="usage-chart-x" data-slot="${i}" style="left:${i === 0 ? 0 : i === n - 1 ? 100 : ((i + 0.5) / n * 100).toFixed(1)}%;transform:translateX(${i === 0 ? 0 : i === n - 1 ? -100 : -50}%)"${isToday ? ' data-today="1"' : ''}>${escapeHtml(text)}</span>`;
   }).join('');
 
   const legend = order.map(agent => {
@@ -452,23 +481,24 @@ function renderBurnChart(series, weekly, mode) {
       const v = s.byAgent.get(agent);
       return sum + (v ? (mode === 'cost' ? v.cost : v.tokens) : 0);
     }, 0);
-    if (total <= 0) return '';
+    const cost = series.reduce((a, slot) => mergeCost(a, slot.byAgent.get(agent) || {}), { cost: total });
     const slug = agentSlug(agent);
-    return `<button type="button" class="usage-chart-legend-item" data-agent="${slug}" aria-pressed="false">
+    return `<button type="button" class="usage-chart-legend-item" data-agent="${slug}" data-usage-focus="agent-${slug}" aria-pressed="false">
       <span class="usage-agent-dot" style="background:${AGENT_COLORS[agent] || FALLBACK_AGENT_COLOR}"></span>
-      ${escapeHtml(agent)} <span class="usage-chart-legend-val">${fmt(total)}</span>
+      ${escapeHtml(agent)} <span class="usage-chart-legend-val">${mode === 'cost' ? costValue(cost) : fmt(total)}</span>
     </button>`;
   }).join('');
 
-  return `<div class="usage-chart" role="group" aria-label="${unit === 'cost' ? 'Daily cost' : 'Daily tokens'} by agent, peak ${fmt(max)}">
-    <div class="usage-chart-peak">${fmt(max)}<span class="usage-chart-peak-unit"> peak ${unit}/day</span></div>
-    <div class="usage-chart-plot">
+  return `<div class="usage-chart" role="group" aria-label="${unit === 'cost' ? 'Daily cost' : 'Daily tokens'} by agent, peak ${mode === 'cost' ? costValue(series.reduce((a, s) => mergeCost(a, s), { cost: max })) : fmt(max)}">
+    <div class="usage-chart-peak">${mode === 'cost' ? costValue(series.reduce((a, s) => mergeCost(a, s), { cost: max })) : fmt(max)}<span class="usage-chart-peak-unit"> peak ${unit}/day</span></div>
+    <div class="usage-chart-plot" tabindex="0" data-usage-focus="burn" aria-label="Daily usage. Arrow keys inspect days; Home and End jump; Escape clears inspection.">
       <svg class="usage-chart-svg" width="100%" height="${BURN_H}" viewBox="0 0 ${CHART_W} ${BURN_H}" preserveAspectRatio="none" aria-hidden="true">
         <line x1="0" y1="${BURN_PAD_TOP}" x2="${CHART_W}" y2="${BURN_PAD_TOP}" class="usage-grid"/>
         <line x1="0" y1="${midY}" x2="${CHART_W}" y2="${midY}" class="usage-grid"/>
         ${bars}
       </svg>
     </div>
+    <span class="usage-chart-status sr-only" role="status" aria-live="polite"></span>
     <div class="usage-chart-xrow">${labels}</div>
     <div class="usage-chart-legend" role="toolbar" aria-label="Isolate agent">${legend}</div>
     <div class="usage-tip" role="tooltip" aria-hidden="true"></div>
@@ -480,9 +510,11 @@ function renderCostTrend(series) {
   const n = series.length;
   if (n < 2) return '';
   let cum = 0;
+  const provenance = {};
   const points = series.map((s, i) => {
     cum += s.cost;
-    return { i, cum, day: s };
+    mergeCost(provenance, s);
+    return { i, cum, day: s, ...provenance };
   });
   const max = cum;
   if (max <= 0) return '';
@@ -501,12 +533,13 @@ function renderCostTrend(series) {
     x: xy[i][0],
     y: xy[i][1],
     label: p.day.label,
-    value: fmtCost(p.cum),
+    day: p.day.key,
+    value: costValue({ ...p, cost: p.cum }),
     meta: 'cumulative'
   }));
 
-  return `<div class="usage-trend" role="group" aria-label="Cumulative spend ${fmtCost(max)} over the range" data-points="${escapeHtml(JSON.stringify(pointData))}">
-    <div class="usage-trend-plot" tabindex="0" aria-label="Spend trajectory. Arrow keys move between days.">
+  return `<div class="usage-trend" role="group" aria-label="Cumulative spend ${costValue({ ...provenance, cost: max })} over the range" data-points="${escapeHtml(JSON.stringify(pointData))}">
+    <div class="usage-trend-plot" data-usage-focus="trend" tabindex="0" aria-label="Spend trajectory. Arrow keys move between days.">
       <svg class="usage-trend-svg" width="100%" height="${TREND_H}" viewBox="0 0 ${CHART_W} ${TREND_H}" preserveAspectRatio="none" aria-hidden="true">
         <line x1="0" y1="${TREND_H - 0.5}" x2="${CHART_W}" y2="${TREND_H - 0.5}" class="usage-grid"/>
         <path d="${area}" class="usage-trend-area"/>
@@ -516,9 +549,10 @@ function renderCostTrend(series) {
       <div class="usage-trend-rule" aria-hidden="true"></div>
       <div class="usage-trend-cursor" aria-hidden="true"></div>
     </div>
+    <span class="usage-chart-status sr-only" role="status" aria-live="polite"></span>
     <div class="usage-trend-caption">
       <span>${escapeHtml(series[0].label)}</span>
-      <span class="usage-trend-total">${fmtCost(max)} cumulative</span>
+      <span class="usage-trend-total">${costValue({ ...provenance, cost: max })} cumulative</span>
       <span>${escapeHtml(series[n - 1].label)}</span>
     </div>
     <div class="usage-tip" role="tooltip" aria-hidden="true"></div>
@@ -540,7 +574,7 @@ function renderTokenMix(split, totalTokens) {
 
   const legend = parts.map(p => {
     const tip = { title: p.label, value: fmtTokens(p.value), meta: fmtPct(p.value / totalTokens) };
-    return `<button type="button" class="usage-mix-item" data-mix="${p.key}" data-tip="${escapeHtml(JSON.stringify(tip))}" aria-pressed="false">
+    return `<button type="button" class="usage-mix-item" data-mix="${p.key}" data-usage-focus="mix-${p.key}" data-tip="${escapeHtml(JSON.stringify(tip))}" aria-pressed="false">
       <span class="usage-mix-dot" style="background:${p.color}"></span>
       ${p.label} <span class="usage-mix-val">${fmtPct(p.value / totalTokens)}</span>
     </button>`;
@@ -565,24 +599,18 @@ function renderStatRow(items, secondary = false) {
 }
 
 function renderSummary(totals) {
-  const costNote = totals.partial ? 'partial' : totals.estimated ? 'est' : null;
+  const costNote = costLabel(totals);
   const primary = [
     { value: totals.costKnown ? fmtCost(totals.cost) : '—', label: costNote ? `Cost (${costNote})` : 'Cost' },
     { value: fmtTokens(totals.tokens), label: 'Tokens' },
     { value: String(totals.sessions), label: 'Sessions' },
-    { value: fmtMs(totals.ms), label: 'Agent time' },
-    { value: String(totals.agents), label: `Agent${totals.agents === 1 ? '' : 's'}` }
+    { value: fmtMs(totals.ms), label: 'Estimated active time' }
   ];
   const secondary = [
     {
-      value: totals.avgCostPerSession != null ? fmtCost(totals.avgCostPerSession) : '—',
-      label: '$ / priced',
-      title: 'Average cost over sessions with priced token data — not all sessions'
-    },
-    { value: fmtMs(totals.avgSessionMs), label: 'Avg session' },
-    {
       value: totals.dailyAvgCost != null ? fmtCost(totals.dailyAvgCost) : '—',
-      label: '$ / active day'
+      label: 'Daily average',
+      title: 'Known cost divided by calendar days in this range'
     },
     {
       value: fmtPct(totals.cacheShare),
@@ -601,7 +629,7 @@ function renderDays(days) {
         <span class="usage-day-label">${escapeHtml(d.label)}</span>
         <span class="usage-day-meta">${d.sessions > 0 ? `${d.sessions} sess · ${fmtMs(d.ms)}` : ''}</span>
         <span class="usage-day-tokens">${d.tokens > 0 ? fmtTokens(d.tokens) : '—'}</span>
-        <span class="usage-day-cost">${fmtCost(d.cost, d.costKnown)}</span>
+        <span class="usage-day-cost">${costValue(d)}</span>
       </div>`).join('')}
     </div>
   </div>`;
@@ -617,14 +645,14 @@ function renderAgents(agents) {
           <span class="usage-agent-name">${escapeHtml(a.agent)}</span>
           <span class="usage-agent-meta">${a.sessions} sess · ${fmtMs(a.ms)} · ${fmtMs(a.avgMs)} avg</span>
           <span class="usage-agent-tokens">${a.tokens > 0 ? fmtTokens(a.tokens) : '—'}</span>
-          <span class="usage-agent-cost">${a.tokens > 0 || a.costKnown ? fmtCost(a.cost, a.costKnown) : '—'}${a.costShare > 0.005 ? `<span class="usage-agent-share">${fmtPct(a.costShare)}</span>` : ''}</span>
+          <span class="usage-agent-cost">${costValue(a)}${a.costShare > 0.005 ? `<span class="usage-agent-share">${fmtPct(a.costShare)}</span>` : ''}</span>
         </div>
         ${a.models.length ? `<div class="usage-models">
           ${a.models.map(m => `<div class="usage-model">
             <span class="usage-model-name">${escapeHtml(m.model || 'unknown model')}</span>
             <span class="usage-model-sess">${m.sessions} sess</span>
             <span class="usage-model-tokens">${fmtTokens(m.tokens)}</span>
-            <span class="usage-model-cost">${fmtCost(m.cost, m.costKnown)}</span>
+            <span class="usage-model-cost">${costValue(m)}</span>
           </div>`).join('')}
         </div>` : ''}
       </div>`).join('')}
@@ -713,13 +741,13 @@ export function pickCritLimit(limits) {
  * @param {string} [chartMode]
  * @param {Array<object>} [usageLimits]
  */
-export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLimits = []) {
+export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLimits = [], options = {}) {
   const model = buildUsageModel(stats, rangeDays);
-  const limitsHeader = renderLimitHeader(usageLimits);
+  const limitsHeader = options.controls === false ? '' : renderLimitHeader(usageLimits);
 
-  const rangeToggle = `<div class="usage-range" role="tablist" aria-label="Usage range">
+  const rangeToggle = options.controls === false ? '' : `<div class="usage-range" role="group" aria-label="Usage range">
     ${USAGE_RANGES.map(r => `<button type="button" class="usage-range-btn${r.days === rangeDays ? ' active' : ''}"
-      data-range="${r.days}" role="tab" aria-selected="${r.days === rangeDays}">${r.label}</button>`).join('')}
+      data-range="${r.days}" aria-pressed="${r.days === rangeDays}">${r.label}</button>`).join('')}
   </div>`;
 
   if (model.empty) {
@@ -738,11 +766,11 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLim
 
   const chartSection = burnChart ? `<div class="usage-section">
     <div class="usage-chart-head">
-      <h4 class="usage-eyebrow">Burn</h4>
-      <div class="usage-range usage-chart-modes" role="tablist" aria-label="Chart metric">
+      <h4 class="usage-eyebrow">Daily usage</h4>
+      ${options.controls === false ? '' : `<div class="usage-range usage-chart-modes" role="group" aria-label="Chart metric">
         ${CHART_MODES.map(m => `<button type="button" class="usage-range-btn${m.id === chartMode ? ' active' : ''}"
-          data-chart-mode="${m.id}" role="tab" aria-selected="${m.id === chartMode}">${m.label}</button>`).join('')}
-      </div>
+          data-chart-mode="${m.id}" aria-pressed="${m.id === chartMode}">${m.label}</button>`).join('')}
+      </div>`}
     </div>
     ${burnChart}
     ${trend ? `<h4 class="usage-eyebrow usage-eyebrow-gap">Spend trajectory</h4>${trend}` : ''}
@@ -754,7 +782,7 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLim
   </div>` : '';
 
   const footnote = model.totals.costKnown
-    ? `<p class="usage-footnote">${model.totals.estimated ? 'Costs estimated at list prices — actual billing may differ. ' : ''}${model.totals.partial ? 'Some token usage has no known price and is excluded from cost. ' : ''}$ / priced uses token sessions with a known price, not all sessions. Local data only.</p>`
+    ? `<p class="usage-footnote">${model.totals.estimated ? 'Costs estimated at list prices — actual billing may differ. ' : ''}${model.totals.partial ? 'Some token usage has no known price and is excluded from cost. ' : ''}Daily average includes every calendar day in the range. Active time is estimated from activity gaps. Previous-period comparison is unavailable without complete coverage metadata. Local data only.</p>`
     : `<p class="usage-footnote">No priced token data in this range — costs appear when an agent reports tokens for a known model. Local data only.</p>`;
 
   return `${rangeToggle}
@@ -762,8 +790,13 @@ export function renderUsageView(stats, rangeDays, chartMode = 'tokens', usageLim
     ${renderSummary(model.totals)}
     ${chartSection}
     ${mixSection}
-    ${renderDays(model.days)}
     ${renderAgents(model.agents)}
+    ${renderDays(model.days)}
+    <details class="usage-data-table"><summary data-usage-focus="usage-table">View chart data</summary>
+      <table><caption>${weekly ? 'Weekly' : 'Daily'} usage in the selected range</caption>
+      <thead><tr><th scope="col">Period</th><th scope="col">Tokens</th><th scope="col">Cost</th><th scope="col">Estimated active time</th></tr></thead>
+      <tbody>${slots.map(s => `<tr><th scope="row">${escapeHtml(s.label)}</th><td>${s.tokens}</td><td>${costValue(s)}</td><td>${fmtMs(s.ms)}</td></tr>`).join('')}</tbody></table>
+    </details>
     ${footnote}`;
 }
 
@@ -790,7 +823,7 @@ function hideTip(tip) {
   tip.setAttribute('aria-hidden', 'true');
 }
 
-function bindBurnChart(chart) {
+function bindBurnChart(chart, state) {
   const svg = chart.querySelector('.usage-chart-svg');
   const tip = chart.querySelector(':scope > .usage-tip');
   if (!svg || !tip) return;
@@ -799,7 +832,7 @@ function bindBurnChart(chart) {
   const segs = [...chart.querySelectorAll('.usage-seg')];
   const labels = [...chart.querySelectorAll('.usage-chart-x')];
   const legendBtns = [...chart.querySelectorAll('.usage-chart-legend-item')];
-  let pinned = null;
+  let pinned = state.pinnedAgent || null;
 
   const setSlot = (slot) => {
     chart.classList.toggle('is-hovering', slot != null);
@@ -822,6 +855,9 @@ function bindBurnChart(chart) {
     const data = parseTip(group);
     if (!data) return;
     setSlot(group.dataset.slot);
+    state.burnDay = group.dataset.day;
+    const status = chart.querySelector('.usage-chart-status');
+    if (status) status.textContent = `${data.title}: ${data.value}. ${(data.rows || []).map(row => `${row.agent}: ${row.value}`).join('. ')}`;
     const hit = group.querySelector('.usage-bar-hit');
     const hostR = chart.getBoundingClientRect();
     const hr = (hit || group).getBoundingClientRect();
@@ -834,19 +870,35 @@ function bindBurnChart(chart) {
     showTip(tip, chart, data, hr.left + hr.width / 2 - hostR.left, top - hostR.top);
   };
 
-  svg.addEventListener('pointermove', (e) => {
-    const group = e.target.closest('.usage-bar-group');
-    if (!group || !svg.contains(group)) {
-      hideTip(tip);
-      setSlot(null);
-      return;
-    }
-    inspectGroup(group);
+  const plot = chart.querySelector('.usage-chart-plot');
+  let frame = 0;
+  let hovered = null;
+  svg.addEventListener('pointermove', e => {
+    hovered = e.target.closest('.usage-bar-group');
+    if (!frame) frame = requestAnimationFrame(() => {
+      frame = 0;
+      if (hovered && svg.contains(hovered)) inspectGroup(hovered);
+    });
   });
   svg.addEventListener('pointerleave', () => {
-    hideTip(tip);
-    setSlot(null);
+    cancelAnimationFrame(frame); frame = 0;
+    if (document.activeElement !== plot) { hideTip(tip); setSlot(null); }
   });
+  const selected = () => Math.max(0, groups.findIndex(group => group.dataset.day === state.burnDay));
+  plot?.addEventListener('focus', () => {
+    if (groups.length) inspectGroup(groups[state.burnDay ? selected() : groups.length - 1]);
+  });
+  plot?.addEventListener('blur', () => { hideTip(tip); setSlot(null); });
+  plot?.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (e.key === 'Escape') { hideTip(tip); setSlot(null); state.burnDay = null; return; }
+    const index = e.key === 'Home' ? 0 : e.key === 'End' ? groups.length - 1
+      : Math.max(0, Math.min(groups.length - 1, selected() + (e.key === 'ArrowLeft' ? -1 : 1)));
+    if (groups[index]) inspectGroup(groups[index]);
+  });
+  setAgent(null);
+  if (state.burnDay && groups.some(group => group.dataset.day === state.burnDay)) inspectGroup(groups[selected()]);
 
   legendBtns.forEach((btn) => {
     const preview = () => setAgent(btn.dataset.agent);
@@ -858,12 +910,13 @@ function bindBurnChart(chart) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       pinned = pinned === btn.dataset.agent ? null : btn.dataset.agent;
+      state.pinnedAgent = pinned;
       setAgent(pinned);
     });
   });
 }
 
-function bindTrendChart(trend) {
+function bindTrendChart(trend, state) {
   const plot = trend.querySelector('.usage-trend-plot');
   const tip = trend.querySelector(':scope > .usage-tip');
   const rule = trend.querySelector('.usage-trend-rule');
@@ -878,12 +931,15 @@ function bindTrendChart(trend) {
   }
   if (!Array.isArray(points) || points.length === 0) return;
 
-  let index = -1;
+  let index = points.findIndex(p => p.day === state.trendDay);
 
   const activate = (i, pointerXPct) => {
     const p = points[i];
     if (!p) return;
     index = i;
+    state.trendDay = p.day;
+    const status = trend.querySelector('.usage-chart-status');
+    if (status) status.textContent = `${p.label}: ${p.value}, cumulative.`;
     trend.classList.add('is-hovering');
     const left = (Number(p.x) / CHART_W) * 100;
     const top = (Number(p.y) / TREND_H) * 100;
@@ -920,23 +976,25 @@ function bindTrendChart(trend) {
   plot.addEventListener('focus', () => activate(index >= 0 ? index : points.length - 1));
   plot.addEventListener('blur', clear);
   plot.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End') return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Escape'].includes(e.key)) return;
     e.preventDefault();
     e.stopPropagation();
+    if (e.key === 'Escape') { clear(); state.trendDay = null; return; }
     const cur = index < 0 ? points.length - 1 : index;
     if (e.key === 'Home') activate(0);
     else if (e.key === 'End') activate(points.length - 1);
     else if (e.key === 'ArrowLeft') activate(Math.max(0, cur - 1));
     else activate(Math.min(points.length - 1, cur + 1));
   });
+  if (index >= 0) activate(index);
 }
 
-function bindMixChart(mix) {
+function bindMixChart(mix, state) {
   const tip = mix.querySelector(':scope > .usage-tip');
   if (!tip) return;
   const segs = [...mix.querySelectorAll('.usage-mix-seg')];
   const items = [...mix.querySelectorAll('.usage-mix-item')];
-  let pinned = null;
+  let pinned = state.pinnedMix || null;
 
   const setMix = (key) => {
     const active = key || pinned;
@@ -978,11 +1036,13 @@ function bindMixChart(mix) {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       pinned = pinned === btn.dataset.mix ? null : btn.dataset.mix;
+      state.pinnedMix = pinned;
       setMix(pinned);
       if (pinned) inspect(btn);
       else hideTip(tip);
     });
   });
+  setMix(pinned);
 }
 
 /**
@@ -990,9 +1050,9 @@ function bindMixChart(mix) {
  * Safe to call after each dashboard paint; listeners live on the new nodes.
  * @param {ParentNode|null} root
  */
-export function bindUsageCharts(root) {
+export function bindUsageCharts(root, state = {}) {
   if (!root || typeof root.querySelectorAll !== 'function') return;
-  root.querySelectorAll('.usage-chart').forEach(bindBurnChart);
-  root.querySelectorAll('.usage-trend').forEach(bindTrendChart);
-  root.querySelectorAll('.usage-mix').forEach(bindMixChart);
+  root.querySelectorAll('.usage-chart').forEach(chart => bindBurnChart(chart, state));
+  root.querySelectorAll('.usage-trend').forEach(chart => bindTrendChart(chart, state));
+  root.querySelectorAll('.usage-mix').forEach(chart => bindMixChart(chart, state));
 }
