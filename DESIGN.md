@@ -11,8 +11,8 @@ colors:
   border-light: "#2a2a2a"
   border-accent: "#333333"
   text-primary: "#f0f0f0"
-  text-secondary: "#8a8a8a"
-  text-tertiary: "#666666"
+  text-secondary: "#b0b0b0"
+  text-tertiary: "#949494"
   text-inverse: "#000000"
   status-idle: "#4ADE80"
   status-idle-bright: "#86EFAC"
@@ -31,32 +31,32 @@ colors:
   agent-opencode: "#8B5CF6"
 typography:
   title:
-    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
-    fontSize: "13px"
+    fontFamily: "IBM Plex Sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    fontSize: "15px"
     fontWeight: 600
     lineHeight: 1.3
     letterSpacing: "-0.01em"
   body:
-    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    fontFamily: "IBM Plex Sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
     fontSize: "13px"
     fontWeight: 400
     lineHeight: 1.5
     letterSpacing: "normal"
   label:
-    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
-    fontSize: "11px"
+    fontFamily: "IBM Plex Sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    fontSize: "12px"
     fontWeight: 500
     lineHeight: 1.3
     letterSpacing: "normal"
   mono:
     fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace"
-    fontSize: "10px"
+    fontSize: "12px"
     fontWeight: 500
     lineHeight: 1.4
     letterSpacing: "normal"
   eyebrow:
-    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
-    fontSize: "10px"
+    fontFamily: "IBM Plex Sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif"
+    fontSize: "12px"
     fontWeight: 600
     lineHeight: 1.2
     letterSpacing: "0.08em"
@@ -133,7 +133,7 @@ components:
 
 AgentNotch is a thin, near-black system strip that lives at the top of the display. It is not a dashboard, not a marketing surface, and not a second IDE. It is an ambient status channel for solo developers running multiple AI coding agents — glanceable when idle, decisive when something needs a human.
 
-The aesthetic is **Calm · Precise · Unobtrusive**. Surfaces stack as tonal near-blacks; chroma is reserved for status (working, idle, attention, error, question) and agent identity. Type is small, Inter for UI and JetBrains Mono for numbers, models, paths, and tool names. Motion is short and purposeful: breathe while working, pulse when attention is required, then get out of the way. Empty and idle states stay quiet.
+The aesthetic is **Calm · Precise · Unobtrusive**. Surfaces stack as tonal near-blacks; chroma is reserved for status (working, idle, attention, error, question) and agent identity. Type stays compact and readable, IBM Plex Sans for UI and JetBrains Mono for numbers, models, paths, and tool names. Motion is short and purposeful: use one working indicator, briefly emphasize a new attention episode, and keep idle states still. Empty and idle states stay quiet.
 
 This system explicitly rejects **chatty SaaS dashboards** (metric-hero cards, decorative card grids, “AI platform” bloat) and **patterns that train ignore-behavior** (constant badges, red-dot spam, alert noise without a clear next action). Color and animation are earned by real agent state.
 
@@ -168,8 +168,8 @@ A restrained dark product palette: neutral ink for structure, semantic status fo
 - **Input Graphite** (`#1a1a1a`): Inputs, selects, tag fills.
 - **Hairline** (`#1e1e1e` / `#2a2a2a` / `#333333`): Borders from subtle → light → accent.
 - **Ink Primary** (`#f0f0f0`): Primary labels and names.
-- **Ink Secondary** (`#8a8a8a`): Status lines, secondary labels — keep ≥4.5:1 on void when used as body.
-- **Ink Tertiary** (`#555555`): Meta, timestamps, eyebrows — never for long body copy.
+- **Ink Secondary** (`#b0b0b0`): Status lines, secondary labels — keep ≥4.5:1 on void when used as body.
+- **Ink Tertiary** (`#949494`): Meta, timestamps, eyebrows — never for long body copy.
 
 ### Named Rules
 **The Earned Color Rule.** Status and agent hues appear only on state, identity tags, or the action that state demands. Decorative fills, gradient washes, and rainbow chrome are prohibited.
@@ -179,17 +179,17 @@ A restrained dark product palette: neutral ink for structure, semantic status fo
 ## 3. Typography
 
 **Display Font:** Not used — this product has no hero display type.
-**Body Font:** Inter (system UI fallbacks)
+**Body Font:** IBM Plex Sans (system UI fallbacks)
 **Label/Mono Font:** JetBrains Mono (Cascadia Code / Fira Code fallbacks)
 
-**Character:** Technical product density. Inter carries readable UI at 11–13px; mono owns duration, model ids, tool names, paths, and usage percentages so the eye separates “facts” from “prose.”
+**Character:** Technical product density. IBM Plex Sans carries readable UI at 12–15px; mono owns duration, model ids, tool names, paths, and usage percentages so the eye separates “facts” from “prose.”
 
 ### Hierarchy
-- **Title** (600, 13px, -0.01em): Session names, primary row labels.
+- **Title** (600, 15px, -0.01em): Session names, primary row labels.
 - **Body** (400–500, 13px, 1.5): Status lines, prompts, activity (clamp long text).
-- **Label** (500, 11px): Tabs, secondary UI, dispatch input.
-- **Mono** (500–600, 9–10px): Stats, model tags, tools, timestamps, kbd hints.
-- **Eyebrow** (600, 10px, 0.08em, uppercase): Settings headings, history date groups, prompt labels — sparingly, not on every section.
+- **Label** (500, 12px): Tabs, secondary UI, dispatch input.
+- **Mono** (400–500, 12px): Stats, model tags, tools, timestamps, kbd hints.
+- **Section label** (500, 12px, normal tracking, sentence case): Settings headings, history date groups, prompt labels — sparingly, not on every section.
 
 ### Named Rules
 **The No-Hero-Type Rule.** There is no 48px marketing headline in this product. Maximum type scale stays in the compact UI band (≤15px for primary UI text).
