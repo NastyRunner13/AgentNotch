@@ -92,7 +92,10 @@ function bandLabel(score, meta) {
  */
 export function buildInsightsModel(data, rangeDays) {
   const records = Array.isArray(data?.records) ? data.records : [];
-  const cutoff = rangeDays > 0 ? Date.now() - rangeDays * DAY_MS : 0;
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  start.setDate(start.getDate() - Math.max(0, rangeDays - 1));
+  const cutoff = rangeDays > 0 ? start.getTime() : 0;
   const ranged = records.filter(r => r && Number.isFinite(r.ts) && r.ts >= cutoff);
 
   const catCount = new Map();
@@ -264,10 +267,10 @@ function renderBandSection(eyebrow, bands, meta, avg, avgLabel, extraNote = '') 
   </div>`;
 }
 
-export function renderInsightsView(data, rangeDays) {
+export function renderInsightsView(data, rangeDays, options = {}) {
   const model = buildInsightsModel(data, rangeDays);
 
-  const rangeToggle = `<div class="usage-range" role="tablist" aria-label="Insights range">
+  const rangeToggle = options.controls === false ? '' : `<div class="usage-range" role="tablist" aria-label="Insights range">
     ${INSIGHT_RANGES.map(r => `<button type="button" class="usage-range-btn${r.days === rangeDays ? ' active' : ''}"
       data-insight-range="${r.days}" role="tab" aria-selected="${r.days === rangeDays}">${r.label}</button>`).join('')}
   </div>`;
@@ -290,6 +293,7 @@ export function renderInsightsView(data, rangeDays) {
   const footnote = `<p class="usage-footnote">Classified on-device from prompts, tool calls, and session time — nothing leaves this machine. Sessions without prompts are excluded.${lowNote}</p>`;
 
   return `${rangeToggle}
+    <p class="analytics-note">Conversation patterns · Local heuristic estimates from ${model.total} sessions. ${model.lowConfidence} have low confidence. These scores do not measure agent quality.</p>
     ${renderSummary(model)}
     ${renderIntent(model)}
     ${renderWorkType(model)}

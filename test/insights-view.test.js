@@ -87,7 +87,8 @@ describe('insights-view model', async () => {
     assert.ok(html.includes('data-insight-range'));
     assert.ok(html.includes('Bug fixes'));
     assert.ok(html.includes('Classified on-device'));
-    assert.ok(!html.includes('low confidence'));
+    assert.ok(html.includes('0 have low confidence'));
+    assert.ok(html.includes('do not measure agent quality'));
   });
 
   it('renders a quiet empty state when there is nothing to show', () => {
