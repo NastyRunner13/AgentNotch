@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification, session, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, shell, clipboard, globalShortcut, Notification, session, systemPreferences, powerMonitor } = require('electron');
 const path = require('path');
 const { createTray, updateTrayIcon, updateTrayMenu } = require('./tray');
 const { AgentManager, DISPATCH_AGENT_NAMES } = require('./agent-manager');
@@ -665,6 +665,8 @@ app.whenReady().then(() => {
 
   // Initialize agent manager (after window — settings drive placement / hotkey)
   agentManager = new AgentManager();
+  powerMonitor.on('suspend', () => agentManager?.suspendPerformance());
+  powerMonitor.on('resume', () => agentManager?.resumePerformance());
 
   tray = createTray({
     onShow: () => {
