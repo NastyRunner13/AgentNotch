@@ -7,6 +7,7 @@
   <title>AgentNotch</title>
   <link rel="stylesheet" href="styles/main.css">
   <link rel="stylesheet" href="styles/components.css">
+  <link rel="stylesheet" href="styles/analytics.css">
 </head>
 <body>
   <div id="app" class="notch collapsed">
@@ -88,13 +89,9 @@
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
           History
         </button>
-        <button class="ntab" data-tab="usage">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="9"/><line x1="18" y1="20" x2="18" y2="4"/></svg>
-          Usage
-        </button>
-        <button class="ntab" data-tab="insights">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg>
-          Insights
+        <button class="ntab" data-tab="analytics">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 20v-6m6 6V9m6 11V4"/></svg>
+          Analytics
         </button>
         <button id="btn-settings" class="ntab ntab-icon" data-tab="settings" title="Settings" aria-label="Settings">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -161,14 +158,29 @@
           </div>
         </section>
 
-        <!-- Usage View (dashboard: session time, tokens, cost, agents, models) -->
-        <section id="view-usage" class="view">
-          <div id="usage-list" class="usage-list"></div>
-        </section>
-
-        <!-- Insights View (intent, work type, complexity, prompt specificity) -->
-        <section id="view-insights" class="view">
-          <div id="insights-list" class="usage-list"></div>
+        <section id="view-analytics" class="view" inert>
+          <div class="analytics-controls">
+            <div class="analytics-sections" role="group" aria-label="Analytics section">
+              <button type="button" data-analytics-section="usage" aria-pressed="true">Usage</button>
+              <button type="button" data-analytics-section="performance" aria-pressed="false">Performance</button>
+              <button type="button" data-analytics-section="insights" aria-pressed="false">Insights</button>
+            </div>
+            <div class="analytics-filters">
+              <div class="usage-range" role="group" aria-label="Analytics range">
+                <button class="usage-range-btn" data-analytics-range="1" aria-pressed="false">Today</button>
+                <button class="usage-range-btn" data-analytics-range="7" aria-pressed="false">7D</button>
+                <button class="usage-range-btn active" data-analytics-range="30" aria-pressed="true">30D</button>
+                <button class="usage-range-btn" data-analytics-range="90" aria-pressed="false">90D</button>
+              </div>
+              <label class="analytics-agent">Agent <select id="analytics-agent" aria-label="Analytics agent"><option value="all">All agents</option></select></label>
+              <div id="analytics-metric" class="usage-range" role="group" aria-label="Usage metric">
+                <button class="usage-range-btn active" data-analytics-metric="tokens" aria-pressed="true">Tokens</button>
+                <button class="usage-range-btn" data-analytics-metric="cost" aria-pressed="false">Cost</button>
+              </div>
+            </div>
+          </div>
+          <p id="analytics-message" class="analytics-note" role="status"></p>
+          <div id="analytics-content" class="usage-list"></div>
         </section>
 
         <!-- Settings View -->

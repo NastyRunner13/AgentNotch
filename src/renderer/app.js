@@ -1,7 +1,9 @@
+import { reconcileChildren } from './components/reconcile.js';
+import { renderPerformanceView } from './components/performance-view.js';
 import { renderSessionCard, getAgentBarIcon, renderSessionSectionHeader } from './components/session-card.js';
 import { renderHistoryView } from './components/history-view.js';
-import { renderUsageView, usageFingerprint, pickCritLimit, bindUsageCharts } from './components/usage-view.js';
-import { renderInsightsView, insightsFingerprint } from './components/insights-view.js';
+import { renderUsageView, pickCritLimit, bindUsageCharts } from './components/usage-view.js';
+import { renderInsightsView } from './components/insights-view.js';
 import { initSettings, openSettingsView } from './components/settings-panel.js';
 
 /** Agents whose sessions can receive dispatched messages (mirror of main process). */
@@ -77,7 +79,7 @@ function shortAgentName(agent) {
 }
 
 const ATTENTION_STATUSES = ['permission-request', 'question', 'needs-attention'];
-const VIEW_ORDER = ['sessions', 'history', 'usage', 'insights', 'settings'];
+const VIEW_ORDER = ['sessions', 'history', 'analytics', 'settings'];
 
 /** Active attention queue (unacked) — priority order matches main sort. */
 function isInAttentionQueue(session) {
@@ -93,22 +95,25 @@ function isInAttentionQueue(session) {
  * Integrates autohide, single-window unified UI, expandable sessions,
  * date-grouped history, and task dispatch.
  */
-class App {
+export class App {
   constructor() {
     this.sessions = [];
     this.history = [];
     this.usageLimits = [];
     /** Usage dashboard data + selected range (days) + burn chart metric */
     this.usageStats = null;
-    this.usageRange = 7;
+    this.usageRange = 30;
+    this.analyticsSection = 'usage';
+    this.analyticsAgent = 'all';
+    this.usageChartState = {};
+    this.performanceStats = null;
+    this._analyticsFetchedAt = 0;
+    this._analyticsLoading = false;
+    this._analyticsError = '';
+    this._manualCollapsed = new Set();
     this.usageChartMode = 'tokens';
-    this._usageStatsFetchedAt = 0;
-    this._lastUsageViewFp = '\x00init';
     /** Conversation insights data + selected range (days; 0 = all) */
     this.insights = null;
-    this.insightsRange = 30;
-    this._insightsFetchedAt = 0;
-    this._lastInsightsFp = '\x00init';
     this.currentView = 'sessions';
     this.isExpanded = false;
     this.isAutoHidden = false;
@@ -127,6 +132,7 @@ class App {
     this._lastSessionsFp = '\x00init';
     this._lastUsageFp = '';
     this._knownSessionIds = new Set();
+    this._pressedSession = null;
     /** Fold keys of long activity rows the user expanded (survives poll rebuilds) */
     this.expandedActivityKeys = new Set();
     /** Dispatch target dropdown state */
@@ -155,7 +161,6 @@ class App {
     this.defaultDispatchAgent = '';
     this.defaultProjectCwd = '';
     this.defaultLaunchProfile = 'ask';
-    this._questionIdentity = '';
     this._dispatchLandedTimer = null;
     this._viewMotionTimer = null;
   }
@@ -279,7 +284,7 @@ class App {
         const newlyAttention = sessions.find(s =>
           isInAttentionQueue(s) && !this._prevAttentionIds.has(s.id)
         );
-        if (newlyAttention) {
+        if (newlyAttention && !this._manualCollapsed.has(newlyAttention.id)) {
           this.expandedSessionId = newlyAttention.id;
         }
         // Track active queue membership (episode acks drop out)
@@ -296,9 +301,9 @@ class App {
           this.usageLimits = usage || [];
           this.renderUsageBar();
           this.renderNotchLimitChip();
-          if (this.currentView === 'usage') {
-            this._lastUsageViewFp = '\x00force';
-            this.renderUsageDashboard();
+          if (this.currentView === 'analytics') {
+            this.renderAnalytics();
+
           }
         });
       }
@@ -499,6 +504,7 @@ class App {
 
     const target = queue[idx];
     this.expandedSessionId = target.id;
+    this._manualCollapsed.delete(target.id);
     this._lastSessionsFp = '\x00force';
     this.renderSessions();
 
@@ -507,7 +513,7 @@ class App {
         `.session-card[data-session-id="${CSS.escape(target.id)}"]`
       );
       if (card) {
-        card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        card.scrollIntoView({ block: 'nearest', behavior: 'instant' });
         try { card.focus({ preventScroll: true }); } catch { /* ignore */ }
       }
     });
@@ -545,6 +551,7 @@ class App {
       const res = await window.agentNotch.clearAttentionAck(sessionId);
       if (res && res.success) {
         this.expandedSessionId = sessionId;
+        this._manualCollapsed.delete(sessionId);
         this.showToast(res.message || 'Back in queue', 'ok');
       } else {
         this.showToast((res && res.message) || 'Could not restore', 'error');
@@ -694,6 +701,8 @@ class App {
     if (!appEl) return;
 
     appEl.className = 'notch';
+    const panel = document.getElementById('notch-panel');
+    if (panel) panel.inert = !this.isExpanded;
     if (this.isExpanded) {
       appEl.classList.add('expanded');
     } else if (this.isAutoHidden) {
@@ -704,6 +713,18 @@ class App {
   }
 
   initTabs() {
+    this.initAnalytics();
+    this._observedCards = new WeakSet();
+    this._sessionVisibility = new IntersectionObserver(entries => {
+      entries.forEach(entry => { entry.target.dataset.motionVisible = String(entry.isIntersecting); });
+    }, { root: document.getElementById('view-sessions') });
+    document.addEventListener('pointerdown', e => {
+      this._pressedSession = e.target.closest('.session-card')?.dataset.sessionId || null;
+    });
+    document.addEventListener('pointerup', () => { this._pressedSession = null; });
+    document.addEventListener('pointercancel', () => { this._pressedSession = null; });
+    document.querySelectorAll('.view').forEach(v => { v.inert = !v.classList.contains('active'); });
+    document.addEventListener('visibilitychange', () => { document.body.classList.toggle('motion-paused', document.hidden); });
     const tabs = document.querySelectorAll('.ntab:not(.ntab-icon)');
     tabs.forEach(tab => {
       tab.addEventListener('click', (e) => {
@@ -743,6 +764,10 @@ class App {
 
   switchView(viewName) {
     if (!viewName) return;
+    if (viewName === 'usage' || viewName === 'insights') {
+      this.analyticsSection = viewName;
+      viewName = 'analytics';
+    }
     const prevName = this.currentView;
     this._setActiveTab(viewName);
 
@@ -775,7 +800,7 @@ class App {
         views.forEach((v) => {
           v.classList.remove('from-left', 'from-right', 'to-left', 'to-right');
         });
-      }, 320);
+      }, 180);
     } else {
       views.forEach((v) => {
         v.classList.remove('from-left', 'from-right', 'to-left', 'to-right');
@@ -784,14 +809,14 @@ class App {
     }
 
     this.currentView = viewName;
+    views.forEach(v => { v.inert = v.id !== `view-${viewName}`; });
     this.syncTabInk();
 
-    if (viewName === 'history') {
+    if (viewName === 'analytics') {
+      this.loadAnalytics();
+    } else if (viewName === 'history') {
       this.loadHistory();
-    } else if (viewName === 'usage') {
-      this.loadUsageStats();
-    } else if (viewName === 'insights') {
-      this.loadInsights();
+
     } else {
       this.render();
     }
@@ -811,118 +836,118 @@ class App {
     this.render();
   }
 
-  async loadUsageStats() {
-    if (window.agentNotch && window.agentNotch.getUsageStats) {
-      try {
-        this.usageStats = await window.agentNotch.getUsageStats();
-        this._usageStatsFetchedAt = Date.now();
-      } catch (err) {
-        this.usageStats = this.usageStats || { updatedAt: Date.now(), buckets: [], sessionTime: [] };
-        this.showToast(`Failed to load usage: ${err.message}`, 'error');
+  initAnalytics() {
+    const view = document.getElementById('view-analytics');
+    view.addEventListener('click', e => {
+      const section = e.target.closest('[data-analytics-section]');
+      const range = e.target.closest('[data-analytics-range]');
+      const metric = e.target.closest('[data-analytics-metric]');
+      if (!section && !range && !metric) return;
+      if (section) {
+        this._analyticsScroll ||= {};
+        this._analyticsScroll[this.analyticsSection] = view.scrollTop;
+        this.analyticsSection = section.dataset.analyticsSection;
+        this._pendingAnalyticsScroll = this._analyticsScroll[this.analyticsSection] || 0;
       }
-    } else {
-      // Dev mode fallback
-      this.usageStats = getMockUsageStats();
-      this._usageStatsFetchedAt = Date.now();
-    }
-    this.render();
+      if (range) this.usageRange = Number(range.dataset.analyticsRange);
+      if (metric) this.usageChartMode = metric.dataset.analyticsMetric;
+      this.renderAnalytics();
+    });
+    document.getElementById('analytics-agent').addEventListener('change', e => {
+      this.analyticsAgent = e.target.value;
+      this.renderAnalytics();
+    });
+    // Sampling the visible dashboard does not depend on an agent producing output.
+    this._analyticsRefreshTimer = setInterval(() => {
+      if (this.isExpanded && this.currentView === 'analytics' && !document.hidden) this.loadAnalytics();
+    }, 15000);
+    window.addEventListener('beforeunload', () => clearInterval(this._analyticsRefreshTimer), { once: true });
   }
 
-  /**
-   * Throttled refresh while the usage view is open — piggybacks on the
-   * sessions poll so the dashboard tracks live token burn without a
-   * dedicated push channel.
-   */
+  async loadAnalytics() {
+    if (this._analyticsLoading) return;
+    this._analyticsLoading = true;
+    const generation = this._analyticsGeneration || 0;
+    this._analyticsError = '';
+    this.renderAnalytics();
+    const api = window.agentNotch;
+    const results = await Promise.allSettled([
+      api ? api.getUsageStats() : Promise.resolve(getMockUsageStats()),
+      api ? api.getInsights() : Promise.resolve(getMockInsights()),
+      api?.getPerformanceStats ? api.getPerformanceStats() : Promise.resolve({ enabled: true, days: [], episodes: [], coverageStart: null })
+    ]);
+    if (generation !== (this._analyticsGeneration || 0)) { this._analyticsLoading = false; return; }
+    ['usageStats', 'insights', 'performanceStats'].forEach((key, i) => {
+      if (results[i].status === 'fulfilled') this[key] = results[i].value;
+      else this._analyticsError += `${['Usage', 'Insights', 'Performance'][i]} could not refresh. `;
+    });
+    this._analyticsFetchedAt = Date.now();
+    this._analyticsLoading = false;
+    if (this.currentView === 'analytics') this.renderAnalytics();
+  }
+
+  renderAnalytics() {
+    const content = document.getElementById('analytics-content');
+    const view = document.getElementById('view-analytics');
+    if (!content || !view) return;
+    view.querySelectorAll('[data-analytics-section]').forEach(btn => {
+      btn.setAttribute('aria-pressed', String(btn.dataset.analyticsSection === this.analyticsSection));
+    });
+    view.querySelectorAll('[data-analytics-range]').forEach(btn => {
+      const active = Number(btn.dataset.analyticsRange) === this.usageRange;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+    view.querySelectorAll('[data-analytics-metric]').forEach(btn => {
+      const active = btn.dataset.analyticsMetric === this.usageChartMode;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+    document.getElementById('analytics-metric').hidden = this.analyticsSection !== 'usage';
+    const agents = new Set([
+      ...(this.usageStats?.buckets || []), ...(this.usageStats?.sessionTime || []),
+      ...(this.insights?.records || []), ...(this.performanceStats?.days || [])
+    ].map(row => row.agent).filter(Boolean));
+    const select = document.getElementById('analytics-agent');
+    if (this.analyticsAgent !== 'all') agents.add(this.analyticsAgent);
+    const agentNames = [...agents].sort();
+    const agentKey = agentNames.join('|');
+    if (select.dataset.agents !== agentKey) {
+      select.replaceChildren(new Option('All agents', 'all'), ...agentNames.map(name => new Option(name, name)));
+      select.value = this.analyticsAgent;
+      select.dataset.agents = agentKey;
+    }
+    const message = document.getElementById('analytics-message');
+    message.textContent = this._analyticsError || (this._analyticsLoading ? 'Refreshing local data…' : 'Local data · Refreshes every 15 seconds');
+    const matches = row => this.analyticsAgent === 'all' || row.agent === this.analyticsAgent;
+    const usage = { ...this.usageStats, buckets: (this.usageStats?.buckets || []).filter(matches), sessionTime: (this.usageStats?.sessionTime || []).filter(matches) };
+    const insights = { ...this.insights, records: (this.insights?.records || []).filter(matches) };
+    const data = this.analyticsSection === 'usage' ? usage : this.analyticsSection === 'insights' ? insights : this.performanceStats;
+    const available = this.analyticsSection === 'usage' ? this.usageStats : this.analyticsSection === 'insights' ? this.insights : this.performanceStats;
+    const fingerprint = JSON.stringify([Boolean(available), this._analyticsLoading, this.analyticsSection, this.usageRange, this.analyticsAgent, this.usageChartMode, data, this.usageLimits]);
+    if (fingerprint === this._lastAnalyticsFp) return;
+    this._lastAnalyticsFp = fingerprint;
+    const focused = content.contains(document.activeElement) ? document.activeElement.getAttribute('data-usage-focus') : null;
+    const openDetails = [...content.querySelectorAll('details')].map(d => d.open);
+    const scroll = this._pendingAnalyticsScroll ?? view.scrollTop;
+    this._pendingAnalyticsScroll = null;
+    if (!available && this._analyticsLoading) {
+      content.innerHTML = '<div class="analytics-skeleton" aria-label="Loading analytics"><span></span><span></span><span></span></div>';
+    } else if (this.analyticsSection === 'usage') {
+      content.innerHTML = renderUsageView(usage, this.usageRange, this.usageChartMode, this.usageLimits, { controls: false });
+      bindUsageCharts(content, this.usageChartState);
+    } else if (this.analyticsSection === 'insights') {
+      content.innerHTML = renderInsightsView(insights, this.usageRange, { controls: false });
+    } else {
+      content.innerHTML = renderPerformanceView(this.performanceStats, this.usageRange, this.analyticsAgent);
+    }
+    content.querySelectorAll('details').forEach((d, i) => { d.open = Boolean(openDetails[i]); });
+    if (focused) content.querySelector(`[data-usage-focus="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+    view.scrollTop = scroll;
+  }
+
   _maybeRefreshUsageStats() {
-    if (this.currentView === 'usage') {
-      if (Date.now() - this._usageStatsFetchedAt < 15000) return;
-      this.loadUsageStats();
-    } else if (this.currentView === 'insights') {
-      if (Date.now() - this._insightsFetchedAt < 30000) return;
-      this.loadInsights();
-    }
-  }
-
-  async loadInsights() {
-    if (window.agentNotch && window.agentNotch.getInsights) {
-      try {
-        this.insights = await window.agentNotch.getInsights();
-        this._insightsFetchedAt = Date.now();
-      } catch (err) {
-        this.insights = this.insights || { updatedAt: Date.now(), records: [] };
-        this.showToast(`Failed to load insights: ${err.message}`, 'error');
-      }
-    } else {
-      // Dev mode fallback
-      this.insights = getMockInsights();
-      this._insightsFetchedAt = Date.now();
-    }
-    this.render();
-  }
-
-  renderInsights() {
-    const container = document.getElementById('insights-list');
-    if (!container) return;
-
-    const data = this.insights || { updatedAt: 0, records: [] };
-    const fp = insightsFingerprint(data, this.insightsRange);
-    if (fp === this._lastInsightsFp && container.dataset.bound === '1') return;
-    this._lastInsightsFp = fp;
-    container.dataset.bound = '1';
-
-    container.innerHTML = renderInsightsView(data, this.insightsRange);
-
-    container.querySelectorAll('.usage-range-btn[data-insight-range]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const days = parseInt(btn.dataset.insightRange, 10);
-        if (!Number.isFinite(days) || days === this.insightsRange) return;
-        this.insightsRange = days;
-        this.renderInsights();
-      });
-    });
-  }
-
-  renderUsageDashboard() {
-    const container = document.getElementById('usage-list');
-    if (!container) return;
-
-    const stats = this.usageStats || { updatedAt: 0, buckets: [], sessionTime: [] };
-    const limitsFp = (this.usageLimits || [])
-      .map((u) => `${u.id}|${u.usedPercent ?? 'na'}|${u.available ? 1 : 0}`)
-      .join(';');
-    const fp = `${usageFingerprint(stats, this.usageRange, this.usageChartMode)}|${limitsFp}`;
-    if (fp === this._lastUsageViewFp && container.dataset.bound === '1') return;
-    this._lastUsageViewFp = fp;
-    container.dataset.bound = '1';
-
-    container.innerHTML = renderUsageView(
-      stats,
-      this.usageRange,
-      this.usageChartMode,
-      this.usageLimits
-    );
-    bindUsageCharts(container);
-
-    container.querySelectorAll('.usage-range-btn[data-range]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const days = parseInt(btn.dataset.range, 10);
-        if (!Number.isFinite(days) || days === this.usageRange) return;
-        this.usageRange = days;
-        this.renderUsageDashboard();
-      });
-    });
-
-    container.querySelectorAll('.usage-range-btn[data-chart-mode]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const mode = btn.dataset.chartMode;
-        if (!mode || mode === this.usageChartMode) return;
-        this.usageChartMode = mode;
-        this.renderUsageDashboard();
-      });
-    });
+    if (this.currentView === 'analytics' && this.isExpanded && Date.now() - this._analyticsFetchedAt >= 15000) this.loadAnalytics();
   }
 
   /**
@@ -1417,10 +1442,9 @@ class App {
       this.renderSessions();
     } else if (this.currentView === 'history') {
       this.renderHistory();
-    } else if (this.currentView === 'usage') {
-      this.renderUsageDashboard();
-    } else if (this.currentView === 'insights') {
-      this.renderInsights();
+    } else if (this.currentView === 'analytics') {
+      this.renderAnalytics();
+
     }
     this.updateBadges();
     this.updateLaserState();
@@ -1688,31 +1712,20 @@ class App {
     const sessionsFp = this._sessionFingerprint(activeSessions) +
       `\x1d${this.expandedSessionId || ''}\x1d${appearanceKey}`;
 
-    const questionIdentity = activeSessions
-      .map((s) => `${s.id}\x1f${s.status}\x1f${s.question?.requestId || ''}`)
-      .join('\x1e');
-    // Don't wipe an in-progress answer when the poll only refreshes duration.
-    const editingQuestion = list.querySelector('.session-question input:focus');
-    if (
-      editingQuestion &&
-      list.dataset.bound === '1' &&
-      questionIdentity === this._questionIdentity
-    ) {
-      return;
-    }
-
     // Skip full card rebuild when content is unchanged (stops poll-driven flicker)
     if (sessionsFp === this._lastSessionsFp && list.dataset.bound === '1') {
       return;
     }
     this._lastSessionsFp = sessionsFp;
-    this._questionIdentity = questionIdentity;
 
     if (activeSessions.length === 0) {
+      this._sessionVisibility?.disconnect();
+      this._observedCards = new WeakSet();
       list.innerHTML = '';
       list.dataset.bound = '0';
       this._knownSessionIds.clear();
       this._userPinnedExpand.clear();
+      this._manualCollapsed.clear();
       const toolbar = document.getElementById('sessions-toolbar');
       if (toolbar) toolbar.hidden = true;
       if (empty) empty.style.display = '';
@@ -1746,6 +1759,10 @@ class App {
       for (const id of this._userPinnedExpand) {
         if (!liveIds.has(id)) this._userPinnedExpand.delete(id);
       }
+    }
+
+    for (const id of this._manualCollapsed) {
+      if (!activeSessions.some(s => s.id === id)) this._manualCollapsed.delete(id);
     }
 
     // Auto-collapse finished: drop expand when session is idle and user didn't pin it
@@ -1867,9 +1884,43 @@ class App {
       }
     }
 
-    const questionDrafts = snapshotQuestionDrafts(list);
-    list.innerHTML = html;
-    restoreQuestionDrafts(list, questionDrafts);
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    const oldCards = [...list.querySelectorAll('.session-card')];
+    const positions = new Map(oldCards.map(card => [card, card.getBoundingClientRect()]));
+    const focusedCard = document.activeElement?.closest('.session-card');
+    const selection = window.getSelection();
+    const selectedCard = selection && !selection.isCollapsed
+      ? selection.anchorNode?.parentElement?.closest('.session-card') : null;
+    const interacting = focusedCard || selectedCard || this._pressedSession;
+    reconcileChildren(list, template.content, { preserveOrder: Boolean(interacting), preserveNode: selectedCard });
+    oldCards.filter(card => !card.isConnected).forEach(card => this._sessionVisibility?.unobserve(card));
+    list.querySelectorAll('.session-card').forEach(card => {
+      if (!this._observedCards?.has(card)) {
+        this._sessionVisibility?.observe(card);
+        this._observedCards?.add(card);
+      }
+    });
+    if (!interacting && !this.prefersReducedMotion()) {
+      for (const card of list.querySelectorAll('.session-card')) {
+        const before = positions.get(card);
+        const after = card.getBoundingClientRect();
+        if (before && Math.abs(before.top - after.top) > 1) {
+          card.getAnimations().filter(a => a.id === 'reorder').forEach(a => a.cancel());
+          const animation = card.animate([{ transform: `translateY(${before.top - after.top}px)` }, { transform: 'translateY(0)' }],
+            { duration: 200, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+          animation.id = 'reorder';
+        }
+      }
+    }
+    list.querySelectorAll('.card-enter').forEach(card => {
+      const finish = () => {
+        card.classList.remove('card-enter');
+        card.classList.add('card-static');
+      };
+      if (this.prefersReducedMotion()) finish();
+      else card.onanimationend = e => { if (e.target === card) finish(); };
+    });
 
     this._knownSessionIds = nextIds;
     list.dataset.bound = '1';
@@ -1877,7 +1928,7 @@ class App {
     // Restore expanded class / choose default expand
     const pickAutoExpandId = () => {
       // Prefer attention → working; finished only if auto-collapse is off
-      const fromFiltered = filtered.length ? filtered : activeSessions;
+      const fromFiltered = (filtered.length ? filtered : activeSessions).filter(s => !this._manualCollapsed.has(s.id));
       const att = fromFiltered.find((s) => isInAttentionQueue(s));
       if (att) return att.id;
       const work = fromFiltered.find((s) => s.status === 'working');
@@ -1918,6 +1969,8 @@ class App {
     this._lastSessionsFp = this._sessionFingerprint(activeSessions) +
       `\x1d${this.expandedSessionId || ''}\x1d${appearanceKey}`;
 
+    if (interacting) this._lastSessionsFp = ''; // Apply deferred ordering after interaction ends.
+
     // Keep live activity feed pinned to the latest event (unless user scrolled up)
     if (this.expandedSessionId) {
       const feed = list.querySelector(
@@ -1931,6 +1984,10 @@ class App {
         }
       }
     }
+
+    this._sessionBindings?.abort();
+    this._sessionBindings = new AbortController();
+    const listen = (element, type, callback) => element.addEventListener(type, callback, { signal: this._sessionBindings.signal });
 
     // Attach card expansion toggle (click + keyboard)
     const toggleCard = (target) => {
@@ -1946,6 +2003,7 @@ class App {
         target.classList.add('expanded');
         target.setAttribute('aria-expanded', 'true');
         this.expandedSessionId = sessionId;
+        this._manualCollapsed.delete(sessionId);
         // User opened a finished card — pin so auto-collapse won't close it
         const sess = activeSessions.find((s) => s.id === sessionId);
         if (sess && sess.status === 'idle') {
@@ -1962,6 +2020,7 @@ class App {
         });
       } else {
         this.expandedSessionId = null;
+        this._manualCollapsed.add(sessionId);
         this._userPinnedExpand.delete(sessionId);
         this._lastSessionsFp = this._sessionFingerprint(activeSessions) +
           `\x1d\x1d${appearanceKey}`;
@@ -1972,7 +2031,7 @@ class App {
       if (card.classList.contains('expanded')) {
         card.setAttribute('aria-expanded', 'true');
       }
-      card.addEventListener('click', (e) => {
+      listen(card, 'click', (e) => {
         // Don't toggle when selecting text in the activity feed / prompt
         if (e.target.closest('.activity-live-feed, .session-prompt, .approval-diff, button, a, input, select, textarea')) {
           e.stopPropagation();
@@ -1980,7 +2039,7 @@ class App {
         }
         toggleCard(e.currentTarget);
       });
-      card.addEventListener('keydown', (e) => {
+      listen(card, 'keydown', (e) => {
         // Inner controls (fold toggle, allow/deny, options) handle their own keys
         if (e.target.closest('button, a, input, select, textarea')) return;
         if (e.key === 'Enter' || e.key === ' ') {
@@ -1992,7 +2051,7 @@ class App {
 
     // Attach inline action listeners (stopPropagation is key here so card doesn't toggle)
     list.querySelectorAll('.activity-toggle').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const row = btn.closest('.activity-row');
         if (!row) return;
@@ -2010,7 +2069,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-allow').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleApprove(sid);
@@ -2018,7 +2077,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-deny').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleDeny(sid);
@@ -2026,7 +2085,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-always-allow').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleAlwaysAllow(sid);
@@ -2034,11 +2093,11 @@ class App {
     });
 
     list.querySelectorAll('.session-question').forEach((block) => {
-      block.addEventListener('click', (e) => e.stopPropagation());
+      listen(block, 'click', (e) => e.stopPropagation());
     });
 
     list.querySelectorAll('.question-submit').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const form = btn.closest('.question-form');
         const sid = btn.dataset.sessionId;
@@ -2053,7 +2112,7 @@ class App {
     });
 
     list.querySelectorAll('.question-approve').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleAnswer(sid, { answers: {} });
@@ -2061,7 +2120,7 @@ class App {
     });
 
     list.querySelectorAll('.question-decline').forEach((btn) => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         const note = btn.closest('.session-question')?.querySelector('.question-note');
@@ -2070,7 +2129,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-jump').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid && window.agentNotch) {
@@ -2087,7 +2146,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-open-folder').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listen(btn, 'click', async (e) => {
         e.stopPropagation();
         const cwd = btn.dataset.cwd;
         if (!cwd || !window.agentNotch?.openPath) return;
@@ -2105,7 +2164,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-copy-cwd').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listen(btn, 'click', async (e) => {
         e.stopPropagation();
         const cwd = btn.dataset.cwd;
         if (!cwd) return;
@@ -2127,7 +2186,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-dismiss').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listen(btn, 'click', async (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (!sid || !window.agentNotch || !window.agentNotch.dismissSession) return;
@@ -2147,7 +2206,7 @@ class App {
 
     // Clear attention from queue (session stays)
     list.querySelectorAll('.btn-clear-attention').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleDismissAttention(sid);
@@ -2155,7 +2214,7 @@ class App {
     });
 
     list.querySelectorAll('.btn-restore-attention, .attention-ack-chip').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid) this.handleRestoreAttention(sid);
@@ -2164,7 +2223,7 @@ class App {
 
     // Snooze menu toggle
     list.querySelectorAll('.btn-snooze').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         const wrap = btn.closest('.snooze-menu-wrap');
         if (!wrap) return;
@@ -2183,7 +2242,7 @@ class App {
     });
 
     list.querySelectorAll('.snooze-option').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
+      listen(btn, 'click', async (e) => {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         const preset = btn.dataset.preset;
@@ -2216,14 +2275,14 @@ class App {
     };
 
     list.querySelectorAll('.btn-clear-snooze').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         clearSnooze(btn.dataset.sessionId);
       });
     });
 
     list.querySelectorAll('.snooze-chip').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      listen(btn, 'click', (e) => {
         e.stopPropagation();
         clearSnooze(btn.dataset.sessionId);
       });
@@ -2456,45 +2515,6 @@ class App {
 function statusClass(el, cls) {
   el.classList.remove('working', 'idle', 'attention');
   if (cls) el.classList.add(cls);
-}
-
-function snapshotQuestionDrafts(root) {
-  const drafts = new Map();
-  if (!root) return drafts;
-  root.querySelectorAll('.session-question').forEach((block) => {
-    const sid = block.dataset.sessionId;
-    if (!sid) return;
-    const draft = { note: '', others: {}, checked: {} };
-    const note = block.querySelector('.question-note');
-    if (note) draft.note = note.value;
-    block.querySelectorAll('.question-item').forEach((item) => {
-      const question = item.dataset.question || '';
-      const other = item.querySelector('.question-other-input');
-      if (other) draft.others[question] = other.value;
-      draft.checked[question] = [...item.querySelectorAll('input:checked')].map((input) => input.value);
-    });
-    drafts.set(sid, draft);
-  });
-  return drafts;
-}
-
-function restoreQuestionDrafts(root, drafts) {
-  if (!root || !drafts || drafts.size === 0) return;
-  root.querySelectorAll('.session-question').forEach((block) => {
-    const draft = drafts.get(block.dataset.sessionId || '');
-    if (!draft) return;
-    const note = block.querySelector('.question-note');
-    if (note && draft.note) note.value = draft.note;
-    block.querySelectorAll('.question-item').forEach((item) => {
-      const question = item.dataset.question || '';
-      const other = item.querySelector('.question-other-input');
-      if (other && draft.others[question]) other.value = draft.others[question];
-      const picked = draft.checked[question] || [];
-      item.querySelectorAll('input[type="radio"], input[type="checkbox"]').forEach((input) => {
-        if (picked.includes(input.value)) input.checked = true;
-      });
-    });
-  });
 }
 
 function collectQuestionAnswers(form) {
@@ -2743,5 +2763,5 @@ function getMockHistory() {
   ];
 }
 
-const app = new App();
+export const app = new App();
 document.addEventListener('DOMContentLoaded', () => app.init());
