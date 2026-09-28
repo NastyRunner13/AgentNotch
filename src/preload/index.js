@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('agentNotch', {
 
   // Usage dashboard (token/cost buckets + session-time aggregates)
   getUsageStats: () => ipcRenderer.invoke('get-usage-stats'),
+  getPerformanceStats: () => ipcRenderer.invoke('get-performance-stats'),
+  clearPerformanceStats: () => ipcRenderer.invoke('clear-performance-stats'),
 
   // Conversation insights (intent / work type / complexity / specificity)
   getInsights: () => ipcRenderer.invoke('get-insights'),

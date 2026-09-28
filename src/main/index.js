@@ -877,6 +877,9 @@ app.whenReady().then(() => {
     return agentManager.getUsageStats();
   });
 
+  ipcMain.handle('get-performance-stats', () => agentManager.getPerformanceStats());
+  ipcMain.handle('clear-performance-stats', () => agentManager.clearPerformanceStats());
+
   ipcMain.handle('get-insights', () => {
     return agentManager.getInsights();
   });
