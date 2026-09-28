@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "electron .",
     "test": "node --test",
+    "test:renderer": "electron scripts/check-renderer.cjs",
     "permission-bridge": "node src/main/permissions/permission-bridge.js",
     "build": "node scripts/release-build.js",
     "build:win": "node scripts/release-build.js win",
