@@ -87,17 +87,18 @@ Allow or Deny Claude Code `PermissionRequest` prompts directly from the notch �
 ### Live Session Cards
 See the running model (`Grok 4.5`, `Gemini 1.5 Pro`, etc.), a live activity feed of recent commands and edited files, and current execution parameters — all on the session card.
 
-### Usage Dashboard
-A dedicated **Usage** tab with deep analytics — all computed locally:
+### Analytics
 
-- **Metrics:** Session time, tokens burned, estimated cost, session counts
-- **Breakdowns:** Per-agent and per-model splits over Today / 7D / 30D / 90D
-- **Charts:** Stacked daily burn chart (tokens or cost by agent), cumulative spend trajectory
-- **Token mix:** Cache-read share breakdown
-- **Derived stats:** Cost per session, average session length, model cost share
-- **Backfill:** History reconstructed on first run by scanning local agent records
+The Analytics tab contains Usage, Performance, and Insights, with shared Today / 7D / 30D / 90D and agent filters.
 
-Daily buckets persist under `~/.agent-notch/usage-stats.json`; costs are list-price estimates unless the agent reports actual cost.
+- **Usage:** Token and cost trends, agent/model breakdowns, token mix, and estimated active time. Charts support pointer inspection and arrow keys, Home, End, and Escape. A table exposes their values.
+- **Cost sources:** Reported, estimated, mixed, partial, or unavailable. Missing pricing never becomes zero spending. Daily average replaces cost per session, whose denominator could repeat across models and days.
+- **Performance:** Observed working time, waiting-for-user time, attention episodes, completions, and median working time per fully observed episode. A completion means a return to idle, not a verified successful task.
+- **Insights:** Local heuristic conversation patterns, including sample size and confidence.
+
+Usage history remains in `~/.agent-notch/usage-stats.json`. Performance aggregates are stored separately in `~/.agent-notch/performance-stats.json` for 90 days, starting when collection begins. Sleep, restart, and observation gaps are excluded. Settings can pause collection or clear performance data. Prompts and transcript content are not copied into this file. Previous-period usage comparisons remain unavailable without complete coverage metadata.
+
+The UI bundles IBM Plex Sans and JetBrains Mono locally. Stable session cards retain focus, answers, scroll, and explicit collapse choices during updates. Each visible running card has one blue activity sweep; hidden cards and reduced-motion mode stop the loops.
 
 ### Session Dispatch
 Message any running agent session directly from the expanded notch — pick a live session and the prompt resumes that exact chat headlessly (no new windows), or start a new headless session for an agent in its most recent project directory.
@@ -127,6 +128,7 @@ npm run dev
 Run the test suite:
 ```bash
 npm test
+npm run test:renderer # Isolated Electron checks with mock data
 npm run audit:prod
 ```
 
