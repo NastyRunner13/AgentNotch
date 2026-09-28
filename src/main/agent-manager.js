@@ -18,6 +18,7 @@ const {
 } = require('./settings/settings-defaults');
 const { collectUsageLimits, detectLimitCrossings } = require('./usage/usage-limits');
 const { UsageTracker, dayKey, sessionActiveMs } = require('./usage/usage-stats');
+const { PerformanceTracker } = require('./usage/performance-stats');
 const { scanUsageHistory } = require('./usage/usage-backfill');
 const { buildInsights } = require('./insights/insights');
 const permissionBridge = require('./permissions/permission-bridge');
@@ -159,6 +160,7 @@ class AgentManager extends EventEmitter {
     this._usageTimer = null;
     /** Token/cost accumulation into persisted daily buckets (dashboard data) */
     this._usageTracker = new UsageTracker();
+    this._performanceTracker = new PerformanceTracker({ enabled: this.settings.collectPerformance !== false });
     /** Delayed one-shot history backfill timer */
     this._backfillTimer = null;
     /** @type {import('chokidar').FSWatcher|null} */
@@ -357,6 +359,7 @@ class AgentManager extends EventEmitter {
   }
 
   stop() {
+    this.suspendPerformance();
     for (const watcher of Object.values(this.watchers)) {
       watcher.stop();
     }
@@ -495,6 +498,7 @@ class AgentManager extends EventEmitter {
     if (this._emitTimer) return;
     this._emitTimer = setTimeout(() => {
       this._emitTimer = null;
+      this._observePerformance();
       const sessions = this.getSessions();
       this._detectStatusTransitions(sessions);
       try {
@@ -607,6 +611,45 @@ class AgentManager extends EventEmitter {
       this._refreshUsageLimits();
     }
     return this._usageLimits || [];
+  }
+
+  _observePerformance() {
+    if (!this._performanceTracker.enabled || this._performanceTracker.suspended) return;
+    const raw = [];
+    for (const [key, watcher] of Object.entries(this.watchers)) {
+      const agent = key.replace(/Wsl$/, '');
+      if (this.settings[`enable${agent[0].toUpperCase()}${agent.slice(1)}`] === false) continue;
+      try { raw.push(...watcher.getSessions()); } catch {
+        // A failed watcher is missing observation, never a synthetic idle state.
+      }
+    }
+    const sessions = permissionBridge.mergePendingIntoSessions(raw);
+    this._performanceTracker.ingest(sessions.map(session => ({
+      id: session.id,
+      agent: session.agent,
+      status: session.status,
+      attentionEpisodeKey: attentionEpisodeKey(session)
+    })));
+  }
+
+  getPerformanceStats() {
+    this._observePerformance();
+    return this._performanceTracker.getStats();
+  }
+
+  clearPerformanceStats() {
+    return this._performanceTracker.clear();
+  }
+
+  suspendPerformance() {
+    try { this._performanceTracker.suspend(); } catch (err) {
+      console.warn('[Performance] Could not save checkpoint:', err.message);
+    }
+  }
+
+  resumePerformance() {
+    this._performanceTracker.resume();
+    this._scheduleEmit();
   }
 
   /**
@@ -1150,6 +1193,9 @@ class AgentManager extends EventEmitter {
       safeUpdate[key] = newSettings[key];
     }
     Object.assign(this.settings, safeUpdate);
+    if (this.settings.collectPerformance !== prev.collectPerformance) {
+      this._performanceTracker.setEnabled(this.settings.collectPerformance !== false);
+    }
 
     // Masters gate delivery in attention-policy only — they do not overwrite the
     // matrix, so turning a master back on restores the user's prior event picks.
