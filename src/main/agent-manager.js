@@ -165,7 +165,7 @@ class AgentManager extends EventEmitter {
     this._backfillTimer = null;
     /** @type {import('chokidar').FSWatcher|null} */
     this._permissionWatcher = null;
-    /** @type {Set<string>} pending request ids already used for attention emit */
+    /** @type {Set<string>} pending request ids already checked for remembered approval */
     this._knownPendingIds = new Set();
     this._permissionMemoryPath = permissionMemory.defaultMemoryPath();
   }
@@ -441,56 +441,14 @@ class AgentManager extends EventEmitter {
     }
 
     const newly = pending.filter((p) => !this._knownPendingIds.has(p.id));
-    const stillNew = [];
     for (const p of newly) {
       this._knownPendingIds.add(p.id);
-      if (this.settings.alwaysAllowEnabled !== false && this._autoAllowPending(p)) {
-        continue;
-      }
-      stillNew.push(p);
+      if (this.settings.alwaysAllowEnabled !== false) this._autoAllowPending(p);
     }
 
+    // getSessions merges pending requests, including orphan cards. Deliver
+    // attention only through the scheduled episode deduplication below.
     this._scheduleEmit();
-
-    if (stillNew.length > 0) {
-      const sessions = this.getSessions();
-      const attention = [];
-      for (const p of stillNew) {
-        const isQuestion = p.kind === 'question';
-        const match = sessions.find((s) => (
-          isQuestion
-            ? s.question && s.question.requestId === p.id
-            : s.permissionRequest && s.permissionRequest.requestId === p.id
-        ));
-        if (match) {
-          attention.push(match);
-          continue;
-        }
-        if (isQuestion) {
-          const question = permissionBridge.pendingToQuestion(p);
-          attention.push({
-            id: p.notchSessionId || `claude-pending-${p.id}`,
-            agent: 'Claude Code',
-            taskName: question.text || 'Claude asks',
-            status: 'question',
-            question,
-            remoteAnswer: true
-          });
-        } else {
-          attention.push({
-            id: p.notchSessionId || `claude-pending-${p.id}`,
-            agent: 'Claude Code',
-            taskName: p.tool ? `Permission: ${p.tool}` : 'Permission request',
-            status: 'permission-request',
-            permissionRequest: permissionBridge.pendingToPermissionRequest(p),
-            remoteApprove: true
-          });
-        }
-      }
-      if (attention.length > 0) {
-        this.emit('attention', attention);
-      }
-    }
   }
 
   _scheduleEmit() {
@@ -796,13 +754,14 @@ class AgentManager extends EventEmitter {
   }
 
   _autoAllowPending(pending) {
-    if (pending && pending.kind === 'question') return false;
+    if (!pending?._home || pending.kind === 'question') return false;
     try {
       const store = permissionMemory.load(this._permissionMemoryPath);
       const hit = permissionMemory.matches(store, {
         agent: 'claude',
         tool: pending.tool,
-        cwd: pending.cwd
+        cwd: pending.cwd,
+        source: pending._home
       });
       if (!hit) return false;
       const res = permissionBridge.submitDecision(pending.id, 'allow', 'always-allow');
@@ -819,10 +778,17 @@ class AgentManager extends EventEmitter {
     if (!pr || !session.remoteApprove) {
       return { success: false, message: 'No remote permission to remember' };
     }
+    // The hook request owns the scope. Transcript metadata can be stale or
+    // absent, and a tool's target file is not the permission's project cwd.
+    const pending = permissionBridge.listPending().find((p) => p.id === pr.requestId && p.kind !== 'question');
+    if (!pending?._home) {
+      return { success: false, message: 'Permission request expired or its source is unavailable' };
+    }
     const entry = permissionMemory.normalizeEntry({
-      agent: session.agent,
-      tool: pr.tool,
-      cwd: session.cwd || pr.filePath
+      agent: 'claude',
+      tool: pending.tool,
+      cwd: pending.cwd,
+      source: pending._home
     });
     if (!entry) {
       return { success: false, message: 'Need a tool and project folder to remember' };
@@ -831,15 +797,19 @@ class AgentManager extends EventEmitter {
       permissionMemory.load(this._permissionMemoryPath),
       entry
     );
-    permissionMemory.save(store, this._permissionMemoryPath);
-    const allowed = this.approvePermission(sessionId);
+    const allowed = permissionBridge.submitDecision(pending.id, 'allow', 'always-allow');
+    if (!allowed.success) return { ...allowed, remembered: false };
+    this._scheduleEmit();
+    try {
+      permissionMemory.save(store, this._permissionMemoryPath);
+    } catch {
+      return { ...allowed, remembered: false, message: 'Approved once, but could not save the always-allow rule' };
+    }
     return {
-      success: Boolean(allowed && allowed.success),
-      remote: Boolean(allowed && allowed.remote),
+      success: true,
+      remote: true,
       remembered: true,
-      message: allowed && allowed.success
-        ? `Always allow ${pr.tool} in ${entry.project}`
-        : (allowed && allowed.message) || 'Remembered — approve failed',
+      message: `Always allow ${pending.tool} in ${entry.project}`,
       entry
     };
   }

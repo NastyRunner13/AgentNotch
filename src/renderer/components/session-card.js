@@ -1029,12 +1029,13 @@ function renderInlineApproval(session, pr) {
 
 function renderAlwaysAllow(session, pr) {
   const tool = String(pr.tool || 'tool').trim() || 'tool';
-  const project = projectBaseName(session.cwd);
-  if (!project) return '';
+  const project = projectBaseName(pr.cwd);
+  if (!project || !pr.requestId) return '';
   const label = `Always allow ${tool} in ${project}`;
+  const scope = `Allow every ${tool} request in ${pr.cwd} from this agent source`;
   return `<button type="button" class="btn-always-allow"
       data-session-id="${escapeHtml(session.id)}"
-      title="${escapeHtml(label)}">
+      title="${escapeHtml(scope)}" aria-label="${escapeHtml(scope)}">
       ${escapeHtml(label)}
     </button>`;
 }

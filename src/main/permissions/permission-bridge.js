@@ -869,6 +869,7 @@ function getHookStatus() {
 function pendingToPermissionRequest(pending) {
   return {
     tool: pending.tool || 'tool',
+    cwd: pending.cwd || '',
     input: pending.toolInput || null,
     filePath: pending.filePath || '',
     requestId: pending.id,
