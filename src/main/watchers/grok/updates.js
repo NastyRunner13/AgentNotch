@@ -31,7 +31,9 @@ function emptyUpdateState() {
     lastThought: '',
     plan: [],
     isActive: false,
-    turnComplete: false
+    turnComplete: false,
+    turnStartedAt: null,
+    turnCompletedAt: null
   };
 }
 
@@ -61,6 +63,8 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
   let thoughtBuf = '';
   let userBuf = '';
   let turnComplete = false;
+  let turnStartedAt = null;
+  let turnCompletedAt = null;
 
   const flushMessageBuf = (at) => {
     const text = messageBuf.trim();
@@ -99,6 +103,10 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
         if (text) {
           // New user turn — previous turn is no longer complete
           turnComplete = false;
+          turnStartedAt = ts;
+          turnCompletedAt = null;
+          currentTool = null;
+          permissionRequest = null;
           userBuf += text;
           userPrompt = preferUserPrompt(userPrompt, userBuf);
           if (userPrompt && !taskName) taskName = extractTaskName(userPrompt);
@@ -222,6 +230,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
         flushThoughtBuf(at);
         flushMessageBuf(at);
         turnComplete = true;
+        turnCompletedAt = ts;
         status = 'idle';
         currentTool = null;
         permissionRequest = null;
@@ -259,6 +268,12 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     if (role === 'user' || entryType === 'user' || entryType === 'human' || entryType === 'user_message') {
       const content = getText(payload.content || entry.content || payload.message || entry.message);
       if (content) {
+        turnComplete = false;
+        turnStartedAt = ts;
+        turnCompletedAt = null;
+        status = 'working';
+        currentTool = null;
+        permissionRequest = null;
         userPrompt = preferUserPrompt(userPrompt, content);
         if (userPrompt && !taskName) taskName = extractTaskName(userPrompt);
       }
@@ -301,6 +316,7 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
       if (payload.finish_reason === 'stop' || payload.stop_reason === 'end_turn' ||
           entryType === 'task_complete' || entryType === 'done' || payload.done === true) {
         turnComplete = true;
+        turnCompletedAt = ts;
         status = 'idle';
         currentTool = null;
       }
@@ -395,7 +411,9 @@ function analyzeGrokEntries(entries, sessionId, filePath, fileTimes, summaryTitl
     }),
     plan,
     isActive: status === 'working' || status === 'permission-request',
-    turnComplete
+    turnComplete,
+    turnStartedAt,
+    turnCompletedAt
   };
 }
 

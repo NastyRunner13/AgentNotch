@@ -1,4 +1,4 @@
-const { phaseToLabel, uniqueTail } = require('./helpers');
+const { phaseToLabel, uniqueTail, resolveTimestamp } = require('./helpers');
 
 /**
  * Lightweight timeline from events.jsonl.
@@ -12,6 +12,8 @@ function analyzeGrokEvents(entries) {
   const toolCalls = [];
   let pendingPermission = null;
   let turnComplete = false;
+  let turnStartedAt = null;
+  let turnCompletedAt = null;
   let model = null;
 
   for (const entry of entries) {
@@ -44,6 +46,7 @@ function analyzeGrokEvents(entries) {
           }
         } else if (phase === 'idle' || phase === 'done' || phase === 'completed') {
           turnComplete = true;
+          turnCompletedAt = resolveTimestamp(entry);
           status = 'idle';
           currentTool = null;
         }
@@ -96,7 +99,14 @@ function analyzeGrokEvents(entries) {
       case 'loop_started':
       case 'first_token':
         turnComplete = false;
+        turnStartedAt = resolveTimestamp(entry);
+        turnCompletedAt = null;
         status = 'working';
+        currentTool = null;
+        permissionRequest = null;
+        pendingPermission = null;
+        phase = null;
+        phaseLabel = null;
         if (entry.model_id || entry.modelId || entry.model) {
           model = entry.model_id || entry.modelId || entry.model;
         }
@@ -109,6 +119,7 @@ function analyzeGrokEvents(entries) {
         const outcome = (entry.outcome || entry.stop_reason || '').toLowerCase();
         // cancelled / error still means the turn is done from the notch's perspective
         turnComplete = true;
+        turnCompletedAt = resolveTimestamp(entry);
         status = outcome === 'error' || outcome === 'failed' ? 'needs-attention' : 'idle';
         currentTool = null;
         permissionRequest = null;
@@ -147,22 +158,37 @@ function analyzeGrokEvents(entries) {
     permissionRequest,
     toolCalls: uniqueTail(toolCalls, 8),
     turnComplete,
+    turnStartedAt,
+    turnCompletedAt,
     model
   };
 }
 
 /**
  * Merge events + updates into a single live status.
- * Completion (idle) wins over leftover tool/phase "working" signals.
+ * Completion wins over leftover activity unless the other stream explicitly
+ * started a newer turn. File mtimes and arbitrary chunks cannot establish that.
  */
 function mergeGrokStatus({ eventState, updateState, isActive }) {
+  // Discard the older turn as a whole so its tool/permission cannot leak into
+  // the new one. Missing or tied timestamps retain completion precedence.
+  const startsAfter = (active, completed) => Boolean(
+    active && !active.turnComplete && completed && completed.turnComplete &&
+    Number.isFinite(active.turnStartedAt) && active.turnStartedAt > 0 &&
+    Number.isFinite(completed.turnCompletedAt) && completed.turnCompletedAt > 0 &&
+    active.turnStartedAt > completed.turnCompletedAt
+  );
+  if (startsAfter(eventState, updateState)) updateState = {};
+  else if (startsAfter(updateState, eventState)) eventState = null;
+
   let status = updateState.status || 'idle';
   let currentTool = updateState.currentTool || null;
   let permissionRequest = updateState.permissionRequest || null;
 
   const eventStatus = eventState && eventState.status;
   const eventIdle = eventStatus === 'idle' || (eventState && eventState.turnComplete);
-  const updateIdle = updateState.status === 'idle' || updateState.turnComplete;
+  // An empty updates stream defaults to idle but has not completed any turn.
+  const updateIdle = updateState.turnComplete === true;
 
   if (eventState) {
     if (eventState.permissionRequest) {
