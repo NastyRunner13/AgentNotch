@@ -109,6 +109,7 @@ class CursorWatcher extends BaseWatcher {
       }
 
       // Drop stale sessions
+      if (this._readError) return;
       for (const [id] of this.sessions) {
         if (!activeIds.has(id)) this._removeSession(id);
       }

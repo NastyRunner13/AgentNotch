@@ -3,6 +3,8 @@
  * Binds toggles, attention matrix, notch placement, and hotkey capture via IPC.
  */
 
+import { refreshTrackingHealth, updateTrackingHealth } from './tracking-health.js';
+
 const MASTER_TOGGLES = {
   'set-performance': 'collectPerformance',
   'set-claude': 'enableClaude',
@@ -67,6 +69,37 @@ let capturingHotkey = false;
 let hotkeyKeyHandler = null;
 
 export function initSettings(app) {
+  document.getElementById('tracking-warning')?.addEventListener('click', () => {
+    openSettingsView(app);
+    document.getElementById('tracking-health-heading')?.scrollIntoView({ block: 'start' });
+    document.getElementById('btn-check-tracking')?.focus();
+  });
+  document.getElementById('btn-check-tracking')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    if (!window.agentNotch?.checkTrackingSetup || button.disabled) return;
+    const status = document.getElementById('tracking-check-status');
+    const restoreFocus = document.activeElement === button;
+    button.disabled = true;
+    button.textContent = 'Checking…';
+    status.textContent = 'Reading configured sources. Agent sessions will not be changed.';
+    try {
+      const rows = await window.agentNotch.checkTrackingSetup();
+      updateTrackingHealth(rows);
+      const enabled = rows.filter(r => r.state !== 'disabled');
+      const problems = enabled.filter(r => ['error', 'missing'].includes(r.state));
+      status.textContent = !enabled.length ? 'All agents are off. Enable an agent above to check its setup.'
+        : problems.length ? `Check complete. ${problems.length} source${problems.length === 1 ? '' : 's'} need attention; review the details below.`
+          : 'Sources are readable. Run a prompt in an agent and confirm Last activity updates.';
+      await refreshClaudeHookStatus();
+    } catch (err) { status.textContent = `Setup check failed: ${err.message || 'Try again.'}`; }
+    finally {
+      button.disabled = false;
+      button.textContent = 'Check setup';
+      if (restoreFocus && document.activeElement === document.body && button.closest('.view')?.classList.contains('active')) button.focus();
+    }
+  });
+  refreshTrackingHealth();
+  window.agentNotch?.onTrackingHealthUpdate?.(updateTrackingHealth);
   const clearPerformance = document.getElementById('btn-clear-performance');
   clearPerformance?.addEventListener('click', async () => {
     if (!window.agentNotch?.clearPerformanceStats) return;
@@ -416,6 +449,7 @@ export function openSettingsView(app) {
   refreshAlwaysAllowCount();
   refreshDisplays();
   refreshHotkeyInfo();
+  refreshTrackingHealth();
   if (window.agentNotch) {
     window.agentNotch.getSettings().then(applySettings);
   }
@@ -425,6 +459,7 @@ async function persistSettings(update, app) {
   if (!window.agentNotch?.setSettings) return null;
   try {
     const next = await window.agentNotch.setSettings(update);
+    refreshTrackingHealth();
     if (next) {
       applySettings(next);
       if (app) {

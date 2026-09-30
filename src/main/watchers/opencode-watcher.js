@@ -345,7 +345,7 @@ class OpencodeWatcher extends BaseWatcher {
   }
 
   async _poll() {
-    if (!sqlite) return;
+    if (!sqlite) { this.reportReadError('SQLite support is unavailable. Update AgentNotch to enable OpenCode tracking.'); return; }
 
     const token = this._changeToken();
     if (!token) return; // Not installed yet
@@ -355,6 +355,7 @@ class OpencodeWatcher extends BaseWatcher {
       await this._pollDb(token);
     } catch (err) {
       // Defensive: DB schema may change; degrade to "no sessions"
+      this.reportReadError(err);
       console.warn('[OpenCode] DB poll failed:', err.message);
     }
   }
@@ -377,8 +378,9 @@ class OpencodeWatcher extends BaseWatcher {
           sessionRows = db.prepare(
             'SELECT id, title, model, time_created, time_updated FROM session WHERE time_updated > ? ORDER BY time_updated DESC LIMIT 50'
           ).all(cutoff);
-        } catch {
+        } catch (err) {
           // Table may not exist in all schema versions
+          this.reportReadError(new Error(`Unsupported OpenCode database: ${err.message}`));
           return;
         }
       }
@@ -401,12 +403,12 @@ class OpencodeWatcher extends BaseWatcher {
           try {
             const msgStmt = db.prepare('SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY id');
             messages = msgStmt.all(row.id);
-          } catch { /* no message table */ }
+          } catch (err) { this.reportReadError(err); continue; }
 
           try {
             const partStmt = db.prepare('SELECT id, message_id, time_created, data FROM part WHERE session_id = ? ORDER BY id');
             parts = partStmt.all(row.id);
-          } catch { /* no part table */ }
+          } catch (err) { this.reportReadError(err); continue; }
 
           const sessionData = analyzeOpencodeSession(row, messages, parts, now);
           this._updateSession(sessionId, {
@@ -414,11 +416,13 @@ class OpencodeWatcher extends BaseWatcher {
             sourceTag: this.sourceTag || ''
           });
         } catch (err) {
+          this.reportReadError(err);
           console.warn(`[OpenCode] Failed to process session ${row.id}:`, err.message);
         }
       }
 
       // Remove sessions that have vanished from recent activity
+      if (this._readError) { this._lastChangeToken = ''; return; }
       for (const [id] of this.sessions) {
         if (id.startsWith('opencode-') && !activeIds.has(id)) {
           this._removeSession(id);

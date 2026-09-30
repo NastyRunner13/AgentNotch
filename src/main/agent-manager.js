@@ -265,7 +265,17 @@ class AgentManager extends EventEmitter {
     }
 
     for (const watcher of Object.values(this.watchers)) {
+      watcher.healthPaths = watcher.claudeDir ? [path.join(watcher.claudeDir, 'projects')]
+        : watcher.codexDir ? [path.join(watcher.codexDir, 'sessions')]
+          : watcher.brainDir ? [watcher.brainDir]
+            : watcher.grokDir ? [path.join(watcher.grokDir, 'sessions')]
+              : watcher.dbPath ? [watcher.dbPath]
+                : [watcher.globalDb, watcher.projectsRoot].filter(Boolean);
       watcher.on('session-update', () => {
+        this._scheduleEmit();
+      });
+      watcher.on('health-update', () => {
+        this.emit('tracking-health-update', this.getTrackingHealth());
         this._scheduleEmit();
       });
     }
@@ -284,6 +294,7 @@ class AgentManager extends EventEmitter {
       for (const key of keys) {
         const watcher = this.watchers[key];
         if (!watcher) continue;
+        watcher.enabled = Boolean(this.settings[setting]);
         if (this.settings[setting]) watcher.start();
         else watcher.stop();
       }
@@ -577,6 +588,7 @@ class AgentManager extends EventEmitter {
     for (const [key, watcher] of Object.entries(this.watchers)) {
       const agent = key.replace(/Wsl$/, '');
       if (this.settings[`enable${agent[0].toUpperCase()}${agent.slice(1)}`] === false) continue;
+      if (['error', 'missing'].includes(watcher.health?.state)) continue;
       try { raw.push(...watcher.getSessions()); } catch {
         // A failed watcher is missing observation, never a synthetic idle state.
       }
@@ -697,6 +709,7 @@ class AgentManager extends EventEmitter {
     const all = [];
     const seenIds = new Set();
     for (const watcher of Object.values(this.watchers)) {
+      if (watcher.enabled === false) continue;
       for (const session of watcher.getSessions()) {
         seenIds.add(session.id);
 
@@ -707,7 +720,7 @@ class AgentManager extends EventEmitter {
           const current = session.lastTime || session.lastActivityAt || 0;
           if (current > marker) {
             this._reviveSession(session.id);
-            all.push(session);
+            all.push({ ...session, sourceRoot: watcher.healthPaths?.[0], trackingUnavailable: ['error', 'missing'].includes(watcher.health?.state) });
           }
           continue;
         }
@@ -718,7 +731,7 @@ class AgentManager extends EventEmitter {
           this._archivedIds.delete(session.id);
         }
 
-        all.push(session);
+        all.push({ ...session, sourceRoot: watcher.healthPaths?.[0], trackingUnavailable: ['error', 'missing'].includes(watcher.health?.state) });
       }
     }
 
@@ -737,7 +750,7 @@ class AgentManager extends EventEmitter {
     const stallAfter = this.settings.stallAfterMs;
     const annotated = merged.map((session) => {
       let s = this._withSnooze(session);
-      s = { ...s, stalled: isStalled(s, now, stallAfter) };
+      s = { ...s, stalled: !s.trackingUnavailable && isStalled(s, now, stallAfter) };
       if (s.cwd) {
         const resolved = toWindowsReadablePath(s.cwd, this._wslInfo);
         if (resolved && resolved !== s.cwd) {
@@ -1126,7 +1139,7 @@ class AgentManager extends EventEmitter {
     return {
       claude: any(t.claude.primary, path.join(t.claude.primary, 'projects'), ...t.claude.extra),
       codex: any(t.codex.primary, path.join(t.codex.primary, 'sessions'), ...t.codex.extra),
-      cursor: true,
+      cursor: any(path.join(t.cursor.primary, 'User', 'globalStorage', 'state.vscdb'), this.watchers.cursor?.projectsRoot),
       antigravity: any(
         t.antigravity.primary,
         path.join(t.antigravity.primary, 'antigravity-ide', 'brain'),
@@ -1137,6 +1150,30 @@ class AgentManager extends EventEmitter {
       wsl: Boolean(resolved.wslDistro),
       wslDistro: resolved.wslDistro || ''
     };
+  }
+
+  getTrackingHealth() {
+    return Object.entries(this.watchers).map(([id, watcher]) => {
+      const distro = String(watcher.healthPaths?.[0] || '').replace(/\//g, '\\').match(/^\\\\wsl(?:\$|\.localhost)\\([^\\]+)\\/i)?.[1]
+        || (id.endsWith('Wsl') ? this._wslInfo?.distro : '');
+      return {
+        id, agent: watcher.name, source: distro ? `WSL: ${distro}` : id.endsWith('Wsl') ? 'WSL' : 'Local',
+        ...watcher.health,
+        state: !watcher.enabled ? 'disabled' : watcher._running ? watcher.health.state === 'disabled' ? 'checking' : watcher.health.state : 'disabled',
+        paths: watcher.healthPaths,
+        sessionCount: watcher.enabled ? watcher.getSessions().filter(s => s.id !== 'cursor-main').length : 0
+      };
+    });
+  }
+
+  async checkTrackingSetup() {
+    if (this._setupCheck) return this._setupCheck;
+    let timeout;
+    this._setupCheck = Promise.race([
+      Promise.all(Object.values(this.watchers).filter(w => w.enabled).map(w => w.checkHealth())).then(() => this.getTrackingHealth()),
+      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('A source did not respond within 10 seconds. Check WSL or disconnected drives and try again.')), 10000); })
+    ]);
+    try { return await this._setupCheck; } finally { clearTimeout(timeout); this._setupCheck = null; }
   }
 
   updateSettings(newSettings) {

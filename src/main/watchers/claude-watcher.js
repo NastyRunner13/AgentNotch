@@ -3,12 +3,9 @@ const path = require('path');
 const os = require('os');
 const {
   BaseWatcher,
-  parseJSONL,
   extractTaskName,
   formatDuration,
-  getDurationFromFile,
-  isFileActive,
-  readJsonlEfficient
+  isFileActive
 } = require('./base-watcher');
 const { buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
 const { preferUserPrompt } = require('../lib/prompt-clean');
@@ -25,8 +22,6 @@ class ClaudeWatcher extends BaseWatcher {
     super('Claude Code', { pollInterval: 2000, ...options });
     this.claudeDir = options.claudeDir || path.join(os.homedir(), '.claude');
     this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
-    this._lastFileSize = new Map();
-    this._sessionFilePath = new Map();
     this._missingLogged = false;
   }
 
@@ -38,11 +33,6 @@ class ClaudeWatcher extends BaseWatcher {
       this._missingLogged = true;
     }
     this.watchDirs([projectsDir, this.claudeDir].filter(p => fs.existsSync(p)));
-  }
-
-  _stop() {
-    this._lastFileSize.clear();
-    this._sessionFilePath.clear();
   }
 
   async _poll() {
@@ -81,19 +71,23 @@ class ClaudeWatcher extends BaseWatcher {
 
               try {
                 await this._processSessionFile(filePath, sessionId, project.name, nativeId);
-              } catch {
+              } catch (err) {
+                this.reportReadError(err);
                 // Skip individual file errors
               }
             }
-          } catch {
+          } catch (err) {
+            this.reportReadError(err);
             // Skip unreadable session dirs
           }
         }
       }
-    } catch {
+    } catch (err) {
+      this.reportReadError(err);
       // Projects dir unreadable
     }
 
+    if (this._readError) return;
     for (const [id] of this.sessions) {
       if (id.startsWith('claude-') && !activeFiles.has(id)) {
         this._removeSession(id);
@@ -102,29 +96,9 @@ class ClaudeWatcher extends BaseWatcher {
   }
 
   async _processSessionFile(filePath, sessionId, projectHash, nativeId) {
-    let stat;
-    try {
-      stat = fs.statSync(filePath);
-    } catch { return; }
-
-    const lastSize = this._lastFileSize.get(filePath) || 0;
-
-    if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      // Keep last analyzer status. A quiet working session is stalled by
-      // AgentManager — do not lie that the turn finished.
-      return;
-    }
-
-    const read = readJsonlEfficient(filePath);
-    if (!read) return;
-    this._lastFileSize.set(filePath, read.size);
-    this._sessionFilePath.set(sessionId, filePath);
-
-    const entries = parseJSONL(read.content);
-    if (entries.length === 0) return;
-
-    const fileTimes = getDurationFromFile(filePath);
-    const sessionData = this._analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes);
+    const sessionData = this._readJsonlSession(sessionId, filePath, (entries, state, fileTimes) =>
+      this._analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes, state));
+    if (!sessionData) return;
     this._updateSession(sessionId, {
       ...sessionData,
       resumeId: nativeId || sessionData.resumeId || '',
@@ -132,35 +106,18 @@ class ClaudeWatcher extends BaseWatcher {
     });
   }
 
-  _onSessionRemoved(id) {
-    const fp = this._sessionFilePath.get(id);
-    if (fp) {
-      this._lastFileSize.delete(fp);
-      this._sessionFilePath.delete(id);
-    }
-  }
-
-  _analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes) {
-    let taskName = '';
-    let status = 'idle';
-    let currentTool = null;
-    let lastMessage = '';
-    let permissionRequest = null;
-    let question = null;
-    let startTime = null;
-    let lastTime = null;
-    let userPrompt = '';
-    let terminal = 'Terminal';
-    let toolCalls = [];
+  _analyzeEntries(entries, sessionId, projectHash, filePath, fileTimes, state = {}) {
+    let { taskName = '', status = 'idle', currentTool = null, lastMessage = '',
+      permissionRequest = null, question = null, startTime = null, lastTime = null,
+      userPrompt = '', terminal = 'Terminal', model = null, cwd = null } = state;
+    let toolCalls = [...(state.toolCalls || [])];
     /** @type {Array<{text:string, at?:number, kind?:string, filePath?:string, tool?:string}>} */
-    let timeline = [];
-    let model = null;
-    let cwd = null;
+    let timeline = [...(state.timeline || [])];
     // Cumulative token usage summed from message.usage (Anthropic per-turn
     // shape). Deduped by message id — streaming writes repeat the same
     // message across lines and must not double count.
-    const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 };
-    const seenUsageIds = new Set();
+    const tokens = { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, ...state.tokens };
+    const seenUsageIds = state.seenUsageIds || new Set();
 
     for (const entry of entries) {
       // Claude transcript records carry the session's working directory
@@ -311,6 +268,10 @@ class ClaudeWatcher extends BaseWatcher {
       }
     }
 
+    Object.assign(state, { taskName, status, currentTool, lastMessage, permissionRequest,
+      question, startTime, lastTime, userPrompt, terminal, model, cwd, tokens, seenUsageIds,
+      toolCalls: toolCalls.slice(-24), timeline: timeline.slice(-56) });
+
     // File freshness is for isActive only — do not demote working→idle.
     // Stall detection owns "no new activity" while the last event still says working.
     const isActive = filePath ? isFileActive(filePath, 60000) : true;
@@ -344,9 +305,7 @@ class ClaudeWatcher extends BaseWatcher {
       isActive,
       model,
       cwd,
-      // Cumulative session tokens (summed above from message.usage) — feeds
-      // the UsageTracker dashboard buckets. Tail-window reads under-report
-      // for very long sessions; the tracker's high-water mark absorbs that.
+      // Cumulative usage survives appended batches; IDs dedupe streamed repeats.
       tokens
     };
   }

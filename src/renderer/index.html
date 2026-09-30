@@ -110,6 +110,7 @@
       <div class="notch-content">
         <!-- Sessions View (unified — includes approve/ask inline) -->
         <section id="view-sessions" class="view active">
+          <button id="tracking-warning" class="tracking-warning" type="button" hidden></button>
           <div id="sessions-toolbar" class="sessions-toolbar" hidden>
             <label class="feed-control" title="Group sessions">
               <span class="feed-control-label">Group</span>
@@ -229,6 +230,13 @@
               </span>
               <input type="checkbox" id="set-opencode" class="toggle" checked>
             </label>
+
+            <div class="tracking-heading">
+              <h3 class="settings-heading" id="tracking-health-heading">Tracking health</h3>
+              <button id="btn-check-tracking" class="btn-jump" type="button">Check setup</button>
+            </div>
+            <p id="tracking-check-status" class="settings-hint settings-hint-block" role="status" aria-live="polite">Checks local sources and retries file monitoring. Configure folders under Data paths below.</p>
+            <div id="tracking-health-list" aria-label="Agent tracking health"><p class="settings-hint">Waiting for tracking information.</p></div>
 
             <h3 class="settings-heading">Attention</h3>
             <label class="setting-row">

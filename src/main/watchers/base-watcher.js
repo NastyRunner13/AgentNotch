@@ -16,22 +16,31 @@ class BaseWatcher extends EventEmitter {
     /** Safety poll when file events are active (ms) */
     this.safetyPollInterval = options.safetyPollInterval || 12000;
     this.sessions = new Map();
+    this._jsonlStates = new Map();
     this._timer = null;
     this._running = false;
     this._fsWatcher = null;
     this._useEvents = false;
     this._pollSoonTimer = null;
+    this.healthPaths = [];
+    this.health = { state: 'disabled', checkedAt: null, lastSuccessAt: null, lastEventAt: null, error: '' };
+    this._polling = null;
+    this._generation = 0;
+    this._watchError = '';
   }
 
   start() {
     if (this._running || !this.enabled) return;
     this._running = true;
-    this._start();
+    this._generation++;
+    try { this._start(); } catch (err) { this._watchError = err.message; }
+    this._runPoll();
     this._schedulePoll();
   }
 
   stop() {
     this._running = false;
+    this._generation++;
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
@@ -42,6 +51,9 @@ class BaseWatcher extends EventEmitter {
     }
     this._closeFsWatcher();
     this._stop();
+    this._jsonlStates.clear();
+    this.health = { ...this.health, state: 'disabled' };
+    this.emit('health-update');
   }
 
   /**
@@ -88,10 +100,17 @@ class BaseWatcher extends EventEmitter {
       this._fsWatcher.on('add', kick);
       this._fsWatcher.on('change', kick);
       this._fsWatcher.on('unlink', kick);
+      this._fsWatcher.on('error', (err) => {
+        this._watchError = err.message;
+        this._closeFsWatcher();
+        this._requestPollSoon();
+      });
       this._useEvents = true;
+      this._watchError = '';
       console.log(`[${this.name}] File watcher active on ${list.length} path(s)`);
     } catch (err) {
       this._useEvents = false;
+      this._watchError = err.message;
       console.warn(`[${this.name}] chokidar unavailable, polling only:`, err.message);
     }
   }
@@ -99,7 +118,7 @@ class BaseWatcher extends EventEmitter {
   _closeFsWatcher() {
     if (this._fsWatcher) {
       try {
-        this._fsWatcher.close();
+        Promise.resolve(this._fsWatcher.close()).catch(() => {});
       } catch {
         // ignore
       }
@@ -114,27 +133,20 @@ class BaseWatcher extends EventEmitter {
     this._pollSoonTimer = setTimeout(async () => {
       this._pollSoonTimer = null;
       if (!this._running) return;
-      try {
-        await this._poll();
-      } catch (err) {
-        console.error(`[${this.name}] Poll error:`, err.message);
-      }
+      await this._runPoll();
     }, 150);
   }
 
   _schedulePoll() {
     if (!this._running) return;
+    const generation = this._generation;
     const delay = this._useEvents
       ? Math.max(this.safetyPollInterval, this.pollInterval)
       : this.pollInterval;
 
     this._timer = setTimeout(async () => {
-      try {
-        await this._poll();
-      } catch (err) {
-        console.error(`[${this.name}] Poll error:`, err.message);
-      }
-      this._schedulePoll();
+      await this._runPoll();
+      if (generation === this._generation) this._schedulePoll();
     }, delay);
   }
 
@@ -142,7 +154,130 @@ class BaseWatcher extends EventEmitter {
     return Array.from(this.sessions.values());
   }
 
+  // A setup check uses the same read path as normal monitoring. It never writes
+  // a fake agent event or treats a quiet session as a broken connection.
+  async checkHealth() {
+    if (!this._running) return this.health;
+    if (this._polling) await this._polling;
+    if (!this._running) return this.health;
+    if (!this._useEvents) {
+      try { this._start(); } catch (err) { this._watchError = err.message; }
+    }
+    await this._runPoll();
+    return this.health;
+  }
+
+  reportReadError(err) {
+    this._readError = err?.message || String(err || 'Source could not be read');
+  }
+
+  async _runPoll() {
+    if (!this._running) return;
+    if (this._polling) return this._polling;
+    const generation = this._generation;
+    this._activePollGeneration = generation;
+    this._polling = (async () => {
+      let state = 'watching';
+      let error = '';
+      const sources = [];
+      this._readError = '';
+      try {
+        for (const sourcePath of this.healthPaths) {
+          try {
+            const stat = await fs.promises.stat(sourcePath);
+            if (stat.isDirectory()) await fs.promises.readdir(sourcePath);
+            else {
+              const file = await fs.promises.open(sourcePath, 'r');
+              try { await file.read(Buffer.alloc(16), 0, 16, 0); } finally { await file.close(); }
+            }
+            sources.push({ path: sourcePath, readable: true });
+          } catch (err) {
+            sources.push({ path: sourcePath, readable: false, missing: err.code === 'ENOENT', error: err.code || 'Read failed' });
+          }
+        }
+        if (this.healthPaths.length && !sources.some(s => s.readable)) {
+          state = sources.every(s => s.missing) ? 'missing' : 'error';
+          error = state === 'missing' ? 'No session data found. Start a session or check the data path below.' : 'Session data cannot be read. Check the path and folder permissions.';
+        } else {
+          await this._poll();
+          if (this._readError) throw new Error(this._readError);
+          if (!this._useEvents) state = 'polling';
+        }
+      } catch (err) {
+        state = 'error';
+        error = err.message;
+      }
+      if (!this._running || this._generation !== generation) return;
+      const now = Date.now();
+      this.health = { ...this.health, state, checkedAt: now, sources, error,
+        watchError: this._watchError,
+        lastSuccessAt: state === 'watching' || state === 'polling' ? now : this.health.lastSuccessAt };
+      this.emit('health-update');
+    })();
+    try { await this._polling; } finally { this._polling = null; }
+  }
+
+  /** Replay existing records once, then feed appended records to a stateful analyzer. */
+  _readJsonlSession(id, filePath, analyze) {
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'r');
+      const stat = fs.fstatSync(fd);
+      let cached = this._jsonlStates.get(id);
+      const replaced = cached && (cached.filePath !== filePath || cached.ino !== stat.ino ||
+        cached.dev !== stat.dev || cached.birthtimeMs !== stat.birthtimeMs);
+      const rewritten = cached && (stat.size < cached.offset ||
+        (stat.size === cached.size && stat.mtimeMs !== cached.mtimeMs));
+      if (!cached || replaced || rewritten) {
+        cached = { filePath, ino: stat.ino, dev: stat.dev, birthtimeMs: stat.birthtimeMs,
+          offset: 0, pending: Buffer.alloc(0), state: {} };
+      } else if (stat.size === cached.offset && stat.mtimeMs === cached.mtimeMs) {
+        return null;
+      }
+
+      const fileTimes = {
+        startTime: stat.birthtimeMs > 0 && stat.birthtimeMs < stat.mtimeMs ? stat.birthtimeMs : stat.mtimeMs,
+        lastTime: stat.mtimeMs
+      };
+      const buffer = Buffer.alloc(256 * 1024);
+      let result = null;
+      while (cached.offset < stat.size) {
+        const count = fs.readSync(fd, buffer, 0, Math.min(buffer.length, stat.size - cached.offset), cached.offset);
+        if (!count) break;
+        cached.offset += count;
+        const bytes = Buffer.concat([cached.pending, buffer.subarray(0, count)]);
+        const end = bytes.lastIndexOf(10);
+        if (end < 0) {
+          cached.pending = bytes;
+          continue;
+        }
+        // Decode only complete lines, so a split UTF-8 character survives writes.
+        const entries = parseJSONL(bytes.subarray(0, end).toString('utf8'));
+        cached.pending = Buffer.from(bytes.subarray(end + 1));
+        if (entries.length) result = analyze(entries, cached.state, fileTimes);
+      }
+
+      // A valid last record need not end in a newline. Preview it on a copy:
+      // the next write may finish that same line, which must be counted once.
+      if (cached.pending.length) {
+        const entries = parseJSONL(cached.pending.toString('utf8'));
+        if (entries.length) result = analyze(entries, structuredClone(cached.state), fileTimes);
+      }
+      cached.size = stat.size;
+      cached.mtimeMs = stat.mtimeMs;
+      this._jsonlStates.set(id, cached);
+      return result;
+    } catch (err) {
+      // A partial replay must never become the next append's starting state.
+      this._jsonlStates.delete(id);
+      throw err;
+    } finally {
+      if (fd !== undefined) fs.closeSync(fd);
+    }
+  }
+
   _updateSession(id, data) {
+    if (this._activePollGeneration != null && this._activePollGeneration !== this._generation) return;
     const existing = this.sessions.get(id);
     const session = {
       ...existing,
@@ -153,11 +288,16 @@ class BaseWatcher extends EventEmitter {
       updatedAt: Date.now()
     };
     this.sessions.set(id, session);
+    if (id !== 'cursor-main') {
+      this.health.lastEventAt = Math.max(this.health.lastEventAt || 0, Number(session.lastActivityAt) || 0);
+    }
     this.emit('session-update', session);
     return session;
   }
 
   _removeSession(id) {
+    if (this._activePollGeneration != null && this._activePollGeneration !== this._generation) return;
+    this._jsonlStates.delete(id);
     if (this.sessions.has(id)) {
       const session = this.sessions.get(id);
       session.status = 'stopped';

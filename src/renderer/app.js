@@ -1392,6 +1392,7 @@ export class App {
           ? String(Math.round((Date.now() - Number(s.lastActivityAt)) / 60000))
           : '0',
         s.git?.branch || '',
+        s.trackingUnavailable ? '1' : '0',
         s.queueIndex || 0,
         s.queueTotal || 0
       ].join('\x1f');

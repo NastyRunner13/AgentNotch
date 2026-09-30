@@ -3,12 +3,9 @@ const path = require('path');
 const os = require('os');
 const {
   BaseWatcher,
-  parseJSONL,
   extractTaskName,
   formatDuration,
-  getDurationFromFile,
-  isFileActive,
-  readJsonlEfficient
+  isFileActive
 } = require('./base-watcher');
 const { getText, normalizePlan, buildActivity, classifyActivityTool, taggedSessionId } = require('./session-utils');
 const { preferUserPrompt } = require('../lib/prompt-clean');
@@ -24,8 +21,6 @@ class CodexWatcher extends BaseWatcher {
     super('Codex', { pollInterval: 3000, ...options });
     this.codexDir = options.codexDir || path.join(os.homedir(), '.codex');
     this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
-    this._lastFileSize = new Map();
-    this._sessionFilePath = new Map();
   }
 
   _start() {
@@ -36,11 +31,6 @@ class CodexWatcher extends BaseWatcher {
     }
   }
 
-  _stop() {
-    this._lastFileSize.clear();
-    this._sessionFilePath.clear();
-  }
-
   async _poll() {
     const sessionsDir = path.join(this.codexDir, 'sessions');
     if (!fs.existsSync(sessionsDir)) return;
@@ -49,10 +39,12 @@ class CodexWatcher extends BaseWatcher {
 
     try {
       this._scanDirectory(sessionsDir, activeFiles);
-    } catch {
+    } catch (err) {
+      this.reportReadError(err);
       // Directory unreadable
     }
 
+    if (this._readError) return;
     for (const [id] of this.sessions) {
       if (id.startsWith('codex-') && !activeFiles.has(id)) {
         this._removeSession(id);
@@ -79,73 +71,37 @@ class CodexWatcher extends BaseWatcher {
 
           try {
             this._processSessionFile(fullPath, sessionId);
-          } catch {
+          } catch (err) {
+            this.reportReadError(err);
             // Skip individual file errors
           }
         }
       }
-    } catch {
+    } catch (err) {
+      this.reportReadError(err);
       // Directory unreadable
     }
   }
 
   _processSessionFile(filePath, sessionId) {
-    let stat;
-    try {
-      stat = fs.statSync(filePath);
-    } catch { return; }
-
-    const lastSize = this._lastFileSize.get(filePath) || 0;
-
-    if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      // Keep last analyzer status; stall detection owns quiet working sessions.
-      return;
-    }
-
-    const read = readJsonlEfficient(filePath);
-    if (!read) return;
-    this._lastFileSize.set(filePath, read.size);
-    this._sessionFilePath.set(sessionId, filePath);
-
-    const entries = parseJSONL(read.content);
-    if (entries.length === 0) return;
-
-    const fileTimes = getDurationFromFile(filePath);
-    const sessionData = analyzeCodexEntries(entries, sessionId, filePath, fileTimes);
+    const sessionData = this._readJsonlSession(sessionId, filePath, (entries, state, fileTimes) =>
+      analyzeCodexEntries(entries, sessionId, filePath, fileTimes, state));
+    if (!sessionData) return;
 
     this._updateSession(sessionId, {
       ...sessionData,
       sourceTag: this.sourceTag || ''
     });
   }
-
-  _onSessionRemoved(id) {
-    const fp = this._sessionFilePath.get(id);
-    if (fp) {
-      this._lastFileSize.delete(fp);
-      this._sessionFilePath.delete(id);
-    }
-  }
 }
 
-function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
-  let taskName = '';
-  let status = 'idle';
-  let currentTool = null;
-  let lastMessage = '';
-  let userPrompt = '';
-  let startTime = null;
-  let lastTime = null;
-  let toolCalls = [];
+function analyzeCodexEntries(entries, sessionId, filePath, fileTimes, state = {}) {
+  let { taskName = '', status = 'idle', currentTool = null, lastMessage = '',
+    userPrompt = '', startTime = null, lastTime = null, plan = [], model = null,
+    rateLimit = null, cwd = null, sessionMetaId = null, tokens = null } = state;
+  let toolCalls = [...(state.toolCalls || [])];
   /** @type {Array<{text:string, at?:number, kind?:string, tool?:string}>} */
-  let timeline = [];
-  let plan = [];
-  let model = null;
-  let rateLimit = null;
-  let cwd = null;
-  let sessionMetaId = null;
-  /** Latest cumulative token usage (token_count events replace, not add) */
-  let tokens = null;
+  let timeline = [...(state.timeline || [])];
 
   for (const entry of entries) {
     const payload = entry.payload && typeof entry.payload === 'object' ? entry.payload : entry;
@@ -347,6 +303,10 @@ function analyzeCodexEntries(entries, sessionId, filePath, fileTimes) {
     if (Array.isArray(candidatePlan)) plan = normalizePlan(candidatePlan);
   }
 
+  // Keep source timestamps separate from display fallbacks between batches.
+  Object.assign(state, { taskName, status, currentTool, lastMessage, userPrompt,
+    startTime, lastTime, plan, model, rateLimit, cwd, sessionMetaId, tokens,
+    toolCalls: toolCalls.slice(-24), timeline: timeline.slice(-40) });
   const isActive = filePath ? isFileActive(filePath, 60000) : true;
 
   if (!startTime) startTime = fileTimes.startTime;

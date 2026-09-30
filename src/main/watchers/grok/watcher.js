@@ -68,10 +68,12 @@ class GrokWatcher extends BaseWatcher {
 
     try {
       this._scanSessionsDir(sessionsDir, activeFiles);
-    } catch {
+    } catch (err) {
+      this.reportReadError(err);
       // Directory unreadable
     }
 
+    if (this._readError) return;
     for (const [id] of this.sessions) {
       if (id.startsWith('grok-') && !activeFiles.has(id)) {
         this._removeSession(id);
@@ -83,7 +85,7 @@ class GrokWatcher extends BaseWatcher {
     let cwdDirs;
     try {
       cwdDirs = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    } catch { return; }
+    } catch (err) { this.reportReadError(err); return; }
 
     for (const cwdEntry of cwdDirs) {
       if (!cwdEntry.isDirectory()) continue;
@@ -99,7 +101,7 @@ class GrokWatcher extends BaseWatcher {
       let sessionDirs;
       try {
         sessionDirs = fs.readdirSync(cwdPath, { withFileTypes: true });
-      } catch { continue; }
+      } catch (err) { this.reportReadError(err); continue; }
 
       for (const sessionEntry of sessionDirs) {
         if (!sessionEntry.isDirectory()) continue;
@@ -120,7 +122,8 @@ class GrokWatcher extends BaseWatcher {
 
         try {
           this._processSessionDir(sessionPath, sessionId, cwdDecoded);
-        } catch {
+        } catch (err) {
+          this.reportReadError(err);
           // Skip individual session errors
         }
       }
@@ -264,8 +267,8 @@ class GrokWatcher extends BaseWatcher {
     // ── terminal output snippet ──────────────────────
     const terminalSnippet = readLatestTerminalSnippet(terminalDir);
 
-    // Merge status carefully: completion (idle) must not be overwritten by a
-    // leftover "working" signal from tools/phases that predate turn_ended.
+    // Explicit new-turn timestamps can supersede an older completion; leftover
+    // tool/phase activity alone must not reopen a completed turn.
     const signalFile = fs.existsSync(eventsFile) ? eventsFile
       : fs.existsSync(updatesFile) ? updatesFile
         : chatHistoryFile;

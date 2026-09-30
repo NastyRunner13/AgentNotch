@@ -688,6 +688,9 @@ app.whenReady().then(() => {
   applyLoginItemSetting(agentManager.getSettings().launchAtStartup);
   repositionNotch();
 
+  agentManager.on('tracking-health-update', (health) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('tracking-health-update', health);
+  });
   agentManager.on('sessions-update', (sessions) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('sessions-update', sessions);
@@ -891,6 +894,8 @@ app.whenReady().then(() => {
   ipcMain.handle('get-agent-detection', () => {
     return agentManager.getAgentDetection();
   });
+  ipcMain.handle('get-tracking-health', () => agentManager.getTrackingHealth());
+  ipcMain.handle('check-tracking-setup', () => agentManager.checkTrackingSetup());
 
   ipcMain.handle('set-settings', (_, settings) => {
     agentManager.updateSettings(settings);

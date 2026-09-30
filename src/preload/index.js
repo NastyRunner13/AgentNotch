@@ -38,6 +38,13 @@ contextBridge.exposeInMainWorld('agentNotch', {
   getSettings: () => ipcRenderer.invoke('get-settings'),
   setSettings: (settings) => ipcRenderer.invoke('set-settings', settings),
   getAgentDetection: () => ipcRenderer.invoke('get-agent-detection'),
+  getTrackingHealth: () => ipcRenderer.invoke('get-tracking-health'),
+  checkTrackingSetup: () => ipcRenderer.invoke('check-tracking-setup'),
+  onTrackingHealthUpdate: (callback) => {
+    const handler = (_, health) => callback(health);
+    ipcRenderer.on('tracking-health-update', handler);
+    return () => ipcRenderer.removeListener('tracking-health-update', handler);
+  },
   getDisplays: () => ipcRenderer.invoke('get-displays'),
   getHotkeyInfo: () => ipcRenderer.invoke('get-hotkey-info'),
   onHotkeyRegisterResult: (callback) => {

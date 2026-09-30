@@ -28,6 +28,7 @@ function scanComposers(watcher, now, isRunning) {
   try {
     db = new sqlite.DatabaseSync(watcher.globalDb, { open: true, readOnly: true });
   } catch (err) {
+    watcher.reportReadError(err);
     console.warn('[Cursor] Failed to open global state.vscdb:', err.message);
     return [];
   }
@@ -42,6 +43,7 @@ function scanComposers(watcher, now, isRunning) {
         )
         .all();
     } catch (err) {
+      watcher.reportReadError(err);
       console.warn('[Cursor] cursorDiskKV query failed:', err.message);
       return [];
     }

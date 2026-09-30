@@ -3,12 +3,9 @@ const path = require('path');
 const os = require('os');
 const {
   BaseWatcher,
-  parseJSONL,
   extractTaskName,
   formatDuration,
-  getDurationFromFile,
-  isFileActive,
-  readJsonlEfficient
+  isFileActive
 } = require('./base-watcher');
 const { taggedSessionId } = require('./session-utils');
 const { preferUserPrompt } = require('../lib/prompt-clean');
@@ -25,8 +22,6 @@ class AntigravityWatcher extends BaseWatcher {
     this.geminiDir = options.geminiDir || path.join(os.homedir(), '.gemini');
     this.sourceTag = typeof options.sourceTag === 'string' ? options.sourceTag : '';
     this.brainDir = path.join(this.geminiDir, 'antigravity-ide', 'brain');
-    this._lastFileSize = new Map();
-    this._sessionFilePath = new Map();
   }
 
   _start() {
@@ -34,11 +29,6 @@ class AntigravityWatcher extends BaseWatcher {
     if (fs.existsSync(this.brainDir)) {
       this.watchDirs(this.brainDir);
     }
-  }
-
-  _stop() {
-    this._lastFileSize.clear();
-    this._sessionFilePath.clear();
   }
 
   async _poll() {
@@ -68,14 +58,17 @@ class AntigravityWatcher extends BaseWatcher {
 
         try {
           await this._processTranscript(transcriptPath, sessionId, conv.name);
-        } catch {
+        } catch (err) {
+          this.reportReadError(err);
           // Skip individual file errors silently
         }
       }
-    } catch {
+    } catch (err) {
+      this.reportReadError(err);
       // Brain dir unreadable
     }
 
+    if (this._readError) return;
     for (const [id] of this.sessions) {
       if (id.startsWith('antigravity-') && !activeFiles.has(id)) {
         this._removeSession(id);
@@ -84,57 +77,23 @@ class AntigravityWatcher extends BaseWatcher {
   }
 
   async _processTranscript(filePath, sessionId, conversationId) {
-    let stat;
-    try {
-      stat = fs.statSync(filePath);
-    } catch { return; }
-
-    const lastSize = this._lastFileSize.get(filePath) || 0;
-
-    if (stat.size <= lastSize && this.sessions.has(sessionId)) {
-      // Keep last analyzer status; stall detection owns quiet working sessions.
-      return;
-    }
-
-    const read = readJsonlEfficient(filePath);
-    if (!read) return;
-    this._lastFileSize.set(filePath, read.size);
-    this._sessionFilePath.set(sessionId, filePath);
-
-    const entries = parseJSONL(read.content);
-    if (entries.length === 0) return;
-
-    const fileTimes = getDurationFromFile(filePath);
-    const sessionData = analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes);
+    const sessionData = this._readJsonlSession(sessionId, filePath, (entries, state, fileTimes) =>
+      analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes, state));
+    if (!sessionData) return;
 
     this._updateSession(sessionId, {
       ...sessionData,
       sourceTag: this.sourceTag || ''
     });
   }
-
-  _onSessionRemoved(id) {
-    const fp = this._sessionFilePath.get(id);
-    if (fp) {
-      this._lastFileSize.delete(fp);
-      this._sessionFilePath.delete(id);
-    }
-  }
 }
 
-function analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes) {
-  let taskName = '';
-  let status = 'idle';
-  let currentTool = null;
-  let lastMessage = '';
-  let userPrompt = '';
-  let startTime = null;
-  let lastTime = null;
-  let toolCalls = [];
+function analyzeAntigravityEntries(entries, sessionId, conversationId, filePath, fileTimes, state = {}) {
+  let { taskName = '', status = 'idle', currentTool = null, lastMessage = '', userPrompt = '',
+    startTime = null, lastTime = null, permissionRequest = null, question = null } = state;
+  let toolCalls = [...(state.toolCalls || [])];
   /** @type {Array<{text:string, at?:number, kind?:string, tool?:string}>} */
-  let timeline = [];
-  let permissionRequest = null;
-  let question = null;
+  let timeline = [...(state.timeline || [])];
 
   for (const entry of entries) {
     const ts = entry.created_at || entry.timestamp || entry.ts;
@@ -220,6 +179,9 @@ function analyzeAntigravityEntries(entries, sessionId, conversationId, filePath,
     }
   }
 
+  Object.assign(state, { taskName, status, currentTool, lastMessage, userPrompt,
+    startTime, lastTime, permissionRequest, question,
+    toolCalls: toolCalls.slice(-24), timeline: timeline.slice(-40) });
   const isActive = filePath ? isFileActive(filePath, 60000) : true;
 
   if (!startTime) startTime = fileTimes.startTime;
