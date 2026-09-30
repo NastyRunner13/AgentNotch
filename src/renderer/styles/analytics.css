@@ -87,8 +87,6 @@ button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-v
 @media (max-width: 450px) {
   .usage-summary-row, .performance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .analytics-sections button { padding: 6px; }
-  .notch-bar { padding-inline: 8px; }
-  .stat-label { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition-duration: 0.01ms !important; transition-delay: 0s !important; }

@@ -700,16 +700,12 @@ export class App {
     const appEl = document.getElementById('app');
     if (!appEl) return;
 
-    appEl.className = 'notch';
+    // State changes must preserve working/attention indicators on the strip.
+    appEl.classList.toggle('expanded', this.isExpanded);
+    appEl.classList.toggle('hidden', !this.isExpanded && this.isAutoHidden);
+    appEl.classList.toggle('collapsed', !this.isExpanded && !this.isAutoHidden);
     const panel = document.getElementById('notch-panel');
     if (panel) panel.inert = !this.isExpanded;
-    if (this.isExpanded) {
-      appEl.classList.add('expanded');
-    } else if (this.isAutoHidden) {
-      appEl.classList.add('hidden');
-    } else {
-      appEl.classList.add('collapsed');
-    }
   }
 
   initTabs() {
