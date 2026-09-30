@@ -19,7 +19,7 @@ const {
 const { collectUsageLimits, detectLimitCrossings } = require('./usage/usage-limits');
 const { UsageTracker, dayKey, sessionActiveMs } = require('./usage/usage-stats');
 const { PerformanceTracker } = require('./usage/performance-stats');
-const { scanUsageHistory } = require('./usage/usage-backfill');
+const { scanUsageHistoryAsync } = require('./usage/usage-backfill');
 const { buildInsights } = require('./insights/insights');
 const permissionBridge = require('./permissions/permission-bridge');
 const permissionMemory = require('./permissions/permission-memory');
@@ -164,6 +164,7 @@ class AgentManager extends EventEmitter {
     this._performanceTracker = new PerformanceTracker({ enabled: this.settings.collectPerformance !== false });
     /** Delayed one-shot history backfill timer */
     this._backfillTimer = null;
+    this._backfillController = null;
     /** @type {import('chokidar').FSWatcher|null} */
     this._permissionWatcher = null;
     /** @type {Set<string>} pending request ids already checked for remembered approval */
@@ -340,7 +341,8 @@ class AgentManager extends EventEmitter {
    * dashboard shows past dates. Idempotent — the tracker banks only deltas
    * over its high-water marks. Throttled: at most once per 6h of app runtime.
    */
-  _backfillUsage() {
+  async _backfillUsage() {
+    if (this._backfillController) return;
     const THROTTLE_MS = 6 * 60 * 60 * 1000;
     if (
       this._usageTracker.lastBackfillVersion === USAGE_BACKFILL_VERSION &&
@@ -348,8 +350,11 @@ class AgentManager extends EventEmitter {
     ) return;
 
     const started = Date.now();
+    const controller = new AbortController();
+    this._backfillController = controller;
     try {
-      const { records, files, errors } = scanUsageHistory();
+      const { records, files, errors } = await scanUsageHistoryAsync({}, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       let banked = 0;
       for (const rec of records) {
         try {
@@ -366,11 +371,15 @@ class AgentManager extends EventEmitter {
         `(${banked} with new data, ${errors} errors) in ${Date.now() - started}ms`
       );
     } catch (err) {
-      console.warn('[UsageBackfill] scan failed:', err.message);
+      if (!controller.signal.aborted) console.warn('[UsageBackfill] scan failed:', err.message);
+    } finally {
+      if (this._backfillController === controller) this._backfillController = null;
     }
   }
 
   stop() {
+    this._backfillController?.abort();
+    this._backfillController = null;
     this.suspendPerformance();
     for (const watcher of Object.values(this.watchers)) {
       watcher.stop();

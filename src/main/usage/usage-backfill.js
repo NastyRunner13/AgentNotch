@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { Worker } = require('node:worker_threads');
 const { dayKey, ACTIVE_GAP_CAP_MS } = require('./usage-stats');
 const { scanGrokLog } = require('./grok-usage');
 
@@ -403,7 +404,28 @@ function scanUsageHistory(opts = {}) {
   return { records: [...byId.values()], files, errors };
 }
 
+// Parsing years of transcripts must not block notch input or native animation.
+async function scanUsageHistoryAsync(opts = {}, { signal } = {}) {
+  signal?.throwIfAborted();
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(path.join(__dirname, 'usage-backfill-worker.js'), { workerData: opts });
+    const abort = () => {
+      worker.terminate().catch(() => {});
+      reject(signal.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+    worker.once('message', resolve);
+    worker.once('error', reject);
+    worker.once('exit', code => {
+      signal?.removeEventListener('abort', abort);
+      // If no result arrived, even a clean early exit must settle the request.
+      reject(new Error(`Usage history worker exited without a result (code ${code})`));
+    });
+  });
+}
+
 module.exports = {
+  scanUsageHistoryAsync,
   scanUsageHistory,
   scanClaudeFile,
   scanCodexFile,
