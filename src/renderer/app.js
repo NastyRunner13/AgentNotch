@@ -1392,6 +1392,9 @@ export class App {
           ? String(Math.round((Date.now() - Number(s.lastActivityAt)) / 60000))
           : '0',
         s.git?.branch || '',
+        s.navigation?.kind || '',
+        s.navigation?.nativeId || '',
+        s.navigation?.canResume ? '1' : '0',
         s.trackingUnavailable ? '1' : '0',
         s.queueIndex || 0,
         s.queueTotal || 0
@@ -2134,15 +2137,29 @@ export class App {
         e.stopPropagation();
         const sid = btn.dataset.sessionId;
         if (sid && window.agentNotch) {
-          Promise.resolve(window.agentNotch.jumpToTerminal(sid))
+          if (btn.disabled) return;
+          btn.disabled = true;
+          Promise.resolve(window.agentNotch.jumpToTerminal(sid, btn.dataset.navigation))
             .then((res) => {
-              // Quiet on success — stickiness is the feature; only surface failures
               if (res && res.success === false) {
                 this.showToast(res.message || 'Could not focus agent', 'error');
+              } else if (res?.message) {
+                this.showToast(res.message, res.exact ? 'ok' : 'info');
               }
             })
-            .catch((err) => this.showToast(`Jump failed: ${err.message || 'main process error'}`, 'error'));
+            .catch((err) => this.showToast(`Jump failed: ${err.message || 'main process error'}`, 'error'))
+            .finally(() => { btn.disabled = false; });
         }
+      });
+    });
+
+    list.querySelectorAll('.btn-copy-session').forEach(btn => {
+      listen(btn, 'click', async (e) => {
+        e.stopPropagation();
+        try {
+          const result = await window.agentNotch?.copyText(btn.dataset.copyText);
+          if (result) this.showToast(result.success ? 'Session ID copied' : result.message, result.success ? 'ok' : 'error');
+        } catch { this.showToast('Could not copy the session ID', 'error'); }
       });
     });
 

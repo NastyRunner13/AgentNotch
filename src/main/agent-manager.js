@@ -34,6 +34,7 @@ const {
   isWslBackedSession
 } = require('./lib/agent-paths');
 const { readGitContext } = require('./session/git-context');
+const { sessionNavigation, openSessionTarget } = require('./session/session-navigation');
 const { parseTaggedSessionId } = require('./watchers/session-utils');
 const {
   normalizeNotchAlign,
@@ -750,6 +751,7 @@ class AgentManager extends EventEmitter {
     const stallAfter = this.settings.stallAfterMs;
     const annotated = merged.map((session) => {
       let s = this._withSnooze(session);
+      s = { ...s, navigation: sessionNavigation(s, { wsl: this._wslInfo }) };
       s = { ...s, stalled: !s.trackingUnavailable && isStalled(s, now, stallAfter) };
       if (s.cwd) {
         const resolved = toWindowsReadablePath(s.cwd, this._wslInfo);
@@ -1709,14 +1711,22 @@ class AgentManager extends EventEmitter {
     };
   }
 
-  async jumpToTerminal(sessionId) {
+  async jumpToTerminal(sessionId, mode) {
     const session = this.getSessions().find(s => s.id === sessionId);
     if (!session) return { success: false, message: 'Session not found' };
 
     try {
+      const target = sessionNavigation(session, { wsl: this._wslInfo, preferTerminal: mode === 'resume' });
+      if (mode === 'resume' && target.kind !== 'resume') return { success: false, message: 'This session cannot be resumed now. It may still be working or its source is unavailable.' };
+      if (mode !== 'app' && target.kind !== 'app') {
+        if (target.kind === 'resume' && !target.distro && !isDirectory(target.cwd)) {
+          return { success: false, message: 'The session folder is unavailable. Restore it before resuming.' };
+        }
+        return await openSessionTarget(target, { openExternal: uri => require('electron').shell.openExternal(uri) });
+      }
       const focused = await focusAgentApp(session.agent, this._focusOpts(session));
       if (focused) {
-        return { success: true, message: `Focused ${session.agent}` };
+        return { success: true, exact: false, message: `Opened ${session.agent}. Select this conversation there; its original tab could not be targeted.` };
       }
       return {
         success: false,

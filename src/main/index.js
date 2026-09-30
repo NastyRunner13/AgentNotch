@@ -930,9 +930,10 @@ app.whenReady().then(() => {
     return agentManager.answerQuestion(sessionId, answer);
   });
 
-  ipcMain.handle('jump-to-terminal', async (_, sessionId) => {
+  ipcMain.handle('jump-to-terminal', async (_, sessionId, mode) => {
     validateSessionId(sessionId);
-    return agentManager.jumpToTerminal(sessionId);
+    if (mode !== undefined && mode !== 'app' && mode !== 'resume') throw new Error('Invalid navigation mode');
+    return agentManager.jumpToTerminal(sessionId, mode);
   });
 
   // Open a project folder in the OS file manager (directories only)

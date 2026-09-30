@@ -72,13 +72,62 @@ app.whenReady().then(async () => {
       document.getElementById('view-analytics').scrollTop=0;
       return { font: getComputedStyle(document.body).fontFamily, cards:ui.sessions.length, selected };
     })()`);
+    await window.webContents.executeJavaScript(`(async () => {
+      const {app:ui}=await import('./app.js');
+      const {updateTrackingHealth}=await import('./components/tracking-health.js');
+      const check=(ok,message)=>{if(!ok)throw new Error(message);};
+      const rows=[
+        {id:'codex',agent:'Codex',source:'Local',state:'watching',checkedAt:Date.now(),lastEventAt:Date.now()-8000,sessionCount:2,paths:['C:/Users/developer/.codex/sessions']},
+        {id:'claude',agent:'Claude Code',source:'Local',state:'missing',checkedAt:Date.now(),lastEventAt:null,error:'No session data found. Start a session or check the data path below.',paths:['C:/Users/developer/.claude/projects']},
+        {id:'grok',agent:'Grok',source:'WSL: Ubuntu',state:'error',checkedAt:Date.now(),lastEventAt:Date.now()-600000,error:'Session data cannot be read. Check the path and folder permissions.',paths:['//wsl$/Ubuntu/home/developer/.grok/sessions']}
+      ];
+      updateTrackingHealth(rows);
+      check(!document.getElementById('tracking-warning').hidden,'Missing tracking warning');
+      ui.switchView('sessions');
+      document.getElementById('tracking-warning').click();
+      check(ui.currentView==='settings','Tracking warning does not open Settings');
+      let finish;
+      const old=window.agentNotch;
+      const jumps=[];
+      window.agentNotch={checkTrackingSetup:()=>new Promise(r=>{finish=r;}),getClaudePermissionHookStatus:async()=>({installed:false}),jumpToTerminal:async(id,mode)=>{jumps.push([id,mode]);return {success:true,exact:mode!=='app',message:'Opened requested session'};},copyText:async()=>({success:true})};
+      try {
+        const button=document.getElementById('btn-check-tracking');
+        button.click();
+        check(button.disabled && button.textContent.includes('Checking'),'Setup check lacks loading state');
+        finish(rows);
+        await new Promise(r=>setTimeout(r,20));
+        check(!button.disabled,'Setup check did not finish');
+        check(document.getElementById('tracking-check-status').textContent.includes('2 sources'),'Setup result missing');
+        check(document.activeElement===button,'Setup check lost focus');
+        const session=ui.sessions[0];
+        session.navigation={kind:'thread',label:'Open session',nativeId:'test-native-id',hint:'Opens this exact local chat in the Codex app.'};
+        ui.switchView('sessions');ui.renderSessions();
+        const card=[...document.querySelectorAll('#sessions-list .session-card')].find(e=>e.dataset.sessionId===session.id);
+        card.querySelector('.btn-jump').click();
+        await new Promise(r=>setTimeout(r,10));
+        card.querySelector('[data-navigation="app"]').click();
+        await new Promise(r=>setTimeout(r,10));
+        check(jumps.length===2 && jumps[0][0]===session.id && jumps[0][1]===undefined && jumps[1][1]==='app','Navigation routed to wrong target');
+        check(card.querySelector('.btn-copy-session').dataset.copyText==='test-native-id','Copy session ID targets wrong session');
+      } finally { if(old)window.agentNotch=old;else delete window.agentNotch; }
+      ui.switchView('analytics');ui.analyticsSection='usage';ui.renderAnalytics();
+    })()`);
     assert.equal(errors.length, 0, errors.join('\n'));
     await new Promise(resolve => setTimeout(resolve, 500));
     assert.equal(await window.webContents.executeJavaScript(`getComputedStyle(document.getElementById('notch-panel')).opacity`), '1');
     if (process.env.AGENT_NOTCH_SCREENSHOT) {
       fs.writeFileSync(process.env.AGENT_NOTCH_SCREENSHOT, (await window.webContents.capturePage()).toPNG());
-      for (const section of ['performance', 'sessions']) {
-        await window.webContents.executeJavaScript(`(async () => {const {app:ui}=await import('./app.js'); if ('${section}'==='sessions') ui.switchView('sessions'); else {ui.analyticsSection='${section}';ui.renderAnalytics();document.getElementById('view-analytics').scrollTop=0;}})()`);
+      for (const section of ['performance', 'sessions', 'settings']) {
+        if (section === 'sessions') {
+          await window.webContents.executeJavaScript(`(async () => {
+            const {app:ui}=await import('./app.js');
+            ui.sessions=[{id:'codex-navigation-preview',agent:'Codex',taskName:'Fix session tracking',status:'working',currentTool:null,lastMessage:'',userPrompt:'',activity:[],toolCalls:[],durationFormatted:'2m',navigation:{kind:'thread',label:'Open session',nativeId:'12345678-1234-1234-1234-123456789abc',hint:'Opens this exact local chat in the Codex app.'}}];
+            ui.expandedSessionId=ui.sessions[0].id;ui._lastSessionsFp='';ui.switchView('sessions');ui.renderSessions();
+            document.getElementById('view-sessions').scrollTop=0;
+            document.querySelectorAll('.toast').forEach(e=>e.remove());
+          })()`);
+        }
+        await window.webContents.executeJavaScript(`(async () => {const {app:ui}=await import('./app.js'); if ('${section}'==='sessions') ui.switchView('sessions'); else if ('${section}'==='settings') {ui.switchView('settings');document.getElementById('tracking-health-heading').scrollIntoView({block:'start'});} else {ui.analyticsSection='${section}';ui.renderAnalytics();document.getElementById('view-analytics').scrollTop=0;}})()`);
         await new Promise(resolve => setTimeout(resolve, 300));
         fs.writeFileSync(process.env.AGENT_NOTCH_SCREENSHOT.replace(/\.png$/, `-${section}.png`), (await window.webContents.capturePage()).toPNG());
       }
@@ -90,6 +139,9 @@ app.whenReady().then(async () => {
         const view=document.getElementById('view-analytics');
         if (view.scrollWidth > view.clientWidth + 1) throw new Error('Horizontal overflow at zoom ${zoom}: '+view.scrollWidth+'/'+view.clientWidth+' '+JSON.stringify([...view.querySelectorAll('*')].filter(e=>e.getBoundingClientRect().right>view.getBoundingClientRect().right).slice(0,8).map(e=>[e.className,e.getBoundingClientRect().right])));
         if (document.querySelector('.analytics-filters').scrollWidth > view.clientWidth) throw new Error('Filters overflow at zoom ${zoom}');
+        ui.switchView('settings');
+        const health=document.getElementById('tracking-health-list');
+        if(health.scrollWidth>health.clientWidth+1) throw new Error('Tracking health overflows at zoom ${zoom}');
       })()`);
     }
     window.webContents.setZoomFactor(1);

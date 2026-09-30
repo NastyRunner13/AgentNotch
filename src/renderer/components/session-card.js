@@ -700,16 +700,22 @@ export function renderSessionCard(session, index = 0, options = {}) {
   }
 
   // Actions — Jump + project cwd + clear attention + Snooze
+  const navigation = session.navigation || { kind: 'app', label: 'Open app', hint: 'Select this conversation in the agent app.' };
   detailContent += `
     <div class="session-actions">
-      <button class="btn-jump" data-session-id="${escapeHtml(session.id)}" type="button">
+      <button class="btn-jump" data-session-id="${escapeHtml(session.id)}" ${navigation.kind === 'resume' ? 'data-navigation="resume"' : ''} type="button" title="${escapeHtml(navigation.hint)}">
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
-        Jump to ${escapeHtml(session.terminal || 'Terminal')}
+        ${escapeHtml(navigation.label)}
       </button>
+      ${navigation.kind !== 'app' ? `<button class="btn-jump" data-session-id="${escapeHtml(session.id)}" data-navigation="app" type="button" title="Focus the app without selecting a conversation">Open app</button>` : ''}
+      ${navigation.kind === 'thread' && navigation.canResume ? `<button class="btn-jump" data-session-id="${escapeHtml(session.id)}" data-navigation="resume" type="button" title="Resume this conversation in a new terminal without sending a prompt">Resume in terminal</button>` : ''}
+      ${navigation.nativeId ? `<button class="btn-copy-session btn-jump-secondary" data-copy-text="${escapeHtml(navigation.nativeId)}" type="button" title="Copy the native conversation ID">Copy session ID</button>` : ''}
       ${session.cwd ? renderCwdActions(session) : ''}
       ${renderAttentionQueueControls(session, needsAttention, attentionAcknowledged)}
       ${renderSnoozeControls(session)}
-    </div>`;
+    </div>
+    <p class="session-navigation-hint">${escapeHtml(navigation.hint)}</p>
+    ${session.trackingUnavailable ? '<p class="session-tracking-warning">Tracking unavailable. Status shows the last observation; check setup in Settings.</p>' : ''}`;
 
   // Logo stays still (bright/dull via CSS); static side cues for attention / finished
   const petIndicator = needsAttention

@@ -68,7 +68,7 @@ contextBridge.exposeInMainWorld('agentNotch', {
   approvePermission: (sessionId) => ipcRenderer.invoke('approve-permission', sessionId),
   denyPermission: (sessionId) => ipcRenderer.invoke('deny-permission', sessionId),
   answerQuestion: (sessionId, answer) => ipcRenderer.invoke('answer-question', sessionId, answer),
-  jumpToTerminal: (sessionId) => ipcRenderer.invoke('jump-to-terminal', sessionId),
+  jumpToTerminal: (sessionId, mode) => ipcRenderer.invoke('jump-to-terminal', sessionId, mode),
   /** Open a folder path in the OS file manager */
   openPath: (targetPath) => ipcRenderer.invoke('open-path', targetPath),
   /** Copy text to the system clipboard */
