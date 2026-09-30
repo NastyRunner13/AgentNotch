@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Tracking health in Settings shows each local or WSL source, its data paths, last check, last session activity, and read errors. Check setup retries enabled sources and refreshes Claude hook status. A quiet session warning links to Settings when previously available tracking fails.
+- Session navigation opens exact local Codex chats through their thread links. Idle Claude, Codex, Grok, and OpenCode sessions can resume in a new terminal without sending a prompt. WSL resumes preserve the distribution, and Claude/Codex resumes preserve configured data roots. Cards expose an explicit app fallback and copyable session IDs where available.
+
+### Security
+- Scope remembered tool approvals to the full project path and agent source, keeping same-named folders and WSL distributions separate. Legacy folder-name rules are inactive and must be remembered again. Always-allow uses the live permission request's scope and only saves a rule after that request is approved.
+
+### Fixed
+- Disabled watchers no longer leave sessions in the live feed. Overlapping polls share one scan, and source failures retain the last observation without counting it as a stalled session.
+- Keep new Grok turns working when one session stream still contains the previous completion. Compare explicit turn-boundary timestamps, ignore default idle snapshots from empty streams, and clear prior tool/permission state on a new turn. Missing or tied timestamps retain completion precedence.
+- Preserve session metadata and cumulative Claude usage in long Codex, Claude, and Antigravity transcripts. Read existing records once in chunks, then process appended records instead of rebuilding sessions from a tail window. Retain partial UTF-8 records and reset parsing after truncation or file replacement.
+- Deliver each Claude permission or question alert once through the shared attention policy, including requests discovered before their session transcript. Acknowledged requests stay quiet; a new request still alerts.
+
 ## [1.3.0] - 2026-09-23
 
 ### Added

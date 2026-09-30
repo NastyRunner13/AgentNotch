@@ -103,6 +103,16 @@ The UI bundles IBM Plex Sans and JetBrains Mono locally. Stable session cards re
 ### Session Dispatch
 Message any running agent session directly from the expanded notch — pick a live session and the prompt resumes that exact chat headlessly (no new windows), or start a new headless session for an agent in its most recent project directory.
 
+### Session navigation
+Expand a session to see its available action. **Open session** links to the exact local Codex chat and requires the Codex desktop app to handle `codex://` links. **Resume session** opens an idle Claude, Codex, Grok, or OpenCode conversation in a new terminal without sending a prompt. Idle Codex chats also offer **Resume in terminal**. WSL sessions keep their distribution; Claude and Codex keep their configured data roots.
+
+Cursor, Antigravity, and active CLI sessions offer **Open app**. This focuses the app; it cannot select the original terminal pane or conversation. **Copy session ID** is available when tracking supplies a resumable native ID. Terminal resume requires the agent CLI on PATH and PowerShell on Windows, Terminal on macOS, or `x-terminal-emulator` on Linux.
+
+### Tracking health
+Open **Settings → Tracking health → Check setup** to retry enabled sources and refresh Claude hook status. Each source shows its data path, last check, last activity, and any read error. Missing data points you to the agent path settings. Read failures keep the last observed sessions visible with a warning.
+
+Checks read local session data and do not send an agent prompt. To verify new activity is reaching the notch, use your agent and check its last activity time here. An idle agent does not count as disconnected.
+
 ### Conversation Insights
 Local classification of your sessions from the prompt, the tools, and the duration. There is no model call. It shows what kind of work you ran, which agent did it, and how long it took.
 
